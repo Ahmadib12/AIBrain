@@ -15,6 +15,10 @@ from backend.app.intelligence.schemas import (
     ResponseStatus,
     TaskType,
 )
+from backend.app.intelligence.trace import (
+    DecisionReasonCode,
+    DecisionTraceBuilder,
+)
 
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
@@ -45,6 +49,7 @@ def _response_status_code(response: IntelligenceResponse) -> int:
         502: {"model": IntelligenceResponse},
         503: {"model": IntelligenceResponse},
         504: {"model": IntelligenceResponse},
+        500: {"model": IntelligenceResponse},
     },
 )
 async def process_intelligence(
@@ -65,6 +70,23 @@ async def process_intelligence(
             error_code="INTELLIGENCE_FAILURE",
             warnings=("The request could not be processed",),
         )
+        try:
+            trace = DecisionTraceBuilder()
+            trace.record_decision_reason(
+                DecisionReasonCode.CORE_EXECUTION_FAILED
+            )
+            decision_trace = trace.build(
+                request_id=response.request_id,
+                response_status=response.status.value,
+                error_code=response.error_code,
+            )
+            response = response.model_copy(
+                update={"decision_trace": decision_trace}
+            )
+        except Exception:
+            logging.getLogger("aibrain.intelligence").warning(
+                "Decision trace recording failed"
+            )
 
     status_code = _response_status_code(response)
     if status_code == 200:

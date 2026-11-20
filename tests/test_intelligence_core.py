@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+import logging
 
 import pytest
 
@@ -11,11 +12,16 @@ from backend.app.intelligence.adapters import (
     InvalidAdapterResultError,
     ProviderRoutingAdapter,
 )
+from backend.app.intelligence.capabilities import (
+    CapabilityMetadata,
+    CapabilityRegistry,
+)
 from backend.app.intelligence.core import (
     CentralIntelligenceCore,
     OrchestrationCore,
 )
 from backend.app.intelligence.context import RequestContext
+from backend.app.intelligence.trace import DecisionTraceBuilder
 from backend.app.intelligence.schemas import (
     IntelligenceRequest,
     IntelligenceResponse,
@@ -139,6 +145,19 @@ async def test_successful_provider_delegation() -> None:
     assert response.selected_capabilities == ("text_generation",)
     assert response.metadata["provider_id"] == "mock"
     assert response.metadata["model_id"] == "mock-chat-v1"
+    trace = response.decision_trace
+    assert trace is not None
+    assert str(trace.trace_id) == response.request_id
+    assert trace.task_type.value == "conversation"
+    assert trace.classification_status.value == "default"
+    assert trace.classification_reason_code.value == "default_conversation"
+    assert trace.considered_capability.value == "text_generation"
+    assert trace.selected_capability.value == "text_generation"
+    assert trace.capability_available is True
+    assert trace.decision_reason_code.value == "capability_selected"
+    assert trace.execution_status.value == "succeeded"
+    assert trace.error_code is None
+    assert "[mock provider] Hello" not in trace.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -157,6 +176,11 @@ async def test_successful_agli_delegation() -> None:
     assert response.status == ResponseStatus.COMPLETED
     assert response.content == "English (en)"
     assert response.selected_capabilities == ("language_lookup",)
+    assert response.decision_trace is not None
+    assert response.decision_trace.considered_capability.value == "language_lookup"
+    assert response.decision_trace.selected_capability.value == "language_lookup"
+    assert response.decision_trace.classification_reason_code.value == "explicit_task"
+    assert response.decision_trace.execution_status.value == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -216,6 +240,14 @@ async def test_unsupported_task_has_controlled_response() -> None:
     assert response.status == ResponseStatus.UNSUPPORTED
     assert response.error_code == "UNSUPPORTED_TASK"
     assert response.content is None
+    assert response.decision_trace is not None
+    assert response.decision_trace.classification_reason_code.value == (
+        "unsupported_action"
+    )
+    assert response.decision_trace.considered_capability is None
+    assert response.decision_trace.selected_capability is None
+    assert response.decision_trace.execution_status.value == "unsupported"
+    assert response.decision_trace.error_code.value == "UNSUPPORTED_TASK"
 
 
 @pytest.mark.asyncio
@@ -229,6 +261,46 @@ async def test_unavailable_capability_is_not_executed() -> None:
 
     assert response.status == ResponseStatus.ERROR
     assert response.error_code == "CAPABILITY_UNAVAILABLE"
+    assert response.decision_trace is not None
+    assert response.decision_trace.considered_capability.value == "text_generation"
+    assert response.decision_trace.selected_capability is None
+    assert response.decision_trace.capability_available is False
+    assert response.decision_trace.decision_reason_code.value == (
+        "capability_unavailable"
+    )
+    assert response.decision_trace.execution_status.value == "not_attempted"
+    assert response.decision_trace.error_code.value == "CAPABILITY_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_missing_adapter_is_traced_without_changing_response() -> None:
+    registry = CapabilityRegistry()
+    registry.register(CapabilityMetadata(
+        capability_id="text_generation",
+        name="Text Generation",
+        implemented=True,
+        available=True,
+    ))
+    core = OrchestrationCore(capability_registry=registry)
+    request = IntelligenceRequest(
+        messages=[{"role": "user", "content": "Hello"}]
+    )
+
+    response = await core.process(request)
+
+    assert response.status == ResponseStatus.ERROR
+    assert response.error_code == "ADAPTER_UNAVAILABLE"
+    assert response.content is None
+    assert response.selected_capabilities == ()
+    assert response.decision_trace is not None
+    assert response.decision_trace.considered_capability.value == "text_generation"
+    assert response.decision_trace.selected_capability is None
+    assert response.decision_trace.capability_available is True
+    assert response.decision_trace.decision_reason_code.value == (
+        "adapter_unavailable"
+    )
+    assert response.decision_trace.execution_status.value == "not_attempted"
+    assert response.decision_trace.error_code.value == "ADAPTER_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -245,6 +317,10 @@ async def test_adapter_failure_is_sanitized() -> None:
     assert response.status == ResponseStatus.ERROR
     assert response.error_code == "ADAPTER_FAILURE"
     assert "mock failure" not in str(response.model_dump())
+    assert response.decision_trace is not None
+    assert response.decision_trace.selected_capability.value == "text_generation"
+    assert response.decision_trace.execution_status.value == "failed"
+    assert response.decision_trace.error_code.value == "ADAPTER_FAILURE"
 
 
 @pytest.mark.asyncio
@@ -288,11 +364,16 @@ async def test_core_context_isolation() -> None:
         context_id="second-context",
     )
 
-    await core.process(first)
-    await core.process(second)
+    first_response = await core.process(first)
+    second_response = await core.process(second)
 
     assert first.context_id != second.context_id
     assert adapter.context_ids == ["first-context", "second-context"]
+    assert first_response.decision_trace is not None
+    assert second_response.decision_trace is not None
+    assert first_response.decision_trace.trace_id != second_response.decision_trace.trace_id
+    assert str(first_response.decision_trace.trace_id) == first_response.request_id
+    assert str(second_response.decision_trace.trace_id) == second_response.request_id
 
 
 @pytest.mark.asyncio
@@ -309,6 +390,92 @@ async def test_adapter_timeout_is_controlled() -> None:
 
     assert response.status == ResponseStatus.ERROR
     assert response.error_code == "ADAPTER_TIMEOUT"
+    assert response.decision_trace is not None
+    assert response.decision_trace.selected_capability.value == "text_generation"
+    assert response.decision_trace.execution_status.value == "timed_out"
+    assert response.decision_trace.error_code.value == "ADAPTER_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_trace_excludes_input_and_nested_sensitive_adapter_metadata() -> None:
+    input_sentinel = "TRACE_INPUT_SENTINEL_N4"
+    context_sentinel = "TRACE_CONTEXT_SENTINEL_P6"
+    secret = "TRACE_NESTED_SECRET_SENTINEL_R8"
+    adapter = MetadataAdapter({
+        "nested": {"password": secret},
+        "authorization": {"bearer_token": secret},
+    })
+    core = OrchestrationCore(adapters={"text_generation": adapter})
+
+    response = await core.process(
+        IntelligenceRequest(
+            messages=[{"role": "user", "content": input_sentinel}],
+            context_id=context_sentinel,
+        )
+    )
+
+    assert response.decision_trace is not None
+    serialized_trace = response.decision_trace.model_dump_json()
+    assert input_sentinel not in serialized_trace
+    assert context_sentinel not in serialized_trace
+    assert secret not in serialized_trace
+    assert "password" not in serialized_trace
+    assert "authorization" not in serialized_trace
+    assert "metadata" not in serialized_trace
+
+    explicit_secret = "TRACE_EXPLICIT_SECRET_SENTINEL_T3"
+    unsupported = await core.process(
+        IntelligenceRequest(
+            messages=[{"role": "user", "content": "Synthetic request"}],
+            task_type=f"api_key={explicit_secret}",
+        )
+    )
+    assert unsupported.decision_trace is not None
+    assert explicit_secret not in unsupported.decision_trace.model_dump_json()
+    assert (
+        unsupported.decision_trace.classification_reason_code.value
+        == "unknown_explicit_task"
+    )
+
+
+@pytest.mark.parametrize(
+    "failing_method",
+    (
+        "__init__",
+        "record_classification",
+        "record_selected_capability",
+        "build",
+    ),
+)
+@pytest.mark.asyncio
+async def test_trace_recording_failure_does_not_break_request(
+    failing_method: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "TRACE_FAILURE_SECRET_SENTINEL_W2"
+
+    def fail_trace(self, *args, **kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(DecisionTraceBuilder, failing_method, fail_trace)
+    core = OrchestrationCore(
+        adapters={"text_generation": SuccessfulProviderAdapter()}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="aibrain.intelligence"):
+        response = await core.process(
+            IntelligenceRequest(
+                messages=[{"role": "user", "content": "Hello"}]
+            )
+        )
+
+    assert response.status == ResponseStatus.COMPLETED
+    assert response.content == "[mock provider] Hello"
+    assert response.selected_capabilities == ("text_generation",)
+    assert response.decision_trace is None
+    assert "Decision trace recording failed" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio

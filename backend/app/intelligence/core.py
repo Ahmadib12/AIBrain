@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 import asyncio
+from collections.abc import Callable
+import logging
 import re
 
 from backend.app.intelligence.schemas import (
@@ -23,6 +25,10 @@ from backend.app.intelligence.capabilities import (
 )
 from backend.app.intelligence.classifier import DeterministicTaskClassifier
 from backend.app.intelligence.context import RequestContext
+from backend.app.intelligence.trace import (
+    DecisionReasonCode,
+    DecisionTraceBuilder,
+)
 
 
 _PUBLIC_METADATA_TYPES = {
@@ -120,17 +126,62 @@ class OrchestrationCore(CentralIntelligenceCore):
         self,
         request: IntelligenceRequest,
     ) -> IntelligenceResponse:
+        trace: DecisionTraceBuilder | None
+        trace_recording_failed = False
+        try:
+            trace = DecisionTraceBuilder()
+        except Exception:
+            trace = None
+            trace_recording_failed = True
+            logging.getLogger("aibrain.intelligence").warning(
+                "Decision trace recording failed"
+            )
+
+        def record_trace(
+            record: Callable[[DecisionTraceBuilder], None],
+        ) -> None:
+            nonlocal trace_recording_failed
+            if trace is None or trace_recording_failed:
+                return
+            try:
+                record(trace)
+            except Exception:
+                trace_recording_failed = True
+                logging.getLogger("aibrain.intelligence").warning(
+                    "Decision trace recording failed"
+                )
+
+        def finish(response: IntelligenceResponse) -> IntelligenceResponse:
+            nonlocal trace_recording_failed
+            if trace is None or trace_recording_failed:
+                return response
+            try:
+                decision_trace = trace.build(
+                    request_id=response.request_id,
+                    response_status=response.status.value,
+                    error_code=response.error_code,
+                )
+                return response.model_copy(
+                    update={"decision_trace": decision_trace}
+                )
+            except Exception:
+                trace_recording_failed = True
+                logging.getLogger("aibrain.intelligence").warning(
+                    "Decision trace recording failed"
+                )
+                return response
+
         try:
             validated = IntelligenceRequest.model_validate(
                 request.model_dump()
             )
         except Exception:
-            return IntelligenceResponse(
+            return finish(IntelligenceResponse(
                 task_type=TaskType.UNSUPPORTED,
                 status=ResponseStatus.ERROR,
                 error_code="INVALID_REQUEST",
                 warnings=("The request could not be validated",),
-            )
+            ))
 
         text = next(
             (
@@ -144,14 +195,26 @@ class OrchestrationCore(CentralIntelligenceCore):
             text,
             validated.task_type,
         )
+        record_trace(
+            lambda builder: builder.record_classification(
+                classification.task_type.value,
+                classification.status.value,
+                classification.reason,
+            )
+        )
 
         if classification.task_type == TaskType.UNSUPPORTED:
-            return IntelligenceResponse(
+            record_trace(
+                lambda builder: builder.record_decision_reason(
+                    DecisionReasonCode.UNSUPPORTED_CLASSIFICATION
+                )
+            )
+            return finish(IntelligenceResponse(
                 task_type=TaskType.UNSUPPORTED,
                 status=ResponseStatus.UNSUPPORTED,
                 error_code="UNSUPPORTED_TASK",
                 warnings=(classification.reason,),
-            )
+            ))
 
         capability_id = {
             TaskType.CONVERSATION: "text_generation",
@@ -159,30 +222,62 @@ class OrchestrationCore(CentralIntelligenceCore):
             TaskType.PROVIDER_STATUS: "provider_status",
         }.get(classification.task_type)
         if capability_id is None:
-            return IntelligenceResponse(
+            record_trace(
+                lambda builder: builder.record_decision_reason(
+                    DecisionReasonCode.NO_CAPABILITY_MAPPING
+                )
+            )
+            return finish(IntelligenceResponse(
                 task_type=TaskType.UNSUPPORTED,
                 status=ResponseStatus.UNSUPPORTED,
                 error_code="UNSUPPORTED_TASK",
-            )
+            ))
 
+        record_trace(
+            lambda builder: builder.record_considered_capability(capability_id)
+        )
         try:
             capability = self.capability_registry.require_available(capability_id)
         except CapabilityUnavailableError:
-            return IntelligenceResponse(
+            record_trace(
+                lambda builder: builder.record_capability_availability(False)
+            )
+            record_trace(
+                lambda builder: builder.record_decision_reason(
+                    DecisionReasonCode.CAPABILITY_UNAVAILABLE
+                )
+            )
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="CAPABILITY_UNAVAILABLE",
                 warnings=("The required capability is not available",),
-            )
+            ))
+        record_trace(
+            lambda builder: builder.record_capability_availability(True)
+        )
 
         adapter = self.adapters.get(capability_id)
         if adapter is None:
-            return IntelligenceResponse(
+            record_trace(
+                lambda builder: builder.record_decision_reason(
+                    DecisionReasonCode.ADAPTER_UNAVAILABLE
+                )
+            )
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="ADAPTER_UNAVAILABLE",
                 warnings=("The required adapter is not registered",),
+            ))
+        record_trace(
+            lambda builder: builder.record_selected_capability(capability_id)
+        )
+        record_trace(
+            lambda builder: builder.record_decision_reason(
+                DecisionReasonCode.CAPABILITY_SELECTED
             )
+        )
 
         context = RequestContext(validated.context_id)
         for message in validated.messages:
@@ -196,38 +291,38 @@ class OrchestrationCore(CentralIntelligenceCore):
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
-            return IntelligenceResponse(
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="ADAPTER_TIMEOUT",
                 warnings=("The capability timed out",),
-            )
+            ))
         except AdapterFailureError as error:
             error_code = (
                 "LANGUAGE_NOT_FOUND"
                 if str(error) == "LANGUAGE_NOT_FOUND"
                 else "ADAPTER_FAILURE"
             )
-            return IntelligenceResponse(
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code=error_code,
                 warnings=("The capability could not complete the request",),
-            )
+            ))
         except InvalidAdapterResultError:
-            return IntelligenceResponse(
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="INVALID_ADAPTER_RESULT",
                 warnings=("The capability returned an invalid result",),
-            )
+            ))
         except Exception:
-            return IntelligenceResponse(
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="ADAPTER_FAILURE",
                 warnings=("The capability could not complete the request",),
-            )
+            ))
 
         try:
             validated_result = AdapterResult.model_validate(
@@ -236,17 +331,17 @@ class OrchestrationCore(CentralIntelligenceCore):
                 else result
             )
         except Exception:
-            return IntelligenceResponse(
+            return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="INVALID_ADAPTER_RESULT",
                 warnings=("The capability returned an invalid result",),
-            )
+            ))
 
-        return IntelligenceResponse(
+        return finish(IntelligenceResponse(
             task_type=classification.task_type,
             status=ResponseStatus.COMPLETED,
             content=validated_result.content,
             selected_capabilities=(capability_id,),
             metadata=_public_metadata(validated_result),
-        )
+        ))

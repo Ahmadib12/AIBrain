@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.app.intelligence.trace import DecisionTrace
+
 
 class TaskType(str, Enum):
     CONVERSATION = "conversation"
@@ -263,6 +265,7 @@ class IntelligenceResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(default_factory=lambda: str(uuid4()))
+    decision_trace: DecisionTrace | None = None
     task_type: TaskType
     status: ResponseStatus
     content: str | None = Field(default=None, max_length=100_000)

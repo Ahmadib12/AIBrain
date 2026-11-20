@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from backend.app.intelligence.schemas import (
     IntelligenceResponse,
     ResponseStatus,
 )
+from backend.app.intelligence.trace import DecisionTraceBuilder
 from backend.app.main import app
 from backend.app.providers.fallback import FallbackExecutor
 from backend.app.providers.health import ProviderHealthMonitor
@@ -105,7 +107,54 @@ def test_successful_provider_intelligence_request(client_for_core) -> None:
     assert body["content"] == "[mock response] Hello"
     assert body["metadata"]["provider_id"] == "mock"
     assert body["metadata"]["model_id"] == "mock-chat-v1"
+    assert body["decision_trace"]["trace_id"] == body["request_id"]
+    assert body["decision_trace"]["selected_capability"] == "text_generation"
+    assert body["decision_trace"]["execution_status"] == "succeeded"
     assert IntelligenceResponse.model_validate(body).status == ResponseStatus.COMPLETED
+
+
+def test_openapi_documents_optional_trace_on_internal_error() -> None:
+    schema = app.openapi()
+    operation = schema["paths"]["/api/v1/intelligence/process"]["post"]
+    response_schema = operation["responses"]["500"]["content"][
+        "application/json"
+    ]["schema"]
+    if "$ref" in response_schema:
+        component_name = response_schema["$ref"].rsplit("/", 1)[-1]
+        response_schema = schema["components"]["schemas"][component_name]
+
+    assert "decision_trace" in response_schema["properties"]
+    assert "decision_trace" not in response_schema.get("required", [])
+
+
+def test_trace_recording_failure_does_not_turn_request_into_500(
+    client_for_core,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "API_TRACE_RECORDING_SECRET_SENTINEL_X4"
+
+    def fail_record(self, *args, **kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(
+        DecisionTraceBuilder,
+        "record_classification",
+        fail_record,
+    )
+    core = OrchestrationCore(adapters={"text_generation": TrackingAdapter()})
+    with caplog.at_level(logging.WARNING, logger="aibrain.intelligence"):
+        with client_for_core(core) as client:
+            response = client.post(
+                "/api/v1/intelligence/process",
+                json={"messages": [{"role": "user", "content": "Hello"}]},
+            )
+
+    assert response.status_code == 200
+    assert response.json()["content"] == "executed"
+    assert response.json()["decision_trace"] is None
+    assert secret not in response.text
+    assert secret not in caplog.text
 
 
 def test_invalid_intelligence_request_body_returns_422(client_for_core) -> None:
@@ -219,6 +268,8 @@ def test_unsupported_intelligence_task_returns_standard_response(
     assert response.status_code == 400
     body = IntelligenceResponse.model_validate(response.json())
     assert body.status == ResponseStatus.UNSUPPORTED
+    assert body.decision_trace is not None
+    assert body.decision_trace.execution_status.value == "unsupported"
     assert tracker.calls == 0
 
 
@@ -233,6 +284,9 @@ def test_unavailable_capability_returns_503(client_for_core) -> None:
     assert response.status_code == 503
     body = IntelligenceResponse.model_validate(response.json())
     assert body.error_code == "CAPABILITY_UNAVAILABLE"
+    assert body.decision_trace is not None
+    assert body.decision_trace.capability_available is False
+    assert body.decision_trace.execution_status.value == "not_attempted"
 
 
 def test_agli_adapter_delegation(client_for_core) -> None:
@@ -255,6 +309,8 @@ def test_agli_adapter_delegation(client_for_core) -> None:
     body = response.json()
     assert body["content"] == "English (en)"
     assert body["metadata"]["native_name"] == "English"
+    assert body["decision_trace"]["selected_capability"] == "language_lookup"
+    assert body["decision_trace"]["execution_status"] == "succeeded"
 
 
 def test_adapter_failure_is_sanitized(client_for_core) -> None:
@@ -270,6 +326,8 @@ def test_adapter_failure_is_sanitized(client_for_core) -> None:
     assert response.status_code == 502
     assert "internal provider secret detail" not in response.text
     assert response.json()["error_code"] == "ADAPTER_FAILURE"
+    assert response.json()["decision_trace"]["error_code"] == "ADAPTER_FAILURE"
+    assert response.json()["decision_trace"]["execution_status"] == "failed"
 
 
 def test_fastapi_dependency_override_is_used(client_for_core) -> None:
@@ -310,6 +368,35 @@ async def test_intelligence_endpoint_propagates_cancellation() -> None:
     )
     with pytest.raises(asyncio.CancelledError):
         await process_intelligence(request, core=CancellingCore())
+
+
+@pytest.mark.asyncio
+async def test_unexpected_core_failure_has_safe_trace(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from backend.app.api.v1.intelligence import process_intelligence
+
+    secret = "API_CORE_FAILURE_SECRET_SENTINEL_V7"
+
+    class FailingCore:
+        async def process(self, request: IntelligenceRequest):
+            raise RuntimeError(secret)
+
+    request = IntelligenceRequest(
+        messages=[{"role": "user", "content": "Synthetic request"}]
+    )
+    with caplog.at_level(logging.ERROR, logger="aibrain.intelligence"):
+        response = await process_intelligence(request, core=FailingCore())
+    body = json.loads(response.body)
+    trace = body["decision_trace"]
+
+    assert response.status_code == 500
+    assert body["error_code"] == "INTELLIGENCE_FAILURE"
+    assert trace["decision_reason_code"] == "core_execution_failed"
+    assert trace["execution_status"] == "failed"
+    assert trace["error_code"] == "INTELLIGENCE_FAILURE"
+    assert secret not in response.body.decode()
+    assert secret not in caplog.text
 
 
 def test_default_dependency_registers_only_available_integrations() -> None:
