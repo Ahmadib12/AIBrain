@@ -57,7 +57,6 @@ class ProviderRoutingAdapter(CapabilityAdapter):
             model=request.model,
             provider=request.provider,
             allow_fallback=request.allow_fallback,
-            metadata={"context_id": context.context_id},
         )
         try:
             response = await self.router.route(provider_request)
@@ -104,6 +103,5 @@ class AGLILanguageAdapter(CapabilityAdapter):
                 "native_name": language.native_name,
                 "script": language.script.code,
                 "direction": language.script.direction,
-                "context_id": context.context_id,
             },
         )

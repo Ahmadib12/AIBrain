@@ -133,6 +133,13 @@ class ConversationContext(BaseModel):
         max_length=20,
     )
 
+    @field_validator("context_id")
+    @classmethod
+    def validate_context_id(cls, value: str) -> str:
+        if contains_credential_content(value):
+            raise ValueError("Credentials cannot be used as a context identifier")
+        return value
+
     @field_validator("turns")
     @classmethod
     def validate_turn_count(
@@ -158,6 +165,13 @@ class IntelligenceRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     allow_fallback: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict, max_length=20)
+
+    @field_validator("context_id")
+    @classmethod
+    def validate_context_id(cls, value: str | None) -> str | None:
+        if value is not None and contains_credential_content(value):
+            raise ValueError("Credentials cannot be used as a context identifier")
+        return value
 
     @field_validator("language_code")
     @classmethod
