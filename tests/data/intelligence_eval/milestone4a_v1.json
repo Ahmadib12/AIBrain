@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "dataset_id": "milestone4a_v1",
+  "cases": [
+    {
+      "id": "explicit-language",
+      "category": "explicit-classification",
+      "input": {
+        "text": "Irrelevant text",
+        "task_type": "language_lookup"
+      },
+      "capabilities": [
+        {
+          "id": "language_lookup",
+          "implemented": true,
+          "available": true,
+          "adapter": true
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "language_lookup",
+          "status": "explicit"
+        },
+        "response": {
+          "task_type": "language_lookup",
+          "status": "completed",
+          "selected_capabilities": ["language_lookup"],
+          "error_code": null
+        }
+      }
+    },
+    {
+      "id": "default-language",
+      "category": "default-classification",
+      "input": {
+        "text": "Lookup language metadata",
+        "task_type": null
+      },
+      "capabilities": [
+        {
+          "id": "language_lookup",
+          "implemented": true,
+          "available": true,
+          "adapter": true
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "language_lookup",
+          "status": "default"
+        },
+        "response": {
+          "task_type": "language_lookup",
+          "status": "completed",
+          "selected_capabilities": ["language_lookup"],
+          "error_code": null
+        }
+      }
+    },
+    {
+      "id": "conversation-default",
+      "category": "supported-task",
+      "input": {
+        "text": "Hello",
+        "task_type": null
+      },
+      "capabilities": [
+        {
+          "id": "text_generation",
+          "implemented": true,
+          "available": true,
+          "adapter": true
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "conversation",
+          "status": "default"
+        },
+        "response": {
+          "task_type": "conversation",
+          "status": "completed",
+          "selected_capabilities": ["text_generation"],
+          "error_code": null
+        }
+      }
+    },
+    {
+      "id": "unsupported-action",
+      "category": "unsupported-request",
+      "input": {
+        "text": "Send an email for me",
+        "task_type": null
+      },
+      "capabilities": [
+        {
+          "id": "text_generation",
+          "implemented": true,
+          "available": true,
+          "adapter": true
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "unsupported",
+          "status": "unsupported"
+        },
+        "response": {
+          "task_type": "unsupported",
+          "status": "unsupported",
+          "selected_capabilities": [],
+          "error_code": "UNSUPPORTED_TASK"
+        }
+      }
+    },
+    {
+      "id": "explanatory-question",
+      "category": "explanatory-question",
+      "input": {
+        "text": "How do I send an email?",
+        "task_type": null
+      },
+      "capabilities": [
+        {
+          "id": "text_generation",
+          "implemented": true,
+          "available": true,
+          "adapter": true
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "conversation",
+          "status": "default"
+        },
+        "response": {
+          "task_type": "conversation",
+          "status": "completed",
+          "selected_capabilities": ["text_generation"],
+          "error_code": null
+        }
+      }
+    },
+    {
+      "id": "unavailable-capability",
+      "category": "unavailable-capability",
+      "input": {
+        "text": "Show provider status",
+        "task_type": null
+      },
+      "capabilities": [
+        {
+          "id": "provider_status",
+          "implemented": false,
+          "available": false,
+          "adapter": false
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "provider_status",
+          "status": "default"
+        },
+        "response": {
+          "task_type": "provider_status",
+          "status": "error",
+          "selected_capabilities": [],
+          "error_code": "CAPABILITY_UNAVAILABLE"
+        }
+      }
+    },
+    {
+      "id": "missing-adapter",
+      "category": "missing-adapter",
+      "input": {
+        "text": "Show provider status",
+        "task_type": null
+      },
+      "capabilities": [
+        {
+          "id": "provider_status",
+          "implemented": true,
+          "available": true,
+          "adapter": false
+        }
+      ],
+      "expected": {
+        "classification": {
+          "task_type": "provider_status",
+          "status": "default"
+        },
+        "response": {
+          "task_type": "provider_status",
+          "status": "error",
+          "selected_capabilities": [],
+          "error_code": "ADAPTER_UNAVAILABLE"
+        }
+      }
+    },
+    {
+      "id": "unknown-explicit",
+      "category": "unsupported-request",
+      "input": {
+        "text": "Irrelevant text",
+        "task_type": "send_a_rocket"
+      },
+      "capabilities": [],
+      "expected": {
+        "classification": {
+          "task_type": "unsupported",
+          "status": "unsupported"
+        },
+        "response": {
+          "task_type": "unsupported",
+          "status": "unsupported",
+          "selected_capabilities": [],
+          "error_code": "UNSUPPORTED_TASK"
+        }
+      }
+    }
+  ]
+}

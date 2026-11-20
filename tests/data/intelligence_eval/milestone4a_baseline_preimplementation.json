@@ -1,0 +1,154 @@
+{
+  "artifact_schema_version": 1,
+  "artifact_id": "milestone4a_baseline_preimplementation",
+  "artifact_kind": "historical_preimplementation_baseline",
+  "artifact_status": "immutable_historical_record",
+  "implementation_state": "captured before Phase 4A evaluator implementation",
+  "evaluation_dataset_id": "milestone4a_v1",
+  "case_count": 8,
+  "warmup_runs_per_case": 10,
+  "measured_runs_per_case": 100,
+  "measured_samples_per_metric": 800,
+  "reporting_provenance": "Transcribed from the original pre-implementation session record. Aggregate metric fields were reported as literals, not independently calculated.",
+  "observed_cases": [
+    {
+      "id": "explicit-language",
+      "classification": {
+        "task_type": "language_lookup",
+        "status": "explicit"
+      },
+      "response": {
+        "task_type": "language_lookup",
+        "status": "completed",
+        "selected_capabilities": ["language_lookup"],
+        "error_code": null
+      }
+    },
+    {
+      "id": "default-language",
+      "classification": {
+        "task_type": "language_lookup",
+        "status": "default"
+      },
+      "response": {
+        "task_type": "language_lookup",
+        "status": "completed",
+        "selected_capabilities": ["language_lookup"],
+        "error_code": null
+      }
+    },
+    {
+      "id": "conversation-default",
+      "classification": {
+        "task_type": "conversation",
+        "status": "default"
+      },
+      "response": {
+        "task_type": "conversation",
+        "status": "completed",
+        "selected_capabilities": ["text_generation"],
+        "error_code": null
+      }
+    },
+    {
+      "id": "unsupported-action",
+      "classification": {
+        "task_type": "unsupported",
+        "status": "unsupported"
+      },
+      "response": {
+        "task_type": "unsupported",
+        "status": "unsupported",
+        "selected_capabilities": [],
+        "error_code": "UNSUPPORTED_TASK"
+      }
+    },
+    {
+      "id": "explanatory-question",
+      "classification": {
+        "task_type": "conversation",
+        "status": "default"
+      },
+      "response": {
+        "task_type": "conversation",
+        "status": "completed",
+        "selected_capabilities": ["text_generation"],
+        "error_code": null
+      }
+    },
+    {
+      "id": "unavailable-capability",
+      "classification": {
+        "task_type": "provider_status",
+        "status": "default"
+      },
+      "response": {
+        "task_type": "provider_status",
+        "status": "error",
+        "selected_capabilities": [],
+        "error_code": "CAPABILITY_UNAVAILABLE"
+      }
+    },
+    {
+      "id": "missing-adapter",
+      "classification": {
+        "task_type": "provider_status",
+        "status": "default"
+      },
+      "response": {
+        "task_type": "provider_status",
+        "status": "error",
+        "selected_capabilities": [],
+        "error_code": "ADAPTER_UNAVAILABLE"
+      }
+    },
+    {
+      "id": "unknown-explicit",
+      "classification": {
+        "task_type": "unsupported",
+        "status": "unsupported"
+      },
+      "response": {
+        "task_type": "unsupported",
+        "status": "unsupported",
+        "selected_capabilities": [],
+        "error_code": "UNSUPPORTED_TASK"
+      }
+    }
+  ],
+  "reported_historical_metrics": {
+    "provenance": "reported_historical_not_independently_calculated",
+    "task_classification_accuracy": "8/8",
+    "classification_status_accuracy": "8/8",
+    "capability_selection_exact_match": "8/8",
+    "capability_micro_precision": 1.0,
+    "capability_micro_recall": 1.0,
+    "capability_micro_f1": 1.0,
+    "confusion_matrix_description": "diagonal: conversation=2, language_lookup=2, provider_status=2, unsupported=2; all other cells=0",
+    "unsupported_handling": "2/2",
+    "false_unsupported": "0/6",
+    "capability_unavailable_handling": "1/1",
+    "missing_adapter_handling": "1/1",
+    "decision_consistency": "not measured in pre-framework single-decision capture"
+  },
+  "not_measured_metrics": [
+    "decision_consistency",
+    "per-task precision",
+    "per-task recall",
+    "per-task F1",
+    "macro-F1"
+  ],
+  "performance_statistics": {
+    "provenance": "measured from timing samples in the original preimplementation run",
+    "classifier": {
+      "samples": 800,
+      "median_ns": 4604,
+      "p95_ns": 6142
+    },
+    "core_with_fixed_offline_adapters": {
+      "samples": 800,
+      "median_ns": 45793,
+      "p95_ns": 53715
+    }
+  }
+}
