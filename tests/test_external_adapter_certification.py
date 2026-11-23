@@ -543,3 +543,48 @@ def test_revoked_public_key_cannot_be_re_registered_under_new_id(repository):
         repository.register_trusted_runner_key(
             key_id="alias-key", **values
         )
+
+
+
+def test_nonce_cannot_be_reused_across_distinct_evidence_packages(repository):
+    first = verify(repository)
+    second = verify(repository)
+    public_key, private_key = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    key_id = "runner-key-global-nonce"
+    repository.register_trusted_runner_key(
+        key_id=key_id, runner_id="nonce-runner", public_key=public_key,
+        valid_from=(now - timedelta(minutes=1)).isoformat(),
+        valid_until=(now + timedelta(days=2)).isoformat(),
+        registered_by="security-admin",
+    )
+    nonce = "nonce_" + "g" * 32
+    for package in (first, second):
+        issued_at = datetime.now(timezone.utc).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        payload = build_attestation_payload(
+            package_id=package["id"],
+            manifest_sha256=package["manifest_sha256"],
+            artifact_hashes=package["artifact_hashes"],
+            runner_id="nonce-runner",
+            provider_id=package["provider_id"],
+            adapter_id=package["adapter_id"],
+            adapter_version=package["adapter_version"],
+            provider_scope=package["provider_scope"],
+            sandbox_environment=package["sandbox_environment"],
+            nonce=nonce, issued_at=issued_at, expires_at=expires_at,
+        )
+        signature = sign_attestation_for_runner(private_key, payload)
+        if package is first:
+            repository.attest_external_adapter_evidence(
+                package["id"], key_id=key_id, runner_id="nonce-runner",
+                nonce=nonce, issued_at=issued_at, expires_at=expires_at,
+                signature=signature,
+            )
+        else:
+            with pytest.raises(PermissionError, match="nonce has already been used"):
+                repository.attest_external_adapter_evidence(
+                    package["id"], key_id=key_id, runner_id="nonce-runner",
+                    nonce=nonce, issued_at=issued_at, expires_at=expires_at,
+                    signature=signature,
+                )
