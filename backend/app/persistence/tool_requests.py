@@ -1021,6 +1021,47 @@ class ToolRequestRepository:
             )
         return self.get(user_id, request_id)
 
+    def record_external_outcome_lookup(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        action_digest: str,
+        outcome: str,
+        evidence_reference: str | None,
+    ) -> None:
+        if outcome not in ("succeeded", "failed", "unknown"):
+            raise ValueError("Lookup outcome is invalid")
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            started = connection.execute(
+                """
+                SELECT action_digest FROM tool_dispatch_audit_events
+                WHERE user_id = ? AND request_id = ?
+                  AND event_type = 'dispatch_started'
+                """,
+                (user_id, request_id),
+            ).fetchone()
+            if started is None or started["action_digest"] != action_digest:
+                raise PermissionError("No matching dispatch exists for lookup")
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_audit_events
+                    (id, user_id, request_id, event_type, action_digest,
+                     details_json, created_at)
+                VALUES (?, ?, ?, 'outcome_lookup', ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), user_id, request_id, action_digest,
+                    json.dumps({
+                        "observed_outcome": outcome,
+                        "evidence_reference": evidence_reference,
+                    }, sort_keys=True, separators=(",", ":")),
+                    now,
+                ),
+            )
+
     def get_dispatch_audit(self, user_id: str, request_id: str) -> list[dict]:
         rows = self.database.connect().execute(
             """
