@@ -984,3 +984,120 @@ def test_passkey_claim_rejects_changed_contract_fingerprint(tmp_path):
     assert stored["status"] == "approved"
     assert stored["consumed_at"] is None
 
+
+@pytest.mark.parametrize(
+    "expiry_value",
+    [
+        None,
+        "not-a-valid-timestamp",
+        "2020-01-01T00:00:00",
+    ],
+)
+def test_passkey_claim_rejects_missing_malformed_or_naive_expiry(
+    tmp_path,
+    expiry_value,
+):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    connection = fixture["database"].connect()
+    connection.execute(
+        "UPDATE tool_requests SET expires_at = ? WHERE id = ?",
+        (expiry_value, fixture["request"]["id"]),
+    )
+    connection.commit()
+
+    with pytest.raises(PermissionError):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"], fixture["request"]["id"]
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+
+
+def test_passkey_claim_rejects_request_expired_after_authorization(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    expired_at = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat()
+    connection = fixture["database"].connect()
+    connection.execute(
+        "UPDATE tool_requests SET expires_at = ? WHERE id = ?",
+        (expired_at, fixture["request"]["id"]),
+    )
+    connection.commit()
+
+    with pytest.raises(PermissionError, match="expired"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"], fixture["request"]["id"]
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+
+
+def test_concurrent_passkey_claims_only_succeed_once(tmp_path):
+    import threading
+
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    from backend.app.persistence.database import Database
+    from backend.app.persistence.tool_requests import ToolRequestRepository
+
+    second_database = Database(
+        f"sqlite:///{tmp_path / 'webauthn.db'}"
+    )
+    second_repository = ToolRequestRepository(second_database)
+    barrier = threading.Barrier(2)
+    successes = []
+    failures = []
+
+    def claim(repository):
+        try:
+            barrier.wait()
+            result = repository.claim_passkey_authorized_for_execution(
+                fixture["user_id"],
+                fixture["request"]["id"],
+                expected_contract_fingerprint=fixture["fingerprint"],
+            )
+            successes.append(result)
+        except PermissionError as error:
+            failures.append(error)
+
+    threads = [
+        threading.Thread(target=claim, args=(fixture["requests"],)),
+        threading.Thread(target=claim, args=(second_repository,)),
+    ]
+
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(successes) == 1
+        assert len(failures) == 1
+        stored = fixture["requests"].get(
+            fixture["user_id"], fixture["request"]["id"]
+        )
+        assert stored["status"] == "executing"
+        assert stored["consumed_at"] is not None
+    finally:
+        second_database.shutdown()
+
