@@ -885,6 +885,115 @@ class ToolRequestRepository:
             ).encode("utf-8")).hexdigest()
             if digest != binding["action_digest"]:
                 raise PermissionError("Dispatch action digest verification failed")
+            # Revalidate certification, attestation signature and key status
+            # inside the same transaction that records dispatch_started.
+            certification_rows = connection.execute(
+                """
+                SELECT c.* FROM external_adapter_certifications AS c
+                WHERE c.provider_id = ? AND c.adapter_id = ?
+                  AND c.adapter_version = ? AND c.provider_scope = ?
+                  AND c.tool_id = ? AND c.tool_contract_fingerprint = ?
+                  AND c.capabilities_json = ? AND c.expires_at > ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM external_adapter_certification_revocations AS cr
+                    WHERE cr.certification_id = c.id
+                  )
+                ORDER BY c.created_at DESC, c.id DESC
+                """,
+                (
+                    provider_id, adapter_id, adapter_version, provider_scope,
+                    row["tool_id"], expected_contract_fingerprint,
+                    json.dumps(capabilities, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":"), allow_nan=False),
+                    now,
+                ),
+            ).fetchall()
+            trusted_certification = False
+            for certification_row in certification_rows:
+                try:
+                    evidence_refs = json.loads(certification_row["evidence_references_json"])
+                    package_id = evidence_refs[0].split(":", 1)[1]
+                    package_row = connection.execute(
+                        "SELECT * FROM external_adapter_evidence_packages WHERE id = ?",
+                        (package_id,),
+                    ).fetchone()
+                    attestation_row = connection.execute(
+                        """
+                        SELECT a.*, k.public_key, k.valid_from, k.valid_until
+                        FROM external_adapter_evidence_attestations AS a
+                        JOIN trusted_runner_keys AS k ON k.key_id = a.key_id
+                        WHERE a.package_id = ?
+                          AND NOT EXISTS (
+                            SELECT 1 FROM trusted_runner_key_revocations AS kr
+                            WHERE kr.key_id = k.key_id
+                          )
+                        """,
+                        (package_id,),
+                    ).fetchone()
+                    if package_row is None or attestation_row is None:
+                        continue
+                    attestation_payload = json.loads(attestation_row["payload_json"])
+                    from backend.app.tools.attestation import (
+                        _parse_timestamp, verify_ed25519_signature,
+                    )
+                    if (
+                        _parse_timestamp(attestation_payload["expires_at"], "expires_at")
+                        <= datetime.now(timezone.utc)
+                        or _parse_timestamp(attestation_row["valid_from"], "valid_from")
+                        > datetime.now(timezone.utc)
+                        or _parse_timestamp(attestation_row["valid_until"], "valid_until")
+                        <= datetime.now(timezone.utc)
+                    ):
+                        continue
+                    if verify_ed25519_signature(
+                        bytes(attestation_row["public_key"]),
+                        attestation_payload, attestation_row["signature"],
+                    ) != attestation_row["payload_sha256"]:
+                        continue
+                    artifact_rows = connection.execute(
+                        """
+                        SELECT artifact_name, content
+                        FROM external_adapter_evidence_artifacts
+                        WHERE package_id = ?
+                        """,
+                        (package_id,),
+                    ).fetchall()
+                    from backend.app.tools.conformance import verify_evidence_manifest
+                    evidence_check = verify_evidence_manifest(
+                        json.loads(package_row["manifest_json"]),
+                        {item["artifact_name"]: bytes(item["content"])
+                         for item in artifact_rows},
+                    )
+                    if (
+                        evidence_check["manifest_sha256"] != package_row["manifest_sha256"]
+                        or evidence_check["artifact_sha256"]
+                           != json.loads(package_row["artifact_hashes_json"])
+                        or attestation_payload["package_id"] != package_id
+                        or attestation_payload["manifest_sha256"] != package_row["manifest_sha256"]
+                        or package_row["provider_id"] != provider_id
+                        or package_row["adapter_id"] != adapter_id
+                        or package_row["adapter_version"] != adapter_version
+                        or package_row["provider_scope"] != provider_scope
+                        or package_row["tool_id"] != row["tool_id"]
+                        or package_row["tool_contract_fingerprint"] != expected_contract_fingerprint
+                        or package_row["capabilities_json"] != json.dumps(
+                            capabilities, ensure_ascii=False, sort_keys=True,
+                            separators=(",", ":"), allow_nan=False,
+                        )
+                    ):
+                        continue
+                    trusted_certification = True
+                    break
+                except (
+                    IndexError, KeyError, LookupError, TypeError, ValueError,
+                    PermissionError,
+                ):
+                    continue
+            if not trusted_certification:
+                raise PermissionError(
+                    "Active trusted evidence certification is required at dispatch time"
+                )
+
             existing = connection.execute(
                 """
                 SELECT 1 FROM tool_dispatch_audit_events
