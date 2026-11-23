@@ -584,7 +584,7 @@ async def revoke_trusted_runner_key(
         ) from None
 
 
-@router.post("/operator/evidence/{package_id}/attest")
+@router.post("/runner/evidence/{package_id}/attest")
 async def attest_external_adapter_evidence(
     package_id: str,
     request: RunnerEvidenceAttestationRequest,
