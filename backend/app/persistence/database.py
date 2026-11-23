@@ -540,6 +540,68 @@ class Database:
                 BEGIN
                     SELECT RAISE(ABORT, 'tool dispatch audit events are immutable');
                 END;
+
+                CREATE TRIGGER validate_tool_dispatch_audit_event
+                BEFORE INSERT ON tool_dispatch_audit_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND (
+                        (
+                          NEW.event_type = 'dispatch_started'
+                          AND r.status = 'executing'
+                          AND r.consumed_at IS NOT NULL
+                          AND a.status = 'claimed'
+                          AND EXISTS (
+                            SELECT 1 FROM tool_execution_bindings AS b
+                            WHERE b.request_id = r.id
+                              AND b.user_id = r.user_id
+                              AND b.action_digest = NEW.action_digest
+                              AND b.idempotency_key = r.id
+                          )
+                        )
+                        OR
+                        (
+                          NEW.event_type IN (
+                            'dispatch_succeeded',
+                            'dispatch_failed',
+                            'dispatch_unknown'
+                          )
+                          AND r.status = 'executing'
+                          AND r.consumed_at IS NOT NULL
+                          AND a.status = 'claimed'
+                          AND EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS s
+                            WHERE s.request_id = r.id
+                              AND s.user_id = r.user_id
+                              AND s.event_type = 'dispatch_started'
+                              AND s.action_digest = NEW.action_digest
+                          )
+                        )
+                        OR
+                        (
+                          NEW.event_type = 'outcome_lookup'
+                          AND r.status = 'outcome_unknown'
+                          AND a.status = 'outcome_unknown'
+                          AND EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS s
+                            WHERE s.request_id = r.id
+                              AND s.user_id = r.user_id
+                              AND s.event_type = 'dispatch_started'
+                              AND s.action_digest = NEW.action_digest
+                          )
+                        )
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'dispatch audit event violates execution lifecycle');
+                END;
                 """
             ),
         )
