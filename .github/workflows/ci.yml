@@ -41,7 +41,7 @@ jobs:
 
       - name: Compile application and tests
         run: |
-          python -m compileall -q backend tests
+          python -m compileall -q backend tests scripts
 
       - name: Run complete test suite
         run: pytest -q
