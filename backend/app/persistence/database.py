@@ -844,6 +844,41 @@ class Database:
                 END;
                 """
             ),
+            (
+                15,
+                """
+                CREATE TABLE security_operator_audit_events (
+                    id TEXT PRIMARY KEY,
+                    actor_user_id TEXT NOT NULL,
+                    actor_email TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (outcome IN ('succeeded')),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+                );
+
+                CREATE INDEX idx_security_operator_audit_actor
+                    ON security_operator_audit_events(actor_user_id, created_at);
+
+                CREATE INDEX idx_security_operator_audit_target
+                    ON security_operator_audit_events(target_type, target_id, created_at);
+
+                CREATE TRIGGER prevent_security_operator_audit_update
+                BEFORE UPDATE ON security_operator_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'security operator audit events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_security_operator_audit_delete
+                BEFORE DELETE ON security_operator_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'security operator audit events are immutable');
+                END;
+                """
+            ),
         )
 
         with self._lock:
