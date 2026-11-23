@@ -653,6 +653,7 @@ async def certify_external_adapter_evidence(
             evidence_package_id=package_id,
             approved_by=operator["email"],
             expires_at=request.expires_at,
+            audit_actor=operator,
         )
         return {
             "id": certificate["id"],
