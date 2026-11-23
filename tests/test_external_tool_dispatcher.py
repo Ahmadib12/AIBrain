@@ -388,6 +388,7 @@ def claimed_passkey_dispatch(tmp_path):
         adapter_version=package["adapter_version"],
         provider_scope=package["provider_scope"],
         tool_id=package["tool_id"],
+        tool_contract_fingerprint=package["tool_contract_fingerprint"],
         public_key=public_key,
         valid_from=(now - timedelta(days=1)).isoformat(),
         valid_until=(now + timedelta(days=10)).isoformat(),
