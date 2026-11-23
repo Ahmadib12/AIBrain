@@ -761,7 +761,9 @@ class Database:
                     valid_from TEXT NOT NULL,
                     valid_until TEXT NOT NULL,
                     registered_by TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    UNIQUE(public_key),
+                    CHECK (valid_until > valid_from)
                 );
 
                 CREATE INDEX idx_trusted_runner_keys_runner
