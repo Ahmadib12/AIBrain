@@ -151,8 +151,29 @@ def verify_package_attestation(
         "provider_scope": package["provider_scope"],
         "sandbox_environment": package["sandbox_environment"],
     }
+    required = set(expected) | {"nonce", "issued_at", "expires_at"}
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise PermissionError("Runner attestation fields are incomplete or unknown")
     if any(payload.get(name) != value for name, value in expected.items()):
         raise PermissionError("Runner attestation package binding does not match")
+    # Re-run all structural validation during every verification, not only at
+    # initial ingestion. This rejects malformed timestamps, nonce and lifetime.
+    validated = build_attestation_payload(
+        package_id=payload["package_id"],
+        manifest_sha256=payload["manifest_sha256"],
+        artifact_hashes=payload["artifact_hashes"],
+        runner_id=payload["runner_id"],
+        provider_id=payload["provider_id"],
+        adapter_id=payload["adapter_id"],
+        adapter_version=payload["adapter_version"],
+        provider_scope=payload["provider_scope"],
+        sandbox_environment=payload["sandbox_environment"],
+        nonce=payload["nonce"],
+        issued_at=payload["issued_at"],
+        expires_at=payload["expires_at"],
+    )
+    if canonical_json(validated) != canonical_json(payload):
+        raise PermissionError("Runner attestation is not canonical")
     return verify_ed25519_signature(public_key, payload, signature)
 
 
