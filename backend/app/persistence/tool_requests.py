@@ -440,11 +440,11 @@ class ToolRequestRepository:
         with self.database.transaction(immediate=True):
             cursor = self.database.connect().execute(
                 "UPDATE tool_requests SET status = 'cancelled', "
-                "updated_at = ?, consumed_at = ? "
+                "updated_at = ? "
                 "WHERE id = ? AND user_id = ? "
                 "AND status IN ('pending', 'approved') "
                 "AND consumed_at IS NULL",
-                (now, now, request_id, user_id),
+                (now, request_id, user_id),
             )
             if cursor.rowcount != 1:
                 raise LookupError("Tool request not found or already completed")
