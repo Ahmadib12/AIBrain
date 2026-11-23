@@ -996,7 +996,8 @@ def test_revoked_and_invalid_session_tokens_are_rejected(
 def test_logout_rejects_missing_or_empty_bearer_token(
     client: TestClient,
 ) -> None:
-    missing = client.post("/api/v1/auth/logout")    assert missing.status_code == 401
+    missing = client.post("/api/v1/auth/logout")
+    assert missing.status_code == 401
 
     empty = client.post(
         "/api/v1/auth/logout",
