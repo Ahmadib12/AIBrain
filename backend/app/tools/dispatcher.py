@@ -1,8 +1,8 @@
 """Guarded external dispatch boundary.
 
 This module is deliberately not wired into ToolExecutionGateway or application
-routes. A caller must explicitly supply a passkey-authorized request, its
-current contract, and the adapter whose identity was frozen in the binding.
+routes. Adapters are resolved only from an application-configured trusted
+registry, never supplied by an untrusted dispatch caller.
 """
 from typing import Any
 
