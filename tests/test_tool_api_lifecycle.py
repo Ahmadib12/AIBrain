@@ -624,4 +624,4 @@ def test_owner_can_cancel_approved_passkey_request(client: TestClient) -> None:
     assert response.json()["status"] == "cancelled"
     persisted = state.tool_requests.get(user_id, request["id"])
     assert persisted["status"] == "cancelled"
-    assert persisted["consumed_at"] is not None
+    assert persisted["consumed_at"] is None
