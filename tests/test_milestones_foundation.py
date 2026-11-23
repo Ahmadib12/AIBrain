@@ -1185,73 +1185,53 @@ def test_migration_nine_creates_constrained_execution_attempt_table(
     import sqlite3
 
     state = get_app_state()
-    connection = state.database.connect()
-    user_id = "migration-nine-user"
-    timestamp = "2026-11-23T00:00:00+00:00"
+    # Serialize direct SQL assertions with the lifespan recovery worker.
+    with state.database.transaction(immediate=True):
+        user_id = "migration-nine-user"
+        timestamp = "2026-11-23T00:00:00+00:00"
 
-    connection.execute(
-        "INSERT OR IGNORE INTO users "
-        "(id, email, password_salt, password_hash, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, "migration-nine@example.com", "salt", "hash", timestamp),
-    )
-    connection.execute(
-        """
-        INSERT INTO tool_requests (
-            id, user_id, tool_id, arguments_json, status,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "migration-nine-request",
-            user_id,
-            "echo",
-            "{}",
-            "executing",
-            timestamp,
-            timestamp,
-        ),
-    )
-    connection.commit()
+        connection.execute(
+            "INSERT OR IGNORE INTO users "
+            "(id, email, password_salt, password_hash, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, "migration-nine@example.com", "salt", "hash", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO tool_requests (
+                id, user_id, tool_id, arguments_json, status,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "migration-nine-request",
+                user_id,
+                "echo",
+                "{}",
+                "executing",
+                timestamp,
+                timestamp,
+            ),
+        )
 
-    columns = {
-        row["name"]
-        for row in connection.execute(
-            "PRAGMA table_info(tool_execution_attempts)"
-        ).fetchall()
-    }
-    assert {
-        "id",
-        "user_id",
-        "request_id",
-        "idempotency_key",
-        "status",
-        "claimed_at",
-        "updated_at",
-        "finished_at",
-        "error_code",
-    } <= columns
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(tool_execution_attempts)"
+            ).fetchall()
+        }
+        assert {
+            "id",
+            "user_id",
+            "request_id",
+            "idempotency_key",
+            "status",
+            "claimed_at",
+            "updated_at",
+            "finished_at",
+            "error_code",
+        } <= columns
 
-    connection.execute(
-        """
-        INSERT INTO tool_execution_attempts (
-            id, user_id, request_id, idempotency_key,
-            status, claimed_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "migration-nine-attempt",
-            user_id,
-            "migration-nine-request",
-            "migration-nine-idempotency-key",
-            "claimed",
-            timestamp,
-            timestamp,
-        ),
-    )
-    connection.commit()
-
-    with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
             """
             INSERT INTO tool_execution_attempts (
@@ -1260,65 +1240,81 @@ def test_migration_nine_creates_constrained_execution_attempt_table(
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                "migration-nine-duplicate",
+                "migration-nine-attempt",
                 user_id,
                 "migration-nine-request",
-                "another-idempotency-key",
+                "migration-nine-idempotency-key",
                 "claimed",
                 timestamp,
                 timestamp,
             ),
         )
-    connection.rollback()
 
-    with pytest.raises(sqlite3.IntegrityError):
-        connection.execute(
-            """
-            INSERT INTO tool_execution_attempts (
-                id, user_id, request_id, idempotency_key,
-                status, claimed_at, updated_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "migration-nine-invalid-status",
-                user_id,
-                "migration-nine-request",
-                "invalid-status-key",
-                "retrying",
-                timestamp,
-                timestamp,
-                timestamp,
-            ),
-        )
-    connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "migration-nine-duplicate",
+                    user_id,
+                    "migration-nine-request",
+                    "another-idempotency-key",
+                    "claimed",
+                    timestamp,
+                    timestamp,
+                ),
+            )
 
-    with pytest.raises(sqlite3.IntegrityError):
-        connection.execute(
-            """
-            INSERT INTO tool_execution_attempts (
-                id, user_id, request_id, idempotency_key,
-                status, claimed_at, updated_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "migration-nine-invalid-finished-state",
-                user_id,
-                "migration-nine-request",
-                "invalid-finished-state-key",
-                "succeeded",
-                timestamp,
-                timestamp,
-                None,
-            ),
-        )
-    connection.rollback()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "migration-nine-invalid-status",
+                    user_id,
+                    "migration-nine-request",
+                    "invalid-status-key",
+                    "retrying",
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
 
-    attempt = connection.execute(
-        "SELECT status, finished_at FROM tool_execution_attempts WHERE id = ?",
-        ("migration-nine-attempt",),
-    ).fetchone()
-    assert attempt["status"] == "claimed"
-    assert attempt["finished_at"] is None
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "migration-nine-invalid-finished-state",
+                    user_id,
+                    "migration-nine-request",
+                    "invalid-finished-state-key",
+                    "succeeded",
+                    timestamp,
+                    timestamp,
+                    None,
+                ),
+            )
+
+        attempt = connection.execute(
+            "SELECT status, finished_at FROM tool_execution_attempts WHERE id = ?",
+            ("migration-nine-attempt",),
+        ).fetchone()
+        assert attempt["status"] == "claimed"
+        assert attempt["finished_at"] is None
 
 
 def test_migration_failure_prevents_database_initialization(
