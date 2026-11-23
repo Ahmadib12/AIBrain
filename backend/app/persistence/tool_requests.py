@@ -836,8 +836,16 @@ class ToolRequestRepository:
                 or row["challenge_digest"] != current_digest
             ):
                 raise PermissionError("Passkey authorization does not match action")
-            expiry = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
-            if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
+            expires_at = row["expires_at"]
+            if not isinstance(expires_at, str) or not expires_at.strip():
+                raise PermissionError("Tool authorization expiry is required")
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise PermissionError("Tool authorization expiry is invalid") from exc
+            if expiry.tzinfo is None or expiry.utcoffset() is None:
+                raise PermissionError("Tool authorization expiry must include a timezone")
+            if expiry <= datetime.now(timezone.utc):
                 raise PermissionError("Tool authorization has expired")
             binding = connection.execute(
                 """
@@ -935,8 +943,19 @@ class ToolRequestRepository:
         else:
             if result is not None:
                 raise ValueError("Non-success outcome cannot contain a result")
-            if not isinstance(error_code, str) or not error_code or len(error_code) > 64:
-                raise ValueError("External dispatch error code is required")
+            if (
+                not isinstance(error_code, str)
+                or not error_code
+                or len(error_code) > 64
+                or not error_code.replace("_", "").isalnum()
+            ):
+                raise ValueError("External dispatch error code is invalid")
+        if evidence_reference is not None and (
+            not isinstance(evidence_reference, str)
+            or not evidence_reference.strip()
+            or len(evidence_reference) > 256
+        ):
+            raise ValueError("Provider evidence reference is invalid")
         now = _utc_now()
         request_status = {
             "succeeded": "completed",
@@ -1032,6 +1051,12 @@ class ToolRequestRepository:
     ) -> None:
         if outcome not in ("succeeded", "failed", "unknown"):
             raise ValueError("Lookup outcome is invalid")
+        if evidence_reference is not None and (
+            not isinstance(evidence_reference, str)
+            or not evidence_reference.strip()
+            or len(evidence_reference) > 256
+        ):
+            raise ValueError("Provider evidence reference is invalid")
         now = _utc_now()
         with self.database.transaction(immediate=True):
             connection = self.database.connect()
