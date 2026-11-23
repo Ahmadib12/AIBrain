@@ -369,7 +369,7 @@ class ToolRequestRepository:
                        r.status, r.consumed_at, a.status AS attempt_status,
                        a.idempotency_key
                 FROM tool_requests AS r
-                JOIN tool_execution_attempts AS a
+                LEFT JOIN tool_execution_attempts AS a
                   ON a.request_id = r.id AND a.user_id = r.user_id
                 WHERE r.id = ? AND r.user_id = ?
                 """,
