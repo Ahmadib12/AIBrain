@@ -230,6 +230,15 @@ def test_passkey_verify_endpoint_returns_only_approved_request_metadata(
     state = get_app_state()
     token = register_and_login(client, "passkey-verify-api@example.com")
     user_id = state.identity.resolve_token(token)["id"]
+    request = state.tool_requests.create(
+        user_id,
+        tool_id="state-change-api-test",
+        arguments={"value": "approved"},
+        status="pending",
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        contract_fingerprint="a" * 64,
+        authorization_policy="passkey",
+    )
     captured = {}
 
     def verify_approval(
@@ -247,17 +256,12 @@ def test_passkey_verify_endpoint_returns_only_approved_request_metadata(
             "credential_record_id": credential_record_id,
             "assertion": assertion,
         })
-        return {
-            "id": request_id,
-            "tool_id": "state-change-api-test",
-            "arguments": {"value": "approved"},
-            "status": "approved",
-            "expires_at": "2030-01-01T00:00:00+00:00",
-            "consumed_at": None,
-            "confirmation_id": "internal-confirmation",
-            "contract_fingerprint": "a" * 64,
-            "authorization_policy": "passkey",
-        }
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE tool_requests SET status = 'approved', updated_at = ? WHERE id = ? AND user_id = ?",
+                (datetime.now(timezone.utc).isoformat(), request_id, user_id),
+            )
+        return {"authorization_id": "internal-authorization"}
 
     monkeypatch.setattr(
         state.webauthn_service,
@@ -266,7 +270,7 @@ def test_passkey_verify_endpoint_returns_only_approved_request_metadata(
     )
 
     response = client.post(
-        "/api/v1/tools/requests/request-456/passkey/verify",
+        f"/api/v1/tools/requests/{request['id']}/passkey/verify",
         headers=auth_header(token),
         json={
             "challenge_record_id": "challenge-456",
@@ -277,15 +281,15 @@ def test_passkey_verify_endpoint_returns_only_approved_request_metadata(
 
     assert response.status_code == 200
     assert response.json() == {
-        "id": "request-456",
+        "id": request["id"],
         "tool_id": "state-change-api-test",
         "arguments": {"value": "approved"},
         "status": "approved",
-        "expires_at": "2030-01-01T00:00:00+00:00",
+        "expires_at": request["expires_at"],
     }
     assert captured == {
         "user_id": user_id,
-        "request_id": "request-456",
+        "request_id": request["id"],
         "challenge_record_id": "challenge-456",
         "credential_record_id": "credential-456",
         "assertion": {"response": {"signature": "browser-data"}},
@@ -463,13 +467,14 @@ def test_passkey_api_completes_real_signed_approval(
             (cose_public_key, credential["id"], user_id),
         )
 
-    # Keep the real WebAuthn option generation, assertion parser,
-    # signature verification, repository transaction and API endpoints.
-    # Only bypass deployment configuration in this isolated test client.
-    monkeypatch.setattr(
-        state.webauthn_service,
-        "_require_enabled",
-        lambda: None,
+    # Supply a valid test RP configuration while retaining real WebAuthn
+    # option generation, assertion parsing, signature verification and API.
+    state.webauthn_service.settings = state.webauthn_service.settings.model_copy(
+        update={
+            "webauthn_enabled": True,
+            "webauthn_rp_id": "example.com",
+            "webauthn_allowed_origins": ("https://example.com",),
+        }
     )
 
     options_response = client.post(
