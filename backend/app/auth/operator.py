@@ -36,3 +36,39 @@ def require_provider_operator(
                 "message": "A valid provider operator token is required",
             },
         )
+
+
+
+def require_trusted_runner_ingest(
+    token: str | None = Header(
+        default=None,
+        alias="X-AIBrain-Runner-Token",
+    ),
+) -> None:
+    """Authenticate the isolated runner ingestion channel.
+
+    This credential cannot register/revoke signing keys or approve adapter
+    certifications; those operations use the separate operator credential.
+    """
+    configured_token = get_settings().trusted_runner_ingest_token
+    if configured_token is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "RUNNER_INGEST_AUTH_NOT_CONFIGURED",
+                "message": "Trusted runner ingestion is not configured",
+            },
+        )
+    expected = configured_token.get_secret_value()
+    supplied = token or ""
+    if not hmac.compare_digest(
+        supplied.encode("utf-8"),
+        expected.encode("utf-8"),
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "RUNNER_INGEST_UNAUTHORIZED",
+                "message": "A valid trusted runner token is required",
+            },
+        )
