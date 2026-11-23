@@ -137,6 +137,17 @@ These are contracts only; they do not dispatch external actions or enable
 state-changing execution. Unit tests are in
 `tests/test_external_tool_execution_contracts.py`.
 
+A provider-neutral adapter protocol and immutable canonical action envelope
+are defined in `backend/app/tools/external.py`. A deterministic in-memory
+fake provider is available in `backend/app/tools/fake_provider.py` for
+conformance testing only. It can simulate a response timeout after acceptance,
+deduplicate identical keys when provider-enforced idempotency is declared,
+reject same-key/different-action submissions, and resolve outcomes through
+read-only lookup. In non-idempotent mode, repeated submissions deliberately
+create duplicate effects. It is not registered with or connected to the
+application gateway. Tests are in
+`tests/test_fake_external_tool_provider.py`.
+
 ### Inspecting and reconciling uncertain tool executions
 
 Authenticated users can inspect their own persisted tool request and execution-attempt state:
