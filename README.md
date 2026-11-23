@@ -280,10 +280,10 @@ genuine or uncompromised. Hardware-backed remote attestation and deployment of
 an independently trusted runner remain future operational work. Production
 external execution remains disabled.
 
-Trusted runner keys are scoped to one exact provider, adapter ID/version,
-provider account scope, and tool ID. Register a separate key for every distinct
-trust scope. A key for one provider or account cannot attest another provider
-or account.
+Trusted runner keys are scoped to one exact provider ID, adapter ID and
+version, provider account scope, and tool ID. Register a separate key for every
+distinct trust scope. A key for one provider, adapter, tool, or account cannot
+attest another binding.
 
 The external runner client is `scripts/submit_conformance_evidence.py`. It
 accepts a completed manifest and its artifact directory, uploads the evidence,
