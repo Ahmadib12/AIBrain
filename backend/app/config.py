@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///:memory:"
     session_ttl_seconds: int = Field(default=86_400, gt=0)
     max_request_body_bytes: int = Field(default=1_048_576, gt=0)
+    runner_evidence_max_request_body_bytes: int = Field(
+        default=15_728_640, gt=0
+    )
     ai_max_concurrent_requests: int = Field(default=10, gt=0)
     provider_operator_token: SecretStr | None = Field(
         default=None,
