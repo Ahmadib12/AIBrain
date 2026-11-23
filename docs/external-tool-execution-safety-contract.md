@@ -153,7 +153,7 @@ provider scope. The complete supported provider-capability snapshot is
 required and validated before storage; partial or unknown capability fields
 are rejected. A database trigger prevents updates to a persisted binding.
 
-Migration 11 adds append-only `tool_dispatch_audit_events`. The
+Migration 11 adds append-only `tool_dispatch_audit_events`. Migration 12 adds immutable adapter certification records and append-only revocations. A certification is scoped to the exact provider, adapter ID/version, provider account scope, and complete capability snapshot. It records a conformance-suite version, SHA-256 test-report digest, evidence references, expiry, and approving operator. Dispatch is refused unless a matching, unexpired, non-revoked certification exists. The
 `ExternalToolDispatcher` is a provider-neutral, explicitly invoked boundary
 that claims only passkey-authorized state-change requests, persists the binding,
 then performs a final transactional check of the active account, request
@@ -168,6 +168,8 @@ adapter outcome becomes `outcome_unknown`; the dispatcher never retries.
 Read-only provider lookup is available only for unknown attempts, is audited,
 and does not silently reconcile the request. Manual reconciliation remains a
 separate owner-attestation workflow.
+
+The certification repository exposes an operator/service-layer approval method; it is not a public API. The caller must authenticate and authorize the approving operator before recording a certification. Certifications and revocations are immutable audit records. A certification proves that a particular evidence package was approved; it does not independently validate provider claims or replace live provider sandbox testing.
 
 The dispatcher is deliberately not wired into the application gateway or API
 routes. No production provider is registered, and state-changing execution
@@ -228,7 +230,4 @@ concurrent same-key submissions. Its conformance tests are in
 `tests/test_fake_external_tool_provider.py`. The fake is not registered with
 the application gateway and cannot perform real-world actions.
 
-Remaining steps are to add provider-specific sandbox evidence for the
-actual adapter's guarantees, implement an independently verifiable
-provider-backed reconciliation workflow, and only then consider one narrowly
-scoped state-changing adapter behind an explicit feature gate.
+Remaining steps are to run the conformance suite against a real provider sandbox, preserve the resulting evidence package, and have an authorized operator approve its digest and scope. A provider-backed reconciliation workflow and independently verifiable evidence are still required before considering one narrowly scoped state-changing adapter behind an explicit feature gate.
