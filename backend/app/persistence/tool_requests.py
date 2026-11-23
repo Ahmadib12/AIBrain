@@ -406,6 +406,24 @@ class ToolRequestRepository:
             if claimed.rowcount != 1:
                 raise PermissionError("Tool request is not available for execution")
 
+            # Persist the execution attempt in the same transaction as the claim.
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'claimed', ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    user_id,
+                    request_id,
+                    request_id,
+                    now_text,
+                    now_text,
+                ),
+            )
+
         return self.get(user_id, request_id)
 
     def get_execution_attempt(
