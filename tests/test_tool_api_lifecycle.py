@@ -795,7 +795,6 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
             "public_key_base64": base64.b64encode(public_key).decode("ascii"),
             "valid_from": (now - timedelta(minutes=1)).isoformat(),
             "valid_until": (now + timedelta(days=2)).isoformat(),
-            "registered_by": "security-operator",
         },
     )
     assert provider_cannot_register.status_code == 401
@@ -926,7 +925,6 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
         f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
         headers={"X-AIBrain-Operator-Token": provider_token},
         json={
-            "approved_by": "security-reviewer",
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
         },
     )
@@ -934,7 +932,7 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
 
     certified = client.post(
         f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
-        headers={"X-AIBrain-Security-Operator-Token": security_token},
+        headers=auth_header(security_operator_token),
         json={
             "approved_by": "security-reviewer",
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
