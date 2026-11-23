@@ -148,6 +148,13 @@ create duplicate effects. It is not registered with or connected to the
 application gateway. Tests are in
 `tests/test_fake_external_tool_provider.py`.
 
+Migration 10 adds an owner-scoped `tool_execution_bindings` table. The
+repository persists one canonical payload/provider/adapter/capability snapshot
+per claimed execution, validates that the payload and action digest match the
+persisted request, and prevents updates to the binding. The table is not yet
+consumed by a dispatcher; no external action is sent. Tests are in
+`tests/test_tool_execution_bindings.py`.
+
 ### Inspecting and reconciling uncertain tool executions
 
 Authenticated users can inspect their own persisted tool request and execution-attempt state:
