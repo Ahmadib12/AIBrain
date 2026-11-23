@@ -288,3 +288,33 @@ def test_manually_approved_passkey_request_cannot_be_claimed_generically(
         assert stored["authorization_policy"] == "passkey"
     finally:
         database.shutdown()
+
+
+
+def test_cancelled_approved_request_cannot_be_claimed(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = repository.create(
+            user_id,
+            tool_id="state-change-test",
+            arguments={"value": "approved"},
+            status="approved",
+            expires_at=(
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+            contract_fingerprint="a" * 64,
+            authorization_policy="passkey",
+        )
+
+        cancelled = repository.cancel_pending(user_id, request["id"])
+
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["consumed_at"] is not None
+        with pytest.raises(PermissionError, match="not available"):
+            repository.claim_passkey_authorized_for_execution(
+                user_id,
+                request["id"],
+                expected_contract_fingerprint="a" * 64,
+            )
+    finally:
+        database.close()
