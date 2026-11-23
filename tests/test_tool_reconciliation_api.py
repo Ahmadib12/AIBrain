@@ -266,3 +266,40 @@ def test_reconciliation_rejects_unexpected_request_fields(client: TestClient) ->
     assert state.tool_requests.get(user_id, request["id"])["status"] == (
         "outcome_unknown"
     )
+
+
+def test_owner_can_inspect_unknown_execution_and_attempt_state(
+    client: TestClient,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "reconcile-inspect@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+    request = create_outcome_unknown_request(state, user_id)
+
+    response = client.get(
+        f"/api/v1/tools/requests/{request['id']}",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == request["id"]
+    assert body["status"] == "outcome_unknown"
+    assert body["execution_attempt"]["status"] == "outcome_unknown"
+    assert body["execution_attempt"]["claimed_at"]
+
+
+def test_another_user_cannot_inspect_tool_request(client: TestClient) -> None:
+    state = get_app_state()
+    owner_token = register_and_login(client, "reconcile-inspect-owner@example.com")
+    other_token = register_and_login(client, "reconcile-inspect-other@example.com")
+    owner_id = state.identity.resolve_token(owner_token)["id"]
+    request = create_outcome_unknown_request(state, owner_id)
+
+    response = client.get(
+        f"/api/v1/tools/requests/{request['id']}",
+        headers=auth_header(other_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TOOL_REQUEST_NOT_FOUND"
