@@ -435,13 +435,15 @@ class ToolRequestRepository:
         return self.get(user_id, request_id)
 
     def cancel_pending(self, user_id: str, request_id: str) -> dict:
+        """Cancel a pending or approved request before execution is claimed."""
         now = _utc_now()
-        with self.database.transaction():
+        with self.database.transaction(immediate=True):
             cursor = self.database.connect().execute(
                 "UPDATE tool_requests SET status = 'cancelled', "
                 "updated_at = ?, consumed_at = ? "
                 "WHERE id = ? AND user_id = ? "
-                "AND status = 'pending'",
+                "AND status IN ('pending', 'approved') "
+                "AND consumed_at IS NULL",
                 (now, now, request_id, user_id),
             )
             if cursor.rowcount != 1:
