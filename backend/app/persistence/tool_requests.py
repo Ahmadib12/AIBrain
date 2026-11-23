@@ -1688,6 +1688,19 @@ class ToolRequestRepository:
         certification_id = str(uuid.uuid4())
         now_text = now.isoformat()
         with self.database.transaction(immediate=True):
+            current_attestation = self.database.connect().execute(
+                """
+                SELECT a.key_id FROM external_adapter_evidence_attestations AS a
+                WHERE a.package_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM trusted_runner_key_revocations AS r
+                    WHERE r.key_id = a.key_id
+                  )
+                """,
+                (evidence_package_id,),
+            ).fetchone()
+            if current_attestation is None:
+                raise PermissionError("Trusted runner key is revoked or attestation is missing")
             self.database.connect().execute(
                 """
                 INSERT INTO external_adapter_certifications (
@@ -1707,7 +1720,7 @@ class ToolRequestRepository:
                     json.dumps(package["conformance_results"], sort_keys=True, separators=(",", ":")),
                     package["manifest_sha256"],
                     json.dumps([f"evidence-package:{evidence_package_id}"]),
-                    package["verified_at"], expiry.isoformat(), approved_by.strip(),
+                    package["verified_at"], expiry.astimezone(timezone.utc).isoformat(), approved_by.strip(),
                     now_text,
                 ),
             )
