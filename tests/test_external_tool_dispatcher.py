@@ -383,6 +383,11 @@ def claimed_passkey_dispatch(tmp_path):
     key_id = "dispatcher-runner-key"
     repository.register_trusted_runner_key(
         key_id=key_id, runner_id="dispatcher-test-runner",
+        provider_id=package["provider_id"],
+        adapter_id=package["adapter_id"],
+        adapter_version=package["adapter_version"],
+        provider_scope=package["provider_scope"],
+        tool_id=package["tool_id"],
         public_key=public_key,
         valid_from=(now - timedelta(days=1)).isoformat(),
         valid_until=(now + timedelta(days=10)).isoformat(),
