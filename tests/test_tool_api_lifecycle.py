@@ -625,3 +625,99 @@ def test_owner_can_cancel_approved_passkey_request(client: TestClient) -> None:
     persisted = state.tool_requests.get(user_id, request["id"])
     assert persisted["status"] == "cancelled"
     assert persisted["consumed_at"] is None
+
+
+
+def test_runner_key_management_requires_operator_token_and_never_exposes_public_key(
+    client: TestClient, monkeypatch
+) -> None:
+    import base64
+    from backend.app.auth import operator as operator_module
+    from backend.app.config import Settings
+    from backend.app.tools.attestation import generate_test_keypair
+
+    operator_token = "operator-test-token-" + "x" * 32
+    monkeypatch.setattr(
+        operator_module, "get_settings",
+        lambda: Settings(provider_operator_token=operator_token),
+    )
+    public_key, _private_key = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    body = {
+        "key_id": "api-runner-key",
+        "runner_id": "api-runner",
+        "public_key_base64": base64.b64encode(public_key).decode("ascii"),
+        "valid_from": (now - timedelta(minutes=1)).isoformat(),
+        "valid_until": (now + timedelta(days=2)).isoformat(),
+        "registered_by": "security-operator",
+    }
+
+    denied = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys", json=body
+    )
+    assert denied.status_code == 401
+    assert denied.json()["error"]["code"] == "OPERATOR_UNAUTHORIZED"
+
+    denied_bad_token = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Operator-Token": "wrong-token"},
+        json=body,
+    )
+    assert denied_bad_token.status_code == 401
+
+    created = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Operator-Token": operator_token},
+        json=body,
+    )
+    assert created.status_code == 201
+    assert created.json()["key_id"] == "api-runner-key"
+    assert created.json()["algorithm"] == "Ed25519"
+    assert "public_key" not in created.json()
+    assert "private_key" not in created.json()
+
+    duplicate = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Operator-Token": operator_token},
+        json=body,
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "RUNNER_KEY_CONFLICT"
+
+    revoked = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys/api-runner-key/revoke",
+        headers={"X-AIBrain-Operator-Token": operator_token},
+        json={
+            "revoked_by": "security-operator",
+            "reason": "Test key rotation",
+        },
+    )
+    assert revoked.status_code == 200
+    assert revoked.json() == {
+        "key_id": "api-runner-key",
+        "status": "revoked",
+    }
+
+
+def test_runner_key_management_fails_closed_when_operator_auth_unconfigured(
+    client: TestClient, monkeypatch
+) -> None:
+    from backend.app.auth import operator as operator_module
+    from backend.app.config import Settings
+
+    monkeypatch.setattr(
+        operator_module, "get_settings", lambda: Settings()
+    )
+    response = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        json={
+            "key_id": "no-auth-key",
+            "runner_id": "runner",
+            "public_key_base64": "A" * 44,
+            "valid_from": datetime.now(timezone.utc).isoformat(),
+            "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "registered_by": "operator",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "OPERATOR_AUTH_NOT_CONFIGURED"
