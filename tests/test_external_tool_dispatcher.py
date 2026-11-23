@@ -521,3 +521,33 @@ def test_final_dispatch_gate_rejects_revoked_passkey(tmp_path):
         assert repository.get_dispatch_audit(user_id, request_id) == []
     finally:
         database.close()
+
+
+
+def test_final_dispatch_gate_rejects_revoked_runner_key(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        certificate_row = database.connect().execute(
+            "SELECT evidence_references_json FROM external_adapter_certifications"
+        ).fetchone()
+        package_id = json.loads(certificate_row["evidence_references_json"])[0].split(":", 1)[1]
+        attestation = repository.get_external_adapter_evidence_attestation(package_id)
+        repository.revoke_trusted_runner_key(
+            attestation["key_id"], revoked_by="security-admin",
+            reason="Test runner key compromise",
+        )
+        with pytest.raises(PermissionError, match="trusted evidence certification"):
+            repository.begin_external_dispatch(
+                user_id, request_id,
+                expected_contract_fingerprint=fingerprint,
+                adapter_id=provider.capabilities.adapter_id,
+                adapter_version=provider.capabilities.adapter_version,
+                provider_id=provider.capabilities.provider_id,
+                provider_scope=provider.capabilities.provider_scope,
+                capabilities=snapshot,
+            )
+        assert repository.get_dispatch_audit(user_id, request_id) == []
+    finally:
+        database.close()
