@@ -920,6 +920,11 @@ class ToolRequestRepository:
                     attestation_row = connection.execute(
                         """
                         SELECT a.*, k.public_key, k.runner_id AS trusted_runner_id,
+                               k.provider_id AS trusted_provider_id,
+                               k.adapter_id AS trusted_adapter_id,
+                               k.adapter_version AS trusted_adapter_version,
+                               k.provider_scope AS trusted_provider_scope,
+                               k.tool_id AS trusted_tool_id,
                                k.valid_from, k.valid_until
                         FROM external_adapter_evidence_attestations AS a
                         JOIN trusted_runner_keys AS k ON k.key_id = a.key_id
@@ -956,6 +961,12 @@ class ToolRequestRepository:
                         or runner_key_start > datetime.now(timezone.utc)
                         or runner_key_end <= datetime.now(timezone.utc)
                         or attestation_row["runner_id"] != attestation_row["trusted_runner_id"]
+                        or attestation_row["nonce"] != attestation_payload.get("nonce")
+                        or attestation_row["trusted_provider_id"] != provider_id
+                        or attestation_row["trusted_adapter_id"] != adapter_id
+                        or attestation_row["trusted_adapter_version"] != adapter_version
+                        or attestation_row["trusted_provider_scope"] != provider_scope
+                        or attestation_row["trusted_tool_id"] != row["tool_id"]
                     ):
                         continue
                     signed_package = {
@@ -1756,6 +1767,16 @@ class ToolRequestRepository:
         key = self.get_trusted_runner_key(attestation["key_id"])
         if key["runner_id"] != attestation["runner_id"]:
             raise PermissionError("Evidence attestation runner/key identity mismatch")
+        if any(
+            key[field] != package[field]
+            for field in (
+                "provider_id", "adapter_id", "adapter_version",
+                "provider_scope", "tool_id",
+            )
+        ):
+            raise PermissionError("Evidence package is outside the trusted runner key scope")
+        if attestation["nonce"] != attestation["payload"].get("nonce"):
+            raise PermissionError("Runner attestation nonce binding is invalid")
         attestation_expiry = _parse_timestamp(
             attestation["payload"]["expires_at"], "expires_at"
         )
@@ -1948,6 +1969,14 @@ class ToolRequestRepository:
                 key_valid_until = _parse_timestamp(key["valid_until"], "valid_until")
                 if (
                     key["runner_id"] != attestation["runner_id"]
+                    or any(
+                        key[field] != package[field]
+                        for field in (
+                            "provider_id", "adapter_id", "adapter_version",
+                            "provider_scope", "tool_id",
+                        )
+                    )
+                    or attestation["nonce"] != attestation["payload"].get("nonce")
                     or key_valid_from > issued_at
                     or attestation_expiry > key_valid_until
                     or key_valid_until <= datetime.now(timezone.utc)
