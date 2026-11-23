@@ -579,7 +579,7 @@ class ToolRequestRepository:
         outcome: str,
         note: str,
         result: dict | None = None,
-        error_code: str = "reconciled_failure",
+        error_code: str | None = None,
     ) -> dict:
         """Record an owner's manual resolution of an uncertain execution.
 
@@ -603,6 +603,8 @@ class ToolRequestRepository:
         else:
             if result is not None:
                 raise ValueError("Failed reconciliation cannot include a result")
+            if error_code is None:
+                error_code = "reconciled_failure"
             if (
                 not isinstance(error_code, str)
                 or not error_code
