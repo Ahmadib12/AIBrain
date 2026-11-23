@@ -297,3 +297,9 @@ GitHub Actions CI is defined in `.github/workflows/ci.yml` and runs the full
 test suite on Python 3.11 and 3.14 for pushes to `main` and `dev/**` branches
 and for pull requests. This generic CI workflow does not itself establish
 provider-specific conformance or trusted-runner status.
+
+
+Request-body limits remain 1 MiB by default for ordinary endpoints.
+`AIBRAIN_RUNNER_EVIDENCE_MAX_REQUEST_BODY_BYTES` defaults to 15 MiB and applies
+only to the `/api/v1/tools/runner/evidence` route family; conformance artifacts
+are independently capped at 2 MiB each and 10 MiB total.
