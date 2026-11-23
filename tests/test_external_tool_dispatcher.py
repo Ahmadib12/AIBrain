@@ -346,6 +346,55 @@ def test_final_dispatch_gate_rechecks_passkey_and_audits_start(tmp_path):
         database.close()
 
 
+
+def test_unknown_provider_outcome_is_audited_and_not_retried(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        frozen = repository.begin_external_dispatch(
+            user_id,
+            request_id,
+            expected_contract_fingerprint=fingerprint,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_id=provider.capabilities.provider_id,
+            provider_scope=provider.capabilities.provider_scope,
+            capabilities=snapshot,
+        )
+        repository.record_external_dispatch_outcome(
+            user_id,
+            request_id,
+            outcome="unknown",
+            action_digest=frozen["action_digest"],
+            error_code="provider_outcome_unknown",
+        )
+        assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
+        assert repository.get_execution_attempt(user_id, request_id)["status"] == "outcome_unknown"
+        with pytest.raises(PermissionError, match="already been recorded"):
+            repository.record_external_dispatch_outcome(
+                user_id,
+                request_id,
+                outcome="succeeded",
+                action_digest=frozen["action_digest"],
+                result={"accepted": True},
+            )
+        repository.record_external_outcome_lookup(
+            user_id,
+            request_id,
+            action_digest=frozen["action_digest"],
+            outcome="unknown",
+            evidence_reference="provider-lookup-1",
+        )
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        assert [event["event_type"] for event in audit] == [
+            "dispatch_started", "dispatch_unknown", "outcome_lookup"
+        ]
+        assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
+    finally:
+        database.close()
+
+
 def test_final_dispatch_gate_rejects_revoked_passkey(tmp_path):
     (
         database, repository, user_id, request_id, fingerprint, provider, snapshot
