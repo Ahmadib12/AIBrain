@@ -153,10 +153,27 @@ provider scope. The complete supported provider-capability snapshot is
 required and validated before storage; partial or unknown capability fields
 are rejected. A database trigger prevents updates to a persisted binding.
 
-The binding is not yet connected to a dispatcher or to passkey-authorized
-claims. It is a persistence primitive and test target only. Account deletion
-continues to cascade through owner-scoped records. The conformance tests are
-in `tests/test_tool_execution_bindings.py`.
+Migration 11 adds append-only `tool_dispatch_audit_events`. The
+`ExternalToolDispatcher` is a provider-neutral, explicitly invoked boundary
+that claims only passkey-authorized state-change requests, persists the binding,
+then performs a final transactional check of the active account, request
+consumption, passkey authorization, credential revocation state, consumed
+challenge, contract fingerprint, canonical arguments, action digest, and exact
+adapter/provider/capability snapshot. It records `dispatch_started` before
+calling the adapter and permits only one initiation per request.
+
+A normalized provider success or definitive failure is persisted with the
+request and attempt transition. Any transport exception or invalid/ambiguous
+adapter outcome becomes `outcome_unknown`; the dispatcher never retries.
+Read-only provider lookup is available only for unknown attempts, is audited,
+and does not silently reconcile the request. Manual reconciliation remains a
+separate owner-attestation workflow.
+
+The dispatcher is deliberately not wired into the application gateway or API
+routes. No production provider is registered, and state-changing execution
+remains disabled. Account deletion continues to cascade through owner-scoped
+records. Tests are in `tests/test_tool_execution_bindings.py` and
+`tests/test_external_tool_dispatcher.py`.
 
 ## 7. Reconciliation rules
 
@@ -211,7 +228,7 @@ concurrent same-key submissions. Its conformance tests are in
 `tests/test_fake_external_tool_provider.py`. The fake is not registered with
 the application gateway and cannot perform real-world actions.
 
-Remaining steps are to persist the immutable dispatch binding, implement
-provider-backed lookup/reconciliation, gather sandbox evidence for an actual
-provider's guarantees, and only then consider one narrowly scoped
-state-changing adapter behind an explicit feature gate.
+Remaining steps are to add provider-specific sandbox evidence for the
+actual adapter's guarantees, implement an independently verifiable
+provider-backed reconciliation workflow, and only then consider one narrowly
+scoped state-changing adapter behind an explicit feature gate.
