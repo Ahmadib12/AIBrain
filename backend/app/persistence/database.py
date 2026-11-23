@@ -761,6 +761,8 @@ class Database:
                     adapter_version TEXT NOT NULL,
                     provider_scope TEXT NOT NULL,
                     tool_id TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
                     algorithm TEXT NOT NULL CHECK (algorithm = 'Ed25519'),
                     public_key BLOB NOT NULL CHECK (length(public_key) = 32),
                     valid_from TEXT NOT NULL,
