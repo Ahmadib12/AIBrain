@@ -1101,3 +1101,108 @@ def test_concurrent_passkey_claims_only_succeed_once(tmp_path):
     finally:
         second_database.shutdown()
 
+
+def test_passkey_execution_claim_rolls_back_request_if_attempt_insert_fails(
+    tmp_path,
+):
+    import sqlite3
+
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    fixture["database"].connect().execute(
+        """
+        CREATE TRIGGER fail_passkey_execution_attempt_insert
+        BEFORE INSERT ON tool_execution_attempts
+        BEGIN
+            SELECT RAISE(ABORT, 'forced execution attempt insert failure');
+        END
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced execution attempt"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"],
+        fixture["request"]["id"],
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+    attempt_count = fixture["database"].connect().execute(
+        "SELECT COUNT(*) FROM tool_execution_attempts WHERE request_id = ?",
+        (fixture["request"]["id"],),
+    ).fetchone()[0]
+    assert attempt_count == 0
+
+    # The passkey authorization remains valid; only the failed execution claim
+    # is rolled back, so an operator can diagnose the persistence failure.
+    authorization_count = fixture["database"].connect().execute(
+        "SELECT COUNT(*) FROM tool_authorizations WHERE request_id = ?",
+        (fixture["request"]["id"],),
+    ).fetchone()[0]
+    assert authorization_count == 1
+
+
+def test_passkey_execution_claim_rejects_deleted_user(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    fixture["database"].connect().execute(
+        "UPDATE users SET deleted_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), fixture["user_id"]),
+    )
+
+    with pytest.raises(PermissionError, match="account is not active"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"],
+        fixture["request"]["id"],
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+    assert fixture["database"].connect().execute(
+        "SELECT COUNT(*) FROM tool_execution_attempts WHERE request_id = ?",
+        (fixture["request"]["id"],),
+    ).fetchone()[0] == 0
+
+
+def test_passkey_execution_claim_rejects_tampered_challenge_binding(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    fixture["database"].connect().execute(
+        """
+        UPDATE webauthn_challenges
+        SET proposal_digest = ?
+        WHERE id = ?
+        """,
+        ("f" * 64, fixture["challenge"]["id"]),
+    )
+
+    with pytest.raises(PermissionError, match="authorization does not match"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"],
+        fixture["request"]["id"],
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+    assert fixture["database"].connect().execute(
+        "SELECT COUNT(*) FROM tool_execution_attempts WHERE request_id = ?",
+        (fixture["request"]["id"],),
+    ).fetchone()[0] == 0
