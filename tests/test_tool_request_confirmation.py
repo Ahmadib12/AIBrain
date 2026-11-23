@@ -490,3 +490,190 @@ def test_cancelled_approved_request_cannot_be_claimed(tmp_path):
             )
     finally:
         database.shutdown()
+
+
+
+def _make_unknown_execution(repository, user_id, request_id):
+    repository.claim_for_execution(user_id, request_id)
+    cutoff = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    assert repository.recover_stale_execution_attempts(stale_before=cutoff) == 1
+
+
+def test_unknown_execution_can_be_reconciled_as_succeeded(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+
+        reconciled = repository.reconcile_execution_attempt(
+            user_id,
+            request["id"],
+            outcome="succeeded",
+            note="Verified the external read operation completed.",
+            result={"status": "completed", "value": "verified"},
+        )
+
+        assert reconciled["status"] == "completed"
+        assert reconciled["result"]["value"] == "verified"
+        attempt = repository.get_execution_attempt(user_id, request["id"])
+        assert attempt["status"] == "succeeded"
+        assert attempt["error_code"] is None
+        audit = json.loads(
+            database.connect().execute(
+                "SELECT audit_json FROM tool_requests WHERE id = ?",
+                (request["id"],),
+            ).fetchone()["audit_json"]
+        )
+        assert audit["execution_reconciliation"]["outcome"] == "succeeded"
+        assert audit["execution_reconciliation"]["reconciled_by"] == user_id
+    finally:
+        database.shutdown()
+
+
+def test_unknown_execution_can_be_reconciled_as_failed(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+
+        reconciled = repository.reconcile_execution_attempt(
+            user_id,
+            request["id"],
+            outcome="failed",
+            note="Verified from the provider that the operation did not complete.",
+            error_code="provider_confirmed_failure",
+        )
+
+        assert reconciled["status"] == "failed"
+        attempt = repository.get_execution_attempt(user_id, request["id"])
+        assert attempt["status"] == "failed"
+        assert attempt["error_code"] == "provider_confirmed_failure"
+    finally:
+        database.shutdown()
+
+
+def test_reconciliation_is_scoped_to_request_owner(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+
+        with pytest.raises(LookupError):
+            repository.reconcile_execution_attempt(
+                "another-user",
+                request["id"],
+                outcome="failed",
+                note="Attempted by another user.",
+            )
+
+        assert repository.get(user_id, request["id"])["status"] == "outcome_unknown"
+        assert repository.get_execution_attempt(user_id, request["id"])["status"] == "outcome_unknown"
+    finally:
+        database.shutdown()
+
+
+def test_reconciliation_rejects_non_unknown_execution(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+
+        with pytest.raises(PermissionError, match="not awaiting reconciliation"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                request["id"],
+                outcome="failed",
+                note="There is no unknown execution.",
+            )
+    finally:
+        database.shutdown()
+
+
+@pytest.mark.parametrize("outcome", ["claimed", "outcome_unknown", "completed", ""])
+def test_reconciliation_rejects_invalid_outcome(tmp_path, outcome):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="outcome"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                "missing-request",
+                outcome=outcome,
+                note="Invalid outcome test.",
+            )
+    finally:
+        database.shutdown()
+
+
+def test_reconciliation_requires_a_nonempty_note(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+
+        with pytest.raises(ValueError, match="note"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                request["id"],
+                outcome="failed",
+                note="   ",
+            )
+    finally:
+        database.shutdown()
+
+
+def test_reconciliation_cannot_be_applied_twice(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+        repository.reconcile_execution_attempt(
+            user_id,
+            request["id"],
+            outcome="failed",
+            note="Provider confirmed no operation occurred.",
+        )
+
+        with pytest.raises(PermissionError, match="not awaiting reconciliation"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                request["id"],
+                outcome="succeeded",
+                note="Conflicting second resolution.",
+                result={"status": "completed"},
+            )
+    finally:
+        database.shutdown()
+
+
+def test_successful_reconciliation_requires_result_and_no_error_code(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+
+        with pytest.raises(ValueError, match="requires a result"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                request["id"],
+                outcome="succeeded",
+                note="Provider confirmed success.",
+            )
+    finally:
+        database.shutdown()
+
+
+def test_failed_reconciliation_rejects_result_payload(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        _make_unknown_execution(repository, user_id, request["id"])
+
+        with pytest.raises(ValueError, match="cannot include a result"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                request["id"],
+                outcome="failed",
+                note="Provider confirmed failure.",
+                result={"status": "completed"},
+            )
+    finally:
+        database.shutdown()
