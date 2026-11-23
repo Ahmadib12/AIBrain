@@ -1187,6 +1187,7 @@ def test_migration_nine_creates_constrained_execution_attempt_table(
     state = get_app_state()
     # Serialize direct SQL assertions with the lifespan recovery worker.
     with state.database.transaction(immediate=True):
+        connection = state.database.connect()
         user_id = "migration-nine-user"
         timestamp = "2026-11-23T00:00:00+00:00"
 
