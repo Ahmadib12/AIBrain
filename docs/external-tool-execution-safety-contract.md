@@ -264,8 +264,37 @@ and all relevant expiry bounds before recording dispatch initiation.
 The Ed25519 helper can sign payloads for runner-side integration tests, but
 production private keys must be generated and protected outside AIBrain (for
 example, in a dedicated CI runner secret store or hardware-backed key service).
-The repository currently provides key registration/revocation service methods,
-not a public key-management API or a deployed runner agent.
+The runner and operator workflows are exposed through separate API
+credential boundaries. `AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN` authenticates
+evidence upload, attestation-payload requests, and signed attestation submission.
+`AIBRAIN_PROVIDER_OPERATOR_TOKEN` authenticates public-key registration,
+key revocation, certification approval, and certification revocation. Both
+tokens must be at least 32 characters and are compared in constant time. The
+runner credential cannot perform operator actions.
+
+Runner API routes:
+- `POST /api/v1/tools/runner/evidence`
+- `POST /api/v1/tools/runner/evidence/{package_id}/attestation-payload`
+- `POST /api/v1/tools/runner/evidence/{package_id}/attest`
+
+Operator API routes:
+- `POST /api/v1/tools/operator/trusted-runner-keys`
+- `POST /api/v1/tools/operator/trusted-runner-keys/{key_id}/revoke`
+- `POST /api/v1/tools/operator/evidence/{package_id}/certify`
+- `POST /api/v1/tools/operator/certifications/{certification_id}/revoke`
+
+The attestation-payload endpoint builds the exact canonical statement from the
+stored evidence package and registered runner key. The external runner signs
+that payload locally and submits only the signature. AIBrain never receives or
+stores the private signing key. API responses do not return public or private
+key material. Evidence upload has global request-body limits and per-package
+artifact size/count limits enforced by the conformance verifier.
+
+The operator credential is currently a shared bearer secret. The `approved_by`,
+`registered_by`, and `revoked_by` fields are operator-provided audit labels,
+not independently established human identities. Production operation therefore
+still needs individual operator identity/SSO, stronger audit attribution,
+secret rotation, and a controlled key-registration ceremony.
 
 A signature proves that the holder of a registered private key signed the
 bound statement. It does not independently prove that the sandbox environment
@@ -276,3 +305,9 @@ runner isolation, key custody, and audit. AIBrain therefore treats this as
 authenticated runner provenance, not hardware-backed remote attestation.
 Human certification approval remains separate and explicit. No production
 provider is registered, and no external state-changing execution is enabled.
+
+GitHub Actions CI is configured in `.github/workflows/ci.yml`. It installs the
+project test extra, compiles backend and tests, and runs the complete pytest
+suite on Python 3.11 and 3.14 for development/main pushes and pull requests.
+The workflow itself must still complete successfully on GitHub before Phase 1
+can be marked CI-verified.
