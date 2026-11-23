@@ -925,6 +925,7 @@ class ToolRequestRepository:
                                k.adapter_version AS trusted_adapter_version,
                                k.provider_scope AS trusted_provider_scope,
                                k.tool_id AS trusted_tool_id,
+                               k.tool_contract_fingerprint AS trusted_tool_contract_fingerprint,
                                k.valid_from, k.valid_until
                         FROM external_adapter_evidence_attestations AS a
                         JOIN trusted_runner_keys AS k ON k.key_id = a.key_id
@@ -968,6 +969,7 @@ class ToolRequestRepository:
                         or attestation_row["trusted_adapter_version"] != adapter_version
                         or attestation_row["trusted_provider_scope"] != provider_scope
                         or attestation_row["trusted_tool_id"] != row["tool_id"]
+                        or attestation_row["trusted_tool_contract_fingerprint"] != expected_contract_fingerprint
                     ):
                         continue
                     signed_package = {
@@ -1496,7 +1498,8 @@ class ToolRequestRepository:
     def register_trusted_runner_key(
         self, *, key_id: str, runner_id: str, provider_id: str,
         adapter_id: str, adapter_version: str, provider_scope: str,
-        tool_id: str, public_key: bytes, valid_from: str,
+        tool_id: str, tool_contract_fingerprint: str,
+        public_key: bytes, valid_from: str,
         valid_until: str, registered_by: str,
     ) -> dict:
         """Register an externally generated Ed25519 public key; never stores private keys."""
@@ -1506,10 +1509,18 @@ class ToolRequestRepository:
             ("key_id", key_id), ("runner_id", runner_id),
             ("provider_id", provider_id), ("adapter_id", adapter_id),
             ("adapter_version", adapter_version), ("provider_scope", provider_scope),
-            ("tool_id", tool_id), ("registered_by", registered_by),
+            ("tool_id", tool_id),
+            ("tool_contract_fingerprint", tool_contract_fingerprint),
+            ("registered_by", registered_by),
         ):
             if not isinstance(value, str) or not value.strip() or len(value) > 256:
                 raise ValueError(f"{field} must be a non-empty bounded identifier")
+        if (
+            not isinstance(tool_contract_fingerprint, str)
+            or len(tool_contract_fingerprint) != 64
+            or any(ch not in "0123456789abcdef" for ch in tool_contract_fingerprint)
+        ):
+            raise ValueError("Tool contract fingerprint must be lowercase SHA-256")
         if not isinstance(public_key, bytes) or len(public_key) != 32:
             raise ValueError("Ed25519 public key must contain exactly 32 bytes")
         start = _parse_timestamp(valid_from, "valid_from")
@@ -1523,13 +1534,14 @@ class ToolRequestRepository:
                 INSERT INTO trusted_runner_keys (
                     key_id, runner_id, provider_id, adapter_id,
                     adapter_version, provider_scope, tool_id,
-                    algorithm, public_key, valid_from, valid_until,
-                    registered_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Ed25519', ?, ?, ?, ?, ?)
+                    tool_contract_fingerprint, algorithm, public_key,
+                    valid_from, valid_until, registered_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Ed25519', ?, ?, ?, ?, ?)
                 """,
                 (
                     key_id, runner_id, provider_id, adapter_id,
-                    adapter_version, provider_scope, tool_id, public_key,
+                    adapter_version, provider_scope, tool_id,
+                    tool_contract_fingerprint, public_key,
                     start.isoformat(), end.isoformat(), registered_by.strip(),
                     now.isoformat(),
                 ),
@@ -1551,6 +1563,7 @@ class ToolRequestRepository:
             "provider_id": row["provider_id"], "adapter_id": row["adapter_id"],
             "adapter_version": row["adapter_version"],
             "provider_scope": row["provider_scope"], "tool_id": row["tool_id"],
+            "tool_contract_fingerprint": row["tool_contract_fingerprint"],
             "algorithm": row["algorithm"], "public_key": bytes(row["public_key"]),
             "valid_from": row["valid_from"], "valid_until": row["valid_until"],
             "registered_by": row["registered_by"], "created_at": row["created_at"],
@@ -1605,7 +1618,7 @@ class ToolRequestRepository:
             key[field] != package[field]
             for field in (
                 "provider_id", "adapter_id", "adapter_version",
-                "provider_scope", "tool_id",
+                "provider_scope", "tool_id", "tool_contract_fingerprint",
             )
         ):
             raise PermissionError("Evidence package is outside the trusted runner key scope")
@@ -1671,7 +1684,7 @@ class ToolRequestRepository:
             key[field] != package[field]
             for field in (
                 "provider_id", "adapter_id", "adapter_version",
-                "provider_scope", "tool_id",
+                "provider_scope", "tool_id", "tool_contract_fingerprint",
             )
         ):
             raise PermissionError("Evidence package is outside the trusted runner key scope")
@@ -1772,7 +1785,7 @@ class ToolRequestRepository:
             key[field] != package[field]
             for field in (
                 "provider_id", "adapter_id", "adapter_version",
-                "provider_scope", "tool_id",
+                "provider_scope", "tool_id", "tool_contract_fingerprint",
             )
         ):
             raise PermissionError("Evidence package is outside the trusted runner key scope")
