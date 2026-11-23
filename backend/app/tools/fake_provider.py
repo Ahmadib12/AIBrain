@@ -84,7 +84,11 @@ class FakeExternalToolProvider:
         with self._lock:
             self.dispatch_count += 1
             existing = self._records.get(action.idempotency_key)
-            if existing is not None:
+            if (
+                self.capabilities.idempotency_mode
+                is ExecutionIdempotencyMode.PROVIDER_ENFORCED
+                and existing is not None
+            ):
                 if existing.action_digest != action.action_digest:
                     raise ValueError("Idempotency key reused for a different action")
                 return ExternalToolExecutionOutcome(
@@ -94,11 +98,9 @@ class FakeExternalToolProvider:
                     evidence_reference="fake-provider-idempotency-record",
                 )
 
-            if self.capabilities.idempotency_mode is ExecutionIdempotencyMode.NONE:
-                # Non-idempotent mode deliberately cannot safely deduplicate.
-                operation_reference = f"fake-operation-{self.effect_count + 1}"
-            else:
-                operation_reference = f"fake-operation-{self.effect_count + 1}"
+            # In NONE mode every submission may create a new effect, even if
+            # the caller reuses a key. The fake must not imply deduplication.
+            operation_reference = f"fake-operation-{self.effect_count + 1}"
 
             result = {"accepted": True, "payload": action.payload()}
             record = FakeProviderRecord(
