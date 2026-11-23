@@ -1646,8 +1646,20 @@ class ToolRequestRepository:
             try:
                 package_id = certification["evidence_references"][0].split(":", 1)[1]
                 package = self.get_external_adapter_evidence_package(package_id)
+                attestation = self.get_external_adapter_evidence_attestation(package_id)
+                from backend.app.tools.attestation import (
+                    verify_ed25519_signature,
+                )
                 from backend.app.tools.conformance import verify_evidence_manifest
 
+                if attestation["key_revoked"]:
+                    continue
+                key = self.get_trusted_runner_key(attestation["key_id"])
+                if verify_ed25519_signature(
+                    key["public_key"], attestation["payload"],
+                    attestation["signature"],
+                ) != attestation["payload_sha256"]:
+                    continue
                 verified = verify_evidence_manifest(
                     package["manifest"],
                     {name: item["content"] for name, item in package["artifacts"].items()},
