@@ -346,6 +346,72 @@ def claimed_passkey_dispatch(tmp_path):
         provider_scope=caps.provider_scope,
         capabilities=snapshot,
     )
+
+    # A final dispatch must revalidate an actual signed evidence package,
+    # not rely only on a mocked "certification available" response.
+    from backend.app.tools.attestation import (
+        build_attestation_payload, generate_test_keypair, sign_attestation_for_runner,
+    )
+    from backend.app.tools.conformance import REQUIRED_CHECKS
+    artifact_bytes = b"fake provider conformance runner evidence"
+    artifacts = {"runner-report.bin": artifact_bytes}
+    executed_at = now - timedelta(minutes=1)
+    evidence_expires = now + timedelta(days=5)
+    manifest = {
+        "schema_version": "aibrain-conformance-evidence-v1",
+        "provider_id": caps.provider_id,
+        "adapter_id": caps.adapter_id,
+        "adapter_version": caps.adapter_version,
+        "provider_scope": caps.provider_scope,
+        "tool_id": tool_contract.tool_id,
+        "tool_contract_fingerprint": fingerprint,
+        "capabilities": snapshot,
+        "test_suite_version": "conformance-v1",
+        "sandbox_environment": "fake-provider-test-sandbox",
+        "executed_at": executed_at.isoformat(),
+        "expires_at": evidence_expires.isoformat(),
+        "tests": {
+            name: {"status": "passed", "artifact": "runner-report.bin"}
+            for name in REQUIRED_CHECKS
+        },
+        "artifacts": {
+            "runner-report.bin": hashlib.sha256(artifact_bytes).hexdigest()
+        },
+    }
+    package = repository.verify_external_adapter_evidence(manifest, artifacts)
+    public_key, private_key = generate_test_keypair()
+    key_id = "dispatcher-runner-key"
+    repository.register_trusted_runner_key(
+        key_id=key_id, runner_id="dispatcher-test-runner",
+        public_key=public_key,
+        valid_from=(now - timedelta(days=1)).isoformat(),
+        valid_until=(now + timedelta(days=10)).isoformat(),
+        registered_by="test-security-admin",
+    )
+    issued_at = now.isoformat()
+    attestation_expires = (now + timedelta(days=3)).isoformat()
+    nonce = "nonce_" + uuid.uuid4().hex
+    payload = build_attestation_payload(
+        package_id=package["id"],
+        manifest_sha256=package["manifest_sha256"],
+        artifact_hashes=package["artifact_hashes"],
+        runner_id="dispatcher-test-runner",
+        provider_id=caps.provider_id,
+        adapter_id=caps.adapter_id,
+        adapter_version=caps.adapter_version,
+        provider_scope=caps.provider_scope,
+        sandbox_environment="fake-provider-test-sandbox",
+        nonce=nonce, issued_at=issued_at, expires_at=attestation_expires,
+    )
+    repository.attest_external_adapter_evidence(
+        package["id"], key_id=key_id, runner_id="dispatcher-test-runner",
+        nonce=nonce, issued_at=issued_at, expires_at=attestation_expires,
+        signature=sign_attestation_for_runner(private_key, payload),
+    )
+    repository.certify_external_adapter(
+        evidence_package_id=package["id"], approved_by="test-operator",
+        expires_at=(now + timedelta(days=2)).isoformat(),
+    )
     return database, repository, user_id, request_id, fingerprint, provider, snapshot
 
 
