@@ -756,6 +756,11 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
         json={
             "key_id": "e2e-runner-key",
             "runner_id": "e2e-runner",
+            "provider_id": "api-provider",
+            "adapter_id": "api-adapter",
+            "adapter_version": "1.0.0",
+            "provider_scope": "sandbox-account",
+            "tool_id": "api-test-tool",
             "public_key_base64": base64.b64encode(public_key).decode("ascii"),
             "valid_from": (now - timedelta(minutes=1)).isoformat(),
             "valid_until": (now + timedelta(days=2)).isoformat(),
@@ -771,6 +776,11 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
         json={
             "key_id": "e2e-runner-key",
             "runner_id": "e2e-runner",
+            "provider_id": "api-provider",
+            "adapter_id": "api-adapter",
+            "adapter_version": "1.0.0",
+            "provider_scope": "sandbox-account",
+            "tool_id": "api-test-tool",
             "public_key_base64": base64.b64encode(public_key).decode("ascii"),
             "valid_from": (now - timedelta(minutes=1)).isoformat(),
             "valid_until": (now + timedelta(days=2)).isoformat(),
