@@ -123,6 +123,10 @@ Registering a language does not claim that translation, speech recognition, or s
 - SSE-style intelligence response endpoint
 - Bounded health-check timeout and per-provider health-check locking
 
+### External tool execution safety contract
+
+The design requirements for external state-changing tool adapters, provider idempotency, uncertain outcomes, authorization binding, reconciliation, and adapter conformance are documented in [External Tool Execution Safety Contract](docs/external-tool-execution-safety-contract.md). This is a design contract only; it does not enable external or state-changing execution.
+
 ### Inspecting and reconciling uncertain tool executions
 
 Authenticated users can inspect their own persisted tool request and execution-attempt state:
