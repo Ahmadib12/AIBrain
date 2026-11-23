@@ -1,4 +1,8 @@
 from backend.app.tools.contracts import (
+    ExecutionIdempotencyMode,
+    ExternalToolExecutionCapabilities,
+    ExternalToolExecutionOutcome,
+    ExternalToolOutcomeStatus,
     ToolContract,
     ToolRegistry,
     ToolRisk,
@@ -7,6 +11,10 @@ from backend.app.tools.contracts import (
 from backend.app.tools.runtime import ToolExecutionGateway
 
 __all__ = [
+    "ExecutionIdempotencyMode",
+    "ExternalToolExecutionCapabilities",
+    "ExternalToolExecutionOutcome",
+    "ExternalToolOutcomeStatus",
     "ToolContract",
     "ToolRegistry",
     "ToolRisk",
