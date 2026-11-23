@@ -628,7 +628,7 @@ def test_owner_can_cancel_approved_passkey_request(client: TestClient) -> None:
 
 
 
-def test_runner_key_management_requires_operator_token_and_never_exposes_public_key(
+def test_runner_key_management_requires_security_operator_token_and_never_exposes_public_key(
     client: TestClient, monkeypatch
 ) -> None:
     import base64
@@ -636,10 +636,14 @@ def test_runner_key_management_requires_operator_token_and_never_exposes_public_
     from backend.app.config import Settings
     from backend.app.tools.attestation import generate_test_keypair
 
-    operator_token = "operator-test-token-" + "x" * 32
+    security_token = "security-test-token-" + "x" * 32
+    provider_token = "provider-test-token-" + "p" * 32
     monkeypatch.setattr(
         operator_module, "get_settings",
-        lambda: Settings(provider_operator_token=operator_token),
+        lambda: Settings(
+            provider_operator_token=provider_token,
+            security_operator_token=security_token,
+        ),
     )
     public_key, _private_key = generate_test_keypair()
     now = datetime.now(timezone.utc)
@@ -656,18 +660,25 @@ def test_runner_key_management_requires_operator_token_and_never_exposes_public_
         "/api/v1/tools/operator/trusted-runner-keys", json=body
     )
     assert denied.status_code == 401
-    assert denied.json()["error"]["code"] == "OPERATOR_UNAUTHORIZED"
+    assert denied.json()["error"]["code"] == "SECURITY_OPERATOR_UNAUTHORIZED"
 
     denied_bad_token = client.post(
         "/api/v1/tools/operator/trusted-runner-keys",
-        headers={"X-AIBrain-Operator-Token": "wrong-token"},
+        headers={"X-AIBrain-Security-Operator-Token": "wrong-token"},
         json=body,
     )
     assert denied_bad_token.status_code == 401
 
+    provider_cannot_register = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Operator-Token": provider_token},
+        json=body,
+    )
+    assert provider_cannot_register.status_code == 401
+
     created = client.post(
         "/api/v1/tools/operator/trusted-runner-keys",
-        headers={"X-AIBrain-Operator-Token": operator_token},
+        headers={"X-AIBrain-Security-Operator-Token": security_token},
         json=body,
     )
     assert created.status_code == 201
@@ -720,7 +731,7 @@ def test_runner_key_management_fails_closed_when_operator_auth_unconfigured(
         },
     )
     assert response.status_code == 503
-    assert response.json()["error"]["code"] == "OPERATOR_AUTH_NOT_CONFIGURED"
+    assert response.json()["error"]["code"] == "SECURITY_OPERATOR_AUTH_NOT_CONFIGURED"
 
 
 
@@ -737,12 +748,14 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     )
     from backend.app.tools.conformance import REQUIRED_CHECKS
 
-    operator_token = "operator-secret-" + "a" * 32
+    security_token = "security-operator-secret-" + "s" * 32
+    provider_token = "provider-operator-secret-" + "p" * 32
     runner_token = "runner-ingest-secret-" + "b" * 32
     monkeypatch.setattr(
         operator_module, "get_settings",
         lambda: Settings(
-            provider_operator_token=operator_token,
+            provider_operator_token=provider_token,
+            security_operator_token=security_token,
             trusted_runner_ingest_token=runner_token,
         ),
     )
@@ -772,7 +785,7 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     # Only the operator credential can install the runner's public key.
     registered = client.post(
         "/api/v1/tools/operator/trusted-runner-keys",
-        headers={"X-AIBrain-Operator-Token": operator_token},
+        headers={"X-AIBrain-Security-Operator-Token": security_token},
         json={
             "key_id": "e2e-runner-key",
             "runner_id": "e2e-runner",
@@ -823,7 +836,7 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     # Operator credentials cannot ingest/sign on behalf of the runner.
     operator_cannot_ingest = client.post(
         "/api/v1/tools/runner/evidence",
-        headers={"X-AIBrain-Operator-Token": operator_token},
+        headers={"X-AIBrain-Security-Operator-Token": security_token},
         json={
             "manifest": manifest,
             "artifacts_base64": {
@@ -891,9 +904,19 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     )
     assert runner_cannot_certify.status_code == 401
 
+    provider_cannot_certify = client.post(
+        f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
+        headers={"X-AIBrain-Operator-Token": provider_token},
+        json={
+            "approved_by": "security-reviewer",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
+        },
+    )
+    assert provider_cannot_certify.status_code == 401
+
     certified = client.post(
         f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
-        headers={"X-AIBrain-Operator-Token": operator_token},
+        headers={"X-AIBrain-Security-Operator-Token": security_token},
         json={
             "approved_by": "security-reviewer",
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
