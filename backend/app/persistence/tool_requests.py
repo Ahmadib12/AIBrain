@@ -1532,6 +1532,11 @@ class ToolRequestRepository:
             raise PermissionError("Trusted runner attestation is required for certification") from exc
         if attestation["key_revoked"]:
             raise PermissionError("Evidence signer key has been revoked")
+        attestation_expiry = datetime.fromisoformat(
+            attestation["payload"]["expires_at"].replace("Z", "+00:00")
+        )
+        if attestation_expiry.tzinfo is None or attestation_expiry <= datetime.now(timezone.utc):
+            raise PermissionError("Runner attestation has expired")
         from backend.app.tools.conformance import verify_evidence_manifest
 
         reverified = verify_evidence_manifest(
@@ -1553,6 +1558,8 @@ class ToolRequestRepository:
             raise ValueError("Certification expiry must be timezone-aware and in the future")
         if expiry > datetime.fromisoformat(package["expires_at"]):
             raise ValueError("Certification cannot outlive its evidence package")
+        if expiry > attestation_expiry:
+            raise ValueError("Certification cannot outlive its runner attestation")
 
         certification_id = str(uuid.uuid4())
         now_text = now.isoformat()
@@ -1657,6 +1664,12 @@ class ToolRequestRepository:
                 from backend.app.tools.conformance import verify_evidence_manifest
 
                 if attestation["key_revoked"]:
+                    continue
+                from backend.app.tools.attestation import _parse_timestamp
+                if (
+                    _parse_timestamp(attestation["payload"]["expires_at"], "expires_at")
+                    <= datetime.now(timezone.utc)
+                ):
                     continue
                 key = self.get_trusted_runner_key(attestation["key_id"])
                 if verify_ed25519_signature(
