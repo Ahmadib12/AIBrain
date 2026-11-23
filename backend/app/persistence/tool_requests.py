@@ -1324,6 +1324,193 @@ class ToolRequestRepository:
             "provenance": row["provenance"],
         }
 
+    def register_trusted_runner_key(
+        self, *, key_id: str, runner_id: str, public_key: bytes,
+        valid_from: str, valid_until: str, registered_by: str,
+    ) -> dict:
+        """Register an externally generated Ed25519 public key; never stores private keys."""
+        from backend.app.tools.attestation import _parse_timestamp
+
+        for field, value in (
+            ("key_id", key_id), ("runner_id", runner_id),
+            ("registered_by", registered_by),
+        ):
+            if not isinstance(value, str) or not value.strip() or len(value) > 256:
+                raise ValueError(f"{field} must be a non-empty bounded identifier")
+        if not isinstance(public_key, bytes) or len(public_key) != 32:
+            raise ValueError("Ed25519 public key must contain exactly 32 bytes")
+        start = _parse_timestamp(valid_from, "valid_from")
+        end = _parse_timestamp(valid_until, "valid_until")
+        now = datetime.now(timezone.utc)
+        if end <= start or end <= now:
+            raise ValueError("Trusted runner key validity window is invalid or expired")
+        with self.database.transaction(immediate=True):
+            self.database.connect().execute(
+                """
+                INSERT INTO trusted_runner_keys (
+                    key_id, runner_id, algorithm, public_key,
+                    valid_from, valid_until, registered_by, created_at
+                ) VALUES (?, ?, 'Ed25519', ?, ?, ?, ?, ?)
+                """,
+                (key_id, runner_id, public_key, start.isoformat(),
+                 end.isoformat(), registered_by.strip(), now.isoformat()),
+            )
+        return self.get_trusted_runner_key(key_id)
+
+    def get_trusted_runner_key(self, key_id: str) -> dict:
+        row = self.database.connect().execute(
+            "SELECT * FROM trusted_runner_keys WHERE key_id = ?", (key_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("Trusted runner key not found")
+        revoked = self.database.connect().execute(
+            "SELECT revoked_by, reason, created_at FROM trusted_runner_key_revocations "
+            "WHERE key_id = ? ORDER BY created_at DESC LIMIT 1", (key_id,)
+        ).fetchone()
+        return {
+            "key_id": row["key_id"], "runner_id": row["runner_id"],
+            "algorithm": row["algorithm"], "public_key": bytes(row["public_key"]),
+            "valid_from": row["valid_from"], "valid_until": row["valid_until"],
+            "registered_by": row["registered_by"], "created_at": row["created_at"],
+            "revocation": dict(revoked) if revoked else None,
+        }
+
+    def revoke_trusted_runner_key(
+        self, key_id: str, *, revoked_by: str, reason: str
+    ) -> None:
+        if not isinstance(revoked_by, str) or not revoked_by.strip():
+            raise ValueError("Revoking operator must be identified")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise ValueError("Key revocation reason must be 1 to 1000 characters")
+        with self.database.transaction(immediate=True):
+            exists = self.database.connect().execute(
+                "SELECT 1 FROM trusted_runner_keys WHERE key_id = ?", (key_id,)
+            ).fetchone()
+            if exists is None:
+                raise LookupError("Trusted runner key not found")
+            prior = self.database.connect().execute(
+                "SELECT 1 FROM trusted_runner_key_revocations WHERE key_id = ?",
+                (key_id,),
+            ).fetchone()
+            if prior:
+                raise PermissionError("Trusted runner key is already revoked")
+            self.database.connect().execute(
+                """
+                INSERT INTO trusted_runner_key_revocations
+                    (id, key_id, revoked_by, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), key_id, revoked_by.strip(),
+                 reason.strip(), _utc_now()),
+            )
+
+    def attest_external_adapter_evidence(
+        self, package_id: str, *, key_id: str, runner_id: str,
+        nonce: str, issued_at: str, expires_at: str, signature: str,
+    ) -> dict:
+        """Verify trusted-runner signature and atomically consume its nonce."""
+        from backend.app.tools.attestation import (
+            _parse_timestamp, build_attestation_payload,
+            verify_ed25519_signature,
+        )
+        from backend.app.tools.conformance import verify_evidence_manifest
+
+        package = self.get_external_adapter_evidence_package(package_id)
+        key = self.get_trusted_runner_key(key_id)
+        now = datetime.now(timezone.utc)
+        if key["revocation"] is not None:
+            raise PermissionError("Trusted runner key has been revoked")
+        key_start = _parse_timestamp(key["valid_from"], "valid_from")
+        key_end = _parse_timestamp(key["valid_until"], "valid_until")
+        issued = _parse_timestamp(issued_at, "issued_at")
+        expiry = _parse_timestamp(expires_at, "expires_at")
+        if not (key_start <= issued <= now < expiry <= key_end):
+            raise PermissionError("Attestation is outside the trusted key validity window")
+        if expiry > _parse_timestamp(package["expires_at"], "package_expires_at"):
+            raise PermissionError("Attestation cannot outlive its evidence package")
+        if issued < _parse_timestamp(package["executed_at"], "executed_at"):
+            raise PermissionError("Attestation predates the evidence execution")
+        verified = verify_evidence_manifest(
+            package["manifest"],
+            {name: item["content"] for name, item in package["artifacts"].items()},
+        )
+        if (
+            verified["manifest_sha256"] != package["manifest_sha256"]
+            or verified["artifact_sha256"] != package["artifact_hashes"]
+        ):
+            raise PermissionError("Evidence package integrity verification failed")
+        if runner_id != key["runner_id"]:
+            raise PermissionError("Attestation runner does not match trusted key")
+        payload = build_attestation_payload(
+            package_id=package_id,
+            manifest_sha256=package["manifest_sha256"],
+            artifact_hashes=package["artifact_hashes"],
+            runner_id=runner_id,
+            provider_id=package["provider_id"],
+            adapter_id=package["adapter_id"],
+            adapter_version=package["adapter_version"],
+            provider_scope=package["provider_scope"],
+            sandbox_environment=package["sandbox_environment"],
+            nonce=nonce, issued_at=issued_at, expires_at=expires_at,
+        )
+        payload_hash = verify_ed25519_signature(
+            key["public_key"], payload, signature
+        )
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            if connection.execute(
+                "SELECT 1 FROM trusted_runner_key_revocations WHERE key_id = ?",
+                (key_id,),
+            ).fetchone():
+                raise PermissionError("Trusted runner key was revoked during verification")
+            if connection.execute(
+                "SELECT 1 FROM external_adapter_evidence_attestations WHERE package_id = ?",
+                (package_id,),
+            ).fetchone():
+                raise PermissionError("Evidence package already has a runner attestation")
+            if connection.execute(
+                "SELECT 1 FROM external_adapter_evidence_attestations WHERE nonce = ?",
+                (nonce,),
+            ).fetchone():
+                raise PermissionError("Attestation nonce has already been used")
+            connection.execute(
+                """
+                INSERT INTO external_adapter_evidence_attestations (
+                    id, package_id, key_id, runner_id, nonce,
+                    payload_json, payload_sha256, signature, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), package_id, key_id, runner_id, nonce,
+                 json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 payload_hash, signature, now.isoformat()),
+            )
+        return self.get_external_adapter_evidence_attestation(package_id)
+
+    def get_external_adapter_evidence_attestation(self, package_id: str) -> dict:
+        row = self.database.connect().execute(
+            """
+            SELECT a.*, k.valid_from, k.valid_until,
+                   EXISTS(
+                     SELECT 1 FROM trusted_runner_key_revocations AS r
+                     WHERE r.key_id = k.key_id
+                   ) AS key_revoked
+            FROM external_adapter_evidence_attestations AS a
+            JOIN trusted_runner_keys AS k ON k.key_id = a.key_id
+            WHERE a.package_id = ?
+            """, (package_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("Trusted runner attestation not found")
+        return {
+            "id": row["id"], "package_id": row["package_id"],
+            "key_id": row["key_id"], "runner_id": row["runner_id"],
+            "nonce": row["nonce"], "payload": json.loads(row["payload_json"]),
+            "payload_sha256": row["payload_sha256"],
+            "signature": row["signature"], "verified_at": row["verified_at"],
+            "key_valid_from": row["valid_from"], "key_valid_until": row["valid_until"],
+            "key_revoked": bool(row["key_revoked"]),
+        }
+
     def certify_external_adapter(
         self,
         *,
@@ -1335,6 +1522,12 @@ class ToolRequestRepository:
         if not isinstance(approved_by, str) or not approved_by.strip():
             raise ValueError("Approving operator must be identified")
         package = self.get_external_adapter_evidence_package(evidence_package_id)
+        try:
+            attestation = self.get_external_adapter_evidence_attestation(evidence_package_id)
+        except LookupError as exc:
+            raise PermissionError("Trusted runner attestation is required for certification") from exc
+        if attestation["key_revoked"]:
+            raise PermissionError("Evidence signer key has been revoked")
         from backend.app.tools.conformance import verify_evidence_manifest
 
         reverified = verify_evidence_manifest(
