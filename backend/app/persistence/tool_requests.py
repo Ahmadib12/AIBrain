@@ -309,6 +309,25 @@ class ToolRequestRepository:
                 raise ValueError(f"{name} must be a lowercase SHA-256 digest")
         if not isinstance(payload, dict) or not isinstance(capabilities, dict):
             raise ValueError("Binding payload and capabilities must be objects")
+        allowed_capability_fields = {
+            "idempotency_mode",
+            "key_scope",
+            "idempotency_retention_seconds",
+            "rejects_payload_mismatch",
+            "concurrent_deduplication",
+            "supports_outcome_lookup",
+        }
+        if set(capabilities) - allowed_capability_fields:
+            raise ValueError("Binding contains unsupported capability metadata")
+        for name, value in capabilities.items():
+            if name in {"rejects_payload_mismatch", "concurrent_deduplication", "supports_outcome_lookup"}:
+                if not isinstance(value, bool):
+                    raise ValueError(f"{name} capability must be a boolean")
+            elif name == "idempotency_retention_seconds":
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    raise ValueError("Idempotency retention must be a positive integer")
+            elif not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} capability must be a non-empty string")
 
         payload_json = json.dumps(
             payload, ensure_ascii=False, sort_keys=True,
