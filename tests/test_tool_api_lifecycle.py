@@ -567,6 +567,23 @@ def test_passkey_api_completes_real_signed_approval(
     from backend.app.api.v1.tools import _get_tool_gateway
 
     gateway = _get_tool_gateway()
+    from backend.app.tools import ToolContract, ToolRisk
+
+    # Register the persisted tool contract in the API gateway's registry so
+    # execution reaches the state-change policy check (rather than tool lookup).
+    gateway.registry.register(ToolContract(
+        tool_id="state-change-api-test",
+        name="State-change API test",
+        description="Test-only state-changing tool",
+        risk=ToolRisk.STATE_CHANGE,
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        output_schema={"result": {"type": "string"}},
+    ))
     with pytest.raises(PermissionError, match="complete confirmation policy"):
         gateway.execute(
             {
