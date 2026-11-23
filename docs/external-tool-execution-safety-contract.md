@@ -235,3 +235,41 @@ concurrent same-key submissions. Its conformance tests are in
 the application gateway and cannot perform real-world actions.
 
 Remaining steps are to run the conformance suite against a real provider sandbox, preserve the resulting evidence package, and have an authorized operator approve its digest and scope. A provider-backed reconciliation workflow and independently verifiable evidence are still required before considering one narrowly scoped state-changing adapter behind an explicit feature gate.
+
+
+## 10. Trusted runner evidence attestation
+
+Migration 14 adds an Ed25519 trusted-runner key registry, append-only key
+revocations, and immutable evidence-attestation records. A runner signs a
+canonical payload binding the exact evidence package ID, manifest digest,
+complete artifact digest map, runner identity, provider/adapter/version,
+provider scope, sandbox-environment label, one-time nonce, issue time, and
+expiry. AIBrain verifies the signature against a registered public key and
+checks key validity, runner identity, evidence freshness, and exact package
+binding before consuming the nonce and recording the attestation.
+
+Private signing keys are never stored by AIBrain. Key registration is an
+operator-controlled service-layer action; rotation means registering a new
+key ID and moving the runner to it. Revocation is append-only and immediately
+invalidates certifications that depend on the revoked key. Key records,
+revocations, and attestations cannot be updated or deleted. Nonces and
+package IDs are unique, preventing attestation replay. Certification requires
+a currently valid runner attestation and cannot outlive either the evidence
+package or its attestation. Active certification lookup rechecks signature,
+key revocation, and attestation expiry.
+
+The Ed25519 helper can sign payloads for runner-side integration tests, but
+production private keys must be generated and protected outside AIBrain (for
+example, in a dedicated CI runner secret store or hardware-backed key service).
+The repository currently provides key registration/revocation service methods,
+not a public key-management API or a deployed runner agent.
+
+A signature proves that the holder of a registered private key signed the
+bound statement. It does not independently prove that the sandbox environment
+was genuine, that the runner binary was uncompromised, or that tests actually
+exercised a live provider. The key-registration authority and runner deployment
+remain part of the trust root and require operational controls, independent
+runner isolation, key custody, and audit. AIBrain therefore treats this as
+authenticated runner provenance, not hardware-backed remote attestation.
+Human certification approval remains separate and explicit. No production
+provider is registered, and no external state-changing execution is enabled.
