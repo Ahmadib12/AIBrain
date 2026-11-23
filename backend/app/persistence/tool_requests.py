@@ -185,10 +185,14 @@ class ToolRequestRepository:
         *,
         expected_contract_fingerprint: str | None = None,
     ) -> dict:
-        """Atomically consume an approved request before tool dispatch."""
+        """Atomically consume an approved request and persist its execution attempt."""
         now = datetime.now(timezone.utc)
+        now_text = now.isoformat()
+        attempt_id = str(uuid.uuid4())
+
         with self.database.transaction(immediate=True):
-            row = self.database.connect().execute(
+            connection = self.database.connect()
+            row = connection.execute(
                 "SELECT * FROM tool_requests "
                 "WHERE id = ? AND user_id = ?",
                 (request_id, user_id),
@@ -200,16 +204,12 @@ class ToolRequestRepository:
                 raise PermissionError(
                     "Generic execution is restricted to read-only requests"
                 )
-
             if row["status"] != "approved" or row["consumed_at"] is not None:
                 raise PermissionError("Tool request is not available for execution")
-
             if expected_contract_fingerprint is not None and (
                 row["contract_fingerprint"] != expected_contract_fingerprint
             ):
-                raise PermissionError(
-                    "Tool contract changed after proposal"
-                )
+                raise PermissionError("Tool contract changed after proposal")
 
             if row["expires_at"]:
                 expires = datetime.fromisoformat(row["expires_at"])
@@ -244,16 +244,34 @@ class ToolRequestRepository:
                     "Confirmed tool request arguments have changed"
                 )
 
-            claimed_at = now.isoformat()
-            cursor = self.database.connect().execute(
+            claimed = connection.execute(
                 "UPDATE tool_requests "
                 "SET status = 'executing', consumed_at = ?, updated_at = ? "
                 "WHERE id = ? AND user_id = ? "
                 "AND status = 'approved' AND consumed_at IS NULL",
-                (claimed_at, claimed_at, request_id, user_id),
+                (now_text, now_text, request_id, user_id),
             )
-            if cursor.rowcount != 1:
+            if claimed.rowcount != 1:
                 raise PermissionError("Tool request is not available for execution")
+
+            # The request claim and attempt record share this transaction.
+            # The request ID is the stable idempotency key for its single attempt.
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'claimed', ?, ?)
+                """,
+                (
+                    attempt_id,
+                    user_id,
+                    request_id,
+                    request_id,
+                    now_text,
+                    now_text,
+                ),
+            )
 
         return self.get(user_id, request_id)
 
@@ -390,6 +408,24 @@ class ToolRequestRepository:
 
         return self.get(user_id, request_id)
 
+    def get_execution_attempt(
+        self,
+        user_id: str,
+        request_id: str,
+    ) -> dict:
+        row = self.database.connect().execute(
+            """
+            SELECT id, user_id, request_id, idempotency_key, status,
+                   claimed_at, updated_at, finished_at, error_code
+            FROM tool_execution_attempts
+            WHERE user_id = ? AND request_id = ?
+            """,
+            (user_id, request_id),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Tool execution attempt not found")
+        return dict(row)
+
     def complete_execution(
         self,
         user_id: str,
@@ -399,8 +435,9 @@ class ToolRequestRepository:
     ) -> dict:
         validate_personal_payload(result)
         now = _utc_now()
-        with self.database.transaction():
-            cursor = self.database.connect().execute(
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            cursor = connection.execute(
                 "UPDATE tool_requests "
                 "SET status = 'completed', result_json = ?, updated_at = ? "
                 "WHERE id = ? AND user_id = ? AND status = 'executing' "
@@ -414,16 +451,38 @@ class ToolRequestRepository:
             )
             if cursor.rowcount != 1:
                 raise PermissionError("Tool execution is no longer active")
+
+            attempt = connection.execute(
+                """
+                UPDATE tool_execution_attempts
+                SET status = 'succeeded', updated_at = ?, finished_at = ?
+                WHERE request_id = ? AND user_id = ? AND status = 'claimed'
+                """,
+                (now, now, request_id, user_id),
+            )
+            if attempt.rowcount != 1:
+                raise PermissionError("Tool execution attempt is no longer active")
         return self.get(user_id, request_id)
 
     def fail_execution(
         self,
         user_id: str,
         request_id: str,
+        *,
+        error_code: str = "execution_failed",
     ) -> dict:
+        if (
+            not isinstance(error_code, str)
+            or not error_code
+            or len(error_code) > 64
+            or not error_code.replace("_", "").isalnum()
+        ):
+            raise ValueError("Tool execution error code is invalid")
+
         now = _utc_now()
-        with self.database.transaction():
-            cursor = self.database.connect().execute(
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            cursor = connection.execute(
                 "UPDATE tool_requests "
                 "SET status = 'failed', updated_at = ? "
                 "WHERE id = ? AND user_id = ? AND status = 'executing' "
@@ -432,7 +491,67 @@ class ToolRequestRepository:
             )
             if cursor.rowcount != 1:
                 raise PermissionError("Tool execution is no longer active")
+
+            attempt = connection.execute(
+                """
+                UPDATE tool_execution_attempts
+                SET status = 'failed', updated_at = ?, finished_at = ?,
+                    error_code = ?
+                WHERE request_id = ? AND user_id = ? AND status = 'claimed'
+                """,
+                (now, now, error_code, request_id, user_id),
+            )
+            if attempt.rowcount != 1:
+                raise PermissionError("Tool execution attempt is no longer active")
         return self.get(user_id, request_id)
+
+    def recover_stale_execution_attempts(self, *, stale_before: str) -> int:
+        """Mark abandoned claims unknown; never retry an operation automatically."""
+        try:
+            cutoff = datetime.fromisoformat(stale_before.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("Stale-attempt cutoff must be a valid timestamp") from exc
+        if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+            raise ValueError("Stale-attempt cutoff must include a timezone")
+
+        cutoff_text = cutoff.astimezone(timezone.utc).isoformat()
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            stale_rows = connection.execute(
+                """
+                SELECT request_id, user_id
+                FROM tool_execution_attempts
+                WHERE status = 'claimed' AND claimed_at < ?
+                """,
+                (cutoff_text,),
+            ).fetchall()
+
+            recovered = 0
+            for row in stale_rows:
+                attempt = connection.execute(
+                    """
+                    UPDATE tool_execution_attempts
+                    SET status = 'outcome_unknown', updated_at = ?,
+                        finished_at = ?, error_code = 'recovery_outcome_unknown'
+                    WHERE request_id = ? AND user_id = ? AND status = 'claimed'
+                    """,
+                    (now, now, row["request_id"], row["user_id"]),
+                )
+                if attempt.rowcount != 1:
+                    continue
+
+                connection.execute(
+                    """
+                    UPDATE tool_requests
+                    SET status = 'outcome_unknown', updated_at = ?
+                    WHERE id = ? AND user_id = ? AND status = 'executing'
+                      AND consumed_at IS NOT NULL
+                    """,
+                    (now, row["request_id"], row["user_id"]),
+                )
+                recovered += 1
+        return recovered
 
     def cancel_pending(self, user_id: str, request_id: str) -> dict:
         """Cancel a pending or approved request before execution is claimed."""
