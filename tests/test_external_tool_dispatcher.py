@@ -13,10 +13,16 @@ from backend.app.tools import (
     ToolRisk,
     execution_action_digest,
 )
-from backend.app.tools.dispatcher import ExternalToolDispatcher
+from backend.app.tools.dispatcher import ExternalToolAdapterRegistry, ExternalToolDispatcher
 from backend.app.persistence.database import Database
 from backend.app.persistence.tool_requests import ToolRequestRepository, _request_digest
 from backend.app.tools.contracts import contract_fingerprint
+
+
+def registry_for(provider):
+    registry = ExternalToolAdapterRegistry()
+    registry.register("send-message", provider)
+    return registry
 
 
 def contract():
@@ -47,6 +53,12 @@ class RepositoryStub:
         self.payload = {"recipient": "person@example.com", "text": "Hello"}
         self.binding = None
         self.status = "claimed"
+
+    def get(self, user_id, request_id):
+        return {
+            "tool_id": "send-message",
+            "contract_fingerprint": contract_fingerprint(contract()),
+        }
 
     def claim_passkey_authorized_for_execution(
         self, user_id, request_id, *, expected_contract_fingerprint
@@ -104,10 +116,10 @@ class RepositoryStub:
 def test_dispatch_uses_claim_binding_final_check_then_provider():
     repository = RepositoryStub()
     provider = FakeExternalToolProvider()
-    dispatcher = ExternalToolDispatcher(repository)
+    dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
 
     result = dispatcher.dispatch(
-        "user-1", "request-1", contract=contract(), adapter=provider
+        "user-1", "request-1", contract=contract()
     )
 
     assert result["status"] == "completed"
@@ -121,10 +133,10 @@ def test_transport_timeout_becomes_unknown_without_retry():
     repository = RepositoryStub()
     provider = FakeExternalToolProvider()
     provider.timeout_after_accept_once = True
-    dispatcher = ExternalToolDispatcher(repository)
+    dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
 
     result = dispatcher.dispatch(
-        "user-1", "request-1", contract=contract(), adapter=provider
+        "user-1", "request-1", contract=contract()
     )
 
     assert result == {
@@ -150,8 +162,8 @@ def test_definitive_provider_failure_is_recorded_as_failed():
             return repository.outcome
 
     provider = FailedProvider()
-    result = ExternalToolDispatcher(repository).dispatch(
-        "user-1", "request-1", contract=contract(), adapter=provider
+    result = ExternalToolDispatcher(repository, registry_for(provider)).dispatch(
+        "user-1", "request-1", contract=contract()
     )
 
     assert result["status"] == "failed"
@@ -168,11 +180,11 @@ def test_read_only_contract_cannot_use_external_dispatch():
         input_schema={"type": "object"},
         output_schema={"type": "object"},
     )
+    provider = FakeExternalToolProvider()
     with pytest.raises(PermissionError, match="state-change"):
-        ExternalToolDispatcher(repository).dispatch(
+        ExternalToolDispatcher(repository, registry_for(provider)).dispatch(
             "user-1", "request-1",
             contract=read_only,
-            adapter=FakeExternalToolProvider(),
         )
     assert repository.calls == []
 
@@ -180,12 +192,12 @@ def test_read_only_contract_cannot_use_external_dispatch():
 def test_lookup_is_read_only_and_requires_unknown_outcome():
     repository = RepositoryStub()
     provider = FakeExternalToolProvider()
-    dispatcher = ExternalToolDispatcher(repository)
+    dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
     dispatcher.dispatch(
-        "user-1", "request-1", contract=contract(), adapter=provider
+        "user-1", "request-1", contract=contract()
     )
     repository.status = "outcome_unknown"
-    outcome = dispatcher.lookup("user-1", "request-1", adapter=provider)
+    outcome = dispatcher.lookup("user-1", "request-1")
 
     assert outcome.status is ExternalToolOutcomeStatus.SUCCEEDED
     assert provider.dispatch_count == 1
