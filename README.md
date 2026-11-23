@@ -256,8 +256,8 @@ AIBrain never stores runner private keys. The runner ingestion API uses
 certification approval, and certification revocation use the dedicated
 `AIBRAIN_SECURITY_OPERATOR_TOKEN`. Provider administration retains the
 separate `AIBRAIN_PROVIDER_OPERATOR_TOKEN`. All three credentials must be at
-least 32 characters and provisioned independently through the deployment
-secret manager.
+least 32 characters, have distinct values (configuration rejects reuse), and
+be provisioned independently through the deployment secret manager.
 
 Runner API:
 - `POST /api/v1/tools/runner/evidence` — submit the manifest and base64 artifacts.
