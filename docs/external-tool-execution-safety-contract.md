@@ -148,9 +148,10 @@ binding only while the request is `executing` and its attempt is `claimed`.
 It checks that the idempotency key is the request ID, that the supplied
 canonical payload exactly matches the persisted request arguments, that the
 tool contract fingerprint matches, and that the action digest recomputes from
-the persisted owner/tool/arguments plus adapter and provider scope. Provider
-capability metadata is allowlisted and validated before storage. A database
-trigger prevents updates to a persisted binding.
+the persisted owner/tool/arguments plus adapter identity, provider ID, and
+provider scope. The complete supported provider-capability snapshot is
+required and validated before storage; partial or unknown capability fields
+are rejected. A database trigger prevents updates to a persisted binding.
 
 The binding is not yet connected to a dispatcher or to passkey-authorized
 claims. It is a persistence primitive and test target only. Account deletion
