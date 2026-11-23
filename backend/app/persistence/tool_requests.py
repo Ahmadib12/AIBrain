@@ -257,6 +257,121 @@ class ToolRequestRepository:
 
         return self.get(user_id, request_id)
 
+    def claim_passkey_authorized_for_execution(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        expected_contract_fingerprint: str,
+    ) -> dict:
+        """Atomically claim a request backed by a matching, active passkey authorization."""
+        if (
+            not isinstance(expected_contract_fingerprint, str)
+            or len(expected_contract_fingerprint) != 64
+            or any(
+                char not in "0123456789abcdef"
+                for char in expected_contract_fingerprint
+            )
+        ):
+            raise ValueError("Tool contract fingerprint is invalid")
+
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat()
+
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT
+                    r.*,
+                    a.id AS authorization_id,
+                    a.proposal_digest AS authorized_proposal_digest,
+                    a.contract_fingerprint AS authorized_contract_fingerprint,
+                    a.credential_id AS authorized_credential_id,
+                    c.revoked_at AS credential_revoked_at,
+                    u.deleted_at AS user_deleted_at
+                FROM tool_requests AS r
+                LEFT JOIN tool_authorizations AS a
+                    ON a.request_id = r.id AND a.user_id = r.user_id
+                LEFT JOIN webauthn_credentials AS c
+                    ON c.id = a.credential_id AND c.user_id = a.user_id
+                LEFT JOIN users AS u ON u.id = r.user_id
+                WHERE r.id = ? AND r.user_id = ?
+                """,
+                (request_id, user_id),
+            ).fetchone()
+
+            if row is None:
+                raise LookupError("Tool request not found")
+            if row["authorization_policy"] != "passkey":
+                raise PermissionError(
+                    "Passkey execution is restricted to passkey-authorized requests"
+                )
+            if row["status"] != "approved" or row["consumed_at"] is not None:
+                raise PermissionError("Tool request is not available for execution")
+            if row["user_deleted_at"] is not None:
+                raise PermissionError("User account is not active")
+            if row["authorization_id"] is None or row["authorized_credential_id"] is None:
+                raise PermissionError("A valid passkey authorization is required")
+            if row["credential_revoked_at"] is not None:
+                raise PermissionError("Authorizing passkey has been revoked")
+
+            if (
+                row["contract_fingerprint"] != expected_contract_fingerprint
+                or row["authorized_contract_fingerprint"]
+                != expected_contract_fingerprint
+            ):
+                raise PermissionError("Tool contract changed after authorization")
+
+            expires_at = row["expires_at"]
+            if not isinstance(expires_at, str) or not expires_at.strip():
+                raise PermissionError("Tool request expiry is required")
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            except (TypeError, ValueError) as exc:
+                raise PermissionError("Tool request expiry is invalid") from exc
+            if expiry.tzinfo is None or expiry.utcoffset() is None:
+                raise PermissionError("Tool request expiry must include a timezone")
+            if expiry <= now:
+                raise PermissionError("Tool request has expired")
+
+            try:
+                arguments = json.loads(row["arguments_json"])
+                audit = json.loads(row["audit_json"] or "{}")
+                current_digest = _request_digest(
+                    row["tool_id"],
+                    arguments,
+                    row["contract_fingerprint"],
+                )
+            except (TypeError, ValueError) as exc:
+                raise PermissionError("Tool request proposal data is invalid") from exc
+
+            proposal = audit.get("proposal") if isinstance(audit, dict) else None
+            if (
+                not isinstance(proposal, dict)
+                or proposal.get("arguments_sha256") != current_digest
+                or proposal.get("contract_fingerprint")
+                != expected_contract_fingerprint
+            ):
+                raise PermissionError("Tool request proposal has changed")
+            if row["authorized_proposal_digest"] != current_digest:
+                raise PermissionError("Passkey authorization does not match this proposal")
+
+            claimed = connection.execute(
+                """
+                UPDATE tool_requests
+                SET status = 'executing', consumed_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                  AND authorization_policy = 'passkey'
+                  AND status = 'approved' AND consumed_at IS NULL
+                """,
+                (now_text, now_text, request_id, user_id),
+            )
+            if claimed.rowcount != 1:
+                raise PermissionError("Tool request is not available for execution")
+
+        return self.get(user_id, request_id)
+
     def complete_execution(
         self,
         user_id: str,
