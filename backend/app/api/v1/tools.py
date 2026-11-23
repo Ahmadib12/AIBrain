@@ -30,6 +30,14 @@ def _get_tool_gateway() -> ToolExecutionGateway:
     )
 
 
+class PasskeyApprovalVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    challenge_record_id: str = Field(min_length=1, max_length=128)
+    credential_record_id: str = Field(min_length=1, max_length=128)
+    assertion: dict
+
+
 class ToolProposalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -144,6 +152,91 @@ async def confirm_tool(
         raise HTTPException(
             status_code=409,
             detail={"code": "CONFIRMATION_NOT_AVAILABLE", "message": "Tool confirmation is unavailable"},
+        ) from None
+
+
+@router.post("/requests/{request_id}/passkey/options")
+async def create_passkey_approval_options(
+    request_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Create WebAuthn assertion options for this user's pending tool request."""
+    try:
+        return get_app_state().webauthn_service.create_tool_approval_options(
+            user_id=user["id"],
+            request_id=request_id,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "TOOL_REQUEST_NOT_FOUND",
+                "message": "Tool request not found",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PASSKEY_APPROVAL_UNAVAILABLE",
+                "message": "Passkey approval is unavailable for this request",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_PASSKEY_APPROVAL",
+                "message": "Invalid passkey approval request",
+            },
+        ) from None
+
+
+@router.post("/requests/{request_id}/passkey/verify")
+async def verify_passkey_approval(
+    request_id: str,
+    request: PasskeyApprovalVerifyRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Verify a passkey assertion and return sanitized authorization state."""
+    try:
+        approved = get_app_state().webauthn_service.verify_tool_approval(
+            user_id=user["id"],
+            request_id=request_id,
+            challenge_record_id=request.challenge_record_id,
+            credential_record_id=request.credential_record_id,
+            assertion=request.assertion,
+        )
+        return {
+            "id": approved["id"],
+            "tool_id": approved["tool_id"],
+            "arguments": approved["arguments"],
+            "status": approved["status"],
+            "expires_at": approved["expires_at"],
+        }
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "PASSKEY_APPROVAL_RESOURCE_NOT_FOUND",
+                "message": "Passkey approval resource not found",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PASSKEY_APPROVAL_REJECTED",
+                "message": "Passkey approval could not be verified",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_PASSKEY_APPROVAL",
+                "message": "Invalid passkey approval request",
+            },
         ) from None
 
 
