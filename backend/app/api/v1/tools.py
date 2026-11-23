@@ -721,7 +721,7 @@ async def certify_external_adapter_evidence(
 async def revoke_external_adapter_certification(
     certification_id: str,
     request: CertificationRevocationRequest,
-    _operator: None = Depends(require_security_operator),
+    operator: dict = Depends(require_security_operator),
 ) -> dict:
     try:
         get_app_state().tool_requests.revoke_external_adapter_certification(
