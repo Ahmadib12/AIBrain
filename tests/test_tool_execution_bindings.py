@@ -151,6 +151,32 @@ def test_rejects_dispatch_binding_that_does_not_match_authorized_action(
         database.close()
 
 
+def test_non_idempotent_capability_snapshot_can_be_persisted(tmp_path):
+    database, repository, user_id, request, arguments, fingerprint = (
+        setup_claimed_request(tmp_path)
+    )
+    try:
+        binding = make_binding(
+            repository,
+            user_id,
+            request,
+            arguments,
+            fingerprint,
+            capabilities={
+                "idempotency_mode": "none",
+                "key_scope": None,
+                "idempotency_retention_seconds": None,
+                "rejects_payload_mismatch": False,
+                "concurrent_deduplication": False,
+                "supports_outcome_lookup": True,
+            },
+        )
+        assert binding["capabilities"]["idempotency_mode"] == "none"
+        assert binding["capabilities"]["key_scope"] is None
+    finally:
+        database.close()
+
+
 def test_binding_requires_a_claimed_execution_and_owner_scope(tmp_path):
     database, repository, user_id, request, arguments, fingerprint = (
         setup_claimed_request(tmp_path)
