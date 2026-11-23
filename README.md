@@ -179,3 +179,8 @@ runs if worker startup or shutdown raises an exception. Run them with:
 ```bash
 pytest -q tests/test_app_lifespan.py
 ```
+
+Additional passkey execution-claim invariants are covered in
+`tests/test_webauthn_repository.py`: claim rollback on attempt persistence failure,
+rejection of deleted accounts, and rejection of altered challenge-to-proposal
+bindings. These tests do not enable state-changing execution.
