@@ -286,9 +286,9 @@ an independently trusted runner remain future operational work. Production
 external execution remains disabled.
 
 Trusted runner keys are scoped to one exact provider ID, adapter ID and
-version, provider account scope, and tool ID. Register a separate key for every
-distinct trust scope. A key for one provider, adapter, tool, or account cannot
-attest another binding.
+version, provider account scope, tool ID, and tool-contract fingerprint.
+Register a separate key for every distinct trust scope. A key for one provider,
+adapter, tool, account, or contract revision cannot attest another binding.
 
 The external runner client is `scripts/submit_conformance_evidence.py`. It
 accepts a completed manifest and its artifact directory, uploads the evidence,
