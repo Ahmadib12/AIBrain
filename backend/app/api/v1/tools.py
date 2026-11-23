@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
 from backend.app.auth.operator import (
-    require_provider_operator,
+    require_security_operator,
     require_trusted_runner_ingest,
 )
 from backend.app.tools import ToolContract, ToolExecutionGateway, ToolRegistry, ToolRisk
@@ -526,7 +526,7 @@ async def get_runner_attestation_payload(
 @router.post("/operator/trusted-runner-keys", status_code=201)
 async def register_trusted_runner_key(
     request: TrustedRunnerKeyRegistrationRequest,
-    _operator: None = Depends(require_provider_operator),
+    _operator: None = Depends(require_security_operator),
 ) -> dict:
     """Register an externally generated Ed25519 public key."""
     try:
@@ -575,7 +575,7 @@ async def register_trusted_runner_key(
 async def revoke_trusted_runner_key(
     key_id: str,
     request: TrustedRunnerKeyRevocationRequest,
-    _operator: None = Depends(require_provider_operator),
+    _operator: None = Depends(require_security_operator),
 ) -> dict:
     try:
         get_app_state().tool_requests.revoke_trusted_runner_key(
@@ -643,7 +643,7 @@ async def attest_external_adapter_evidence(
 async def certify_external_adapter_evidence(
     package_id: str,
     request: EvidenceCertificationApprovalRequest,
-    _operator: None = Depends(require_provider_operator),
+    _operator: None = Depends(require_security_operator),
 ) -> dict:
     try:
         certificate = get_app_state().tool_requests.certify_external_adapter(
@@ -683,7 +683,7 @@ async def certify_external_adapter_evidence(
 async def revoke_external_adapter_certification(
     certification_id: str,
     request: CertificationRevocationRequest,
-    _operator: None = Depends(require_provider_operator),
+    _operator: None = Depends(require_security_operator),
 ) -> dict:
     try:
         get_app_state().tool_requests.revoke_external_adapter_certification(
