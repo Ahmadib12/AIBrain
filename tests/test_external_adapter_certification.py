@@ -89,7 +89,7 @@ def certify(repository, **overrides):
     issued_at = now.isoformat()
     attestation_expires = min(
         datetime.fromisoformat(package["expires_at"]),
-        now + timedelta(days=5),
+        now + timedelta(hours=20),
     ).isoformat()
     payload = build_attestation_payload(
         package_id=package["id"],
@@ -114,7 +114,7 @@ def certify(repository, **overrides):
     values = {
         "evidence_package_id": package["id"],
         "approved_by": "security-reviewer",
-        "expires_at": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat(),
     }
     values.update(overrides)
     return repository.certify_external_adapter(**values)
@@ -500,7 +500,7 @@ def test_certification_cannot_outlive_runner_attestation(repository):
     with pytest.raises(ValueError, match="runner attestation"):
         certify(
             repository,
-            expires_at=(datetime.now(timezone.utc) + timedelta(days=6)).isoformat(),
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=21)).isoformat(),
         )
 
 
