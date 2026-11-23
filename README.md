@@ -77,6 +77,10 @@ Provider behavior can be configured through environment variables:
 - `AIBRAIN_FALLBACK_ENABLED` — enable or disable fallback routing
 - `AIBRAIN_MOCK_PROVIDER_SIMULATE_FAILURE` — make the mock provider fail predictably
 - `AIBRAIN_DATABASE_URL` — SQLite database URL, default `sqlite:///:memory:`
+- `AIBRAIN_TOOL_EXECUTION_RECOVERY_INTERVAL_SECONDS` — recovery worker polling interval, default `60`
+- `AIBRAIN_TOOL_EXECUTION_STALE_AFTER_SECONDS` — age after which a claimed execution is marked `outcome_unknown`, default `300`
+
+The recovery worker starts with the FastAPI application and stops during shutdown. It only marks stale attempts as `outcome_unknown`; it never retries or re-dispatches a tool. An uncertain external outcome must be reconciled explicitly.
 - `AIBRAIN_SESSION_TTL_SECONDS` — bearer-session lifetime in seconds
 - `AIBRAIN_LOGIN_RATE_LIMIT_ATTEMPTS` — process-local login failure limit
 - `AIBRAIN_LOGIN_RATE_LIMIT_WINDOW_SECONDS` — process-local login limit window
