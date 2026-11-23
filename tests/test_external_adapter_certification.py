@@ -277,11 +277,9 @@ def test_verified_evidence_records_are_immutable(repository):
 
 
 def test_certification_cannot_outlive_evidence_package(repository):
-    package = verify(repository)
     with pytest.raises(ValueError, match="outlive"):
-        repository.certify_external_adapter(
-            evidence_package_id=package["id"],
-            approved_by="security-reviewer",
+        certify(
+            repository,
             expires_at=(datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
         )
 
