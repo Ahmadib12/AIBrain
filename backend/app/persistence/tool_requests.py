@@ -1298,6 +1298,10 @@ class ToolRequestRepository:
             """,
             (package_id,),
         ).fetchall()
+        attested = self.database.connect().execute(
+            "SELECT 1 FROM external_adapter_evidence_attestations WHERE package_id = ?",
+            (package_id,),
+        ).fetchone() is not None
         return {
             "id": row["id"],
             "provider_id": row["provider_id"],
@@ -1321,7 +1325,7 @@ class ToolRequestRepository:
             "executed_at": row["executed_at"],
             "verified_at": row["verified_at"],
             "expires_at": row["expires_at"],
-            "provenance": row["provenance"],
+            "provenance": "runner_attested" if attested else row["provenance"],
         }
 
     def register_trusted_runner_key(
@@ -1664,7 +1668,7 @@ class ToolRequestRepository:
                     package["manifest"],
                     {name: item["content"] for name, item in package["artifacts"].items()},
                 )
-            except (IndexError, KeyError, LookupError, TypeError, ValueError):
+            except (IndexError, KeyError, LookupError, TypeError, ValueError, PermissionError):
                 continue
             if (
                 verified["manifest_sha256"] != certification["test_report_sha256"]
