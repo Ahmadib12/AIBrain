@@ -256,7 +256,10 @@ revocations, and attestations cannot be updated or deleted. Nonces and
 package IDs are unique, preventing attestation replay. Certification requires
 a currently valid runner attestation and cannot outlive either the evidence
 package or its attestation. Active certification lookup rechecks signature,
-key revocation, and attestation expiry.
+key revocation, and attestation expiry. The final transactional
+`dispatch_started` gate independently revalidates the exact certification,
+evidence digest, artifact bytes, signature, key validity/revocation, scope,
+and all relevant expiry bounds before recording dispatch initiation.
 
 The Ed25519 helper can sign payloads for runner-side integration tests, but
 production private keys must be generated and protected outside AIBrain (for
