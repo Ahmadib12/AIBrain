@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -134,5 +135,7 @@ def verify_ed25519_signature(
 def generate_test_keypair() -> tuple[bytes, Ed25519PrivateKey]:
     """Test utility only; production runner keys must be generated externally."""
     private_key = Ed25519PrivateKey.generate()
-    public_key = private_key.public_key().public_bytes_raw()
+    public_key = private_key.public_key().public_bytes(
+        Encoding.Raw, PublicFormat.Raw
+    )
     return public_key, private_key
