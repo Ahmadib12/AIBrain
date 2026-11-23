@@ -6,6 +6,9 @@ import pytest
 
 from backend.app.persistence.database import Database
 from backend.app.persistence.tool_requests import ToolRequestRepository
+from backend.app.tools.attestation import (
+    build_attestation_payload, generate_test_keypair, sign_attestation_for_runner,
+)
 from backend.app.tools.conformance import REQUIRED_CHECKS, verify_evidence_manifest
 
 
@@ -72,6 +75,42 @@ def verify(repository, manifest=None, artifacts=None):
 
 def certify(repository, **overrides):
     package = verify(repository)
+    public_key, private_key = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    key_id = "runner-key-" + package["id"]
+    repository.register_trusted_runner_key(
+        key_id=key_id,
+        runner_id="trusted-sandbox-runner",
+        public_key=public_key,
+        valid_from=(now - timedelta(days=1)).isoformat(),
+        valid_until=(now + timedelta(days=30)).isoformat(),
+        registered_by="security-admin",
+    )
+    issued_at = now.isoformat()
+    attestation_expires = min(
+        datetime.fromisoformat(package["expires_at"]),
+        now + timedelta(hours=1),
+    ).isoformat()
+    payload = build_attestation_payload(
+        package_id=package["id"],
+        manifest_sha256=package["manifest_sha256"],
+        artifact_hashes=package["artifact_hashes"],
+        runner_id="trusted-sandbox-runner",
+        provider_id=package["provider_id"],
+        adapter_id=package["adapter_id"],
+        adapter_version=package["adapter_version"],
+        provider_scope=package["provider_scope"],
+        sandbox_environment=package["sandbox_environment"],
+        nonce="nonce_" + package["id"].replace("-", ""),
+        issued_at=issued_at,
+        expires_at=attestation_expires,
+    )
+    signature = sign_attestation_for_runner(private_key, payload)
+    repository.attest_external_adapter_evidence(
+        package["id"], key_id=key_id, runner_id="trusted-sandbox-runner",
+        nonce=payload["nonce"], issued_at=issued_at,
+        expires_at=attestation_expires, signature=signature,
+    )
     values = {
         "evidence_package_id": package["id"],
         "approved_by": "security-reviewer",
@@ -281,5 +320,95 @@ def test_legacy_unverified_certification_arguments_are_no_longer_accepted(reposi
             test_report_sha256="a" * 64,
             evidence_references=["sandbox://fake"],
             approved_by="security-reviewer",
+            expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        )
+
+
+
+def test_attestation_signature_binds_manifest_and_scope(repository):
+    package = verify(repository)
+    public_key, private_key = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    key_id = "runner-key-binding"
+    repository.register_trusted_runner_key(
+        key_id=key_id, runner_id="runner-a", public_key=public_key,
+        valid_from=(now - timedelta(minutes=1)).isoformat(),
+        valid_until=(now + timedelta(days=1)).isoformat(),
+        registered_by="security-admin",
+    )
+    payload = build_attestation_payload(
+        package_id=package["id"], manifest_sha256=package["manifest_sha256"],
+        artifact_hashes=package["artifact_hashes"], runner_id="runner-a",
+        provider_id=package["provider_id"], adapter_id=package["adapter_id"],
+        adapter_version=package["adapter_version"],
+        provider_scope=package["provider_scope"],
+        sandbox_environment=package["sandbox_environment"],
+        nonce="nonce_" + "x" * 32,
+        issued_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+    )
+    payload["provider_scope"] = "attacker-account"
+    signature = sign_attestation_for_runner(private_key, payload)
+    with pytest.raises(PermissionError, match="signature"):
+        repository.attest_external_adapter_evidence(
+            package["id"], key_id=key_id, runner_id="runner-a",
+            nonce=payload["nonce"], issued_at=payload["issued_at"],
+            expires_at=payload["expires_at"], signature=signature,
+        )
+
+
+def test_attestation_nonce_and_package_cannot_be_replayed(repository):
+    package = verify(repository)
+    public_key, private_key = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    key_id = "runner-key-replay"
+    repository.register_trusted_runner_key(
+        key_id=key_id, runner_id="runner-replay", public_key=public_key,
+        valid_from=(now - timedelta(minutes=1)).isoformat(),
+        valid_until=(now + timedelta(days=1)).isoformat(),
+        registered_by="security-admin",
+    )
+    payload = build_attestation_payload(
+        package_id=package["id"], manifest_sha256=package["manifest_sha256"],
+        artifact_hashes=package["artifact_hashes"], runner_id="runner-replay",
+        provider_id=package["provider_id"], adapter_id=package["adapter_id"],
+        adapter_version=package["adapter_version"],
+        provider_scope=package["provider_scope"],
+        sandbox_environment=package["sandbox_environment"],
+        nonce="nonce_" + "y" * 32, issued_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+    )
+    signature = sign_attestation_for_runner(private_key, payload)
+    kwargs = {
+        "key_id": key_id, "runner_id": "runner-replay",
+        "nonce": payload["nonce"], "issued_at": payload["issued_at"],
+        "expires_at": payload["expires_at"], "signature": signature,
+    }
+    repository.attest_external_adapter_evidence(package["id"], **kwargs)
+    with pytest.raises(PermissionError, match="already has"):
+        repository.attest_external_adapter_evidence(package["id"], **kwargs)
+
+
+def test_revoked_runner_key_invalidates_existing_certification(repository):
+    certificate = certify(repository)
+    package_id = certificate["evidence_references"][0].split(":", 1)[1]
+    attestation = repository.get_external_adapter_evidence_attestation(package_id)
+    repository.revoke_trusted_runner_key(
+        attestation["key_id"], revoked_by="security-admin",
+        reason="Runner signing key compromise",
+    )
+    assert lookup(repository) is None
+    with pytest.raises(PermissionError, match="already revoked"):
+        repository.revoke_trusted_runner_key(
+            attestation["key_id"], revoked_by="security-admin",
+            reason="Duplicate revocation",
+        )
+
+
+def test_certification_requires_trusted_runner_attestation(repository):
+    package = verify(repository)
+    with pytest.raises(PermissionError, match="attestation is required"):
+        repository.certify_external_adapter(
+            evidence_package_id=package["id"], approved_by="security-reviewer",
             expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
         )
