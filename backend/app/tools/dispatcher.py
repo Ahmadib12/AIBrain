@@ -4,7 +4,6 @@ This module is deliberately not wired into ToolExecutionGateway or application
 routes. A caller must explicitly supply a passkey-authorized request, its
 current contract, and the adapter whose identity was frozen in the binding.
 """
-from dataclasses import asdict
 from typing import Any
 
 from backend.app.persistence.tool_requests import ToolRequestRepository
