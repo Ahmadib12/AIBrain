@@ -56,7 +56,7 @@ class RepositoryStub:
 
     def get_active_external_adapter_certification(
         self, *, provider_id, adapter_id, adapter_version, provider_scope,
-        capabilities,
+        tool_id, tool_contract_fingerprint, capabilities,
     ):
         return {
             "id": "sandbox-certification-1",
@@ -64,6 +64,8 @@ class RepositoryStub:
             "adapter_id": adapter_id,
             "adapter_version": adapter_version,
             "provider_scope": provider_scope,
+            "tool_id": tool_id,
+            "tool_contract_fingerprint": tool_contract_fingerprint,
             "capabilities": capabilities,
             "test_suite_version": "conformance-v1",
             "test_report_sha256": "a" * 64,
