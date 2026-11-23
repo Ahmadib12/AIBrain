@@ -919,7 +919,8 @@ class ToolRequestRepository:
                     ).fetchone()
                     attestation_row = connection.execute(
                         """
-                        SELECT a.*, k.public_key, k.valid_from, k.valid_until
+                        SELECT a.*, k.public_key, k.runner_id AS trusted_runner_id,
+                               k.valid_from, k.valid_until
                         FROM external_adapter_evidence_attestations AS a
                         JOIN trusted_runner_keys AS k ON k.key_id = a.key_id
                         WHERE a.package_id = ?
@@ -936,13 +937,25 @@ class ToolRequestRepository:
                     from backend.app.tools.attestation import (
                         _parse_timestamp, verify_package_attestation,
                     )
+                    attestation_issued = _parse_timestamp(
+                        attestation_payload["issued_at"], "issued_at"
+                    )
+                    attestation_expires = _parse_timestamp(
+                        attestation_payload["expires_at"], "expires_at"
+                    )
+                    runner_key_start = _parse_timestamp(
+                        attestation_row["valid_from"], "valid_from"
+                    )
+                    runner_key_end = _parse_timestamp(
+                        attestation_row["valid_until"], "valid_until"
+                    )
                     if (
-                        _parse_timestamp(attestation_payload["expires_at"], "expires_at")
-                        <= datetime.now(timezone.utc)
-                        or _parse_timestamp(attestation_row["valid_from"], "valid_from")
-                        > datetime.now(timezone.utc)
-                        or _parse_timestamp(attestation_row["valid_until"], "valid_until")
-                        <= datetime.now(timezone.utc)
+                        attestation_expires <= datetime.now(timezone.utc)
+                        or runner_key_start > attestation_issued
+                        or attestation_expires > runner_key_end
+                        or runner_key_start > datetime.now(timezone.utc)
+                        or runner_key_end <= datetime.now(timezone.utc)
+                        or attestation_row["runner_id"] != attestation_row["trusted_runner_id"]
                     ):
                         continue
                     signed_package = {
@@ -1712,14 +1725,21 @@ class ToolRequestRepository:
             _parse_timestamp, verify_package_attestation,
         )
         key = self.get_trusted_runner_key(attestation["key_id"])
+        if key["runner_id"] != attestation["runner_id"]:
+            raise PermissionError("Evidence attestation runner/key identity mismatch")
         attestation_expiry = _parse_timestamp(
             attestation["payload"]["expires_at"], "expires_at"
         )
         now = datetime.now(timezone.utc)
+        issued_at = _parse_timestamp(attestation["payload"]["issued_at"], "issued_at")
+        key_valid_from = _parse_timestamp(key["valid_from"], "valid_from")
+        key_valid_until = _parse_timestamp(key["valid_until"], "valid_until")
         if (
             attestation_expiry <= now
-            or _parse_timestamp(key["valid_from"], "valid_from") > now
-            or _parse_timestamp(key["valid_until"], "valid_until") <= now
+            or key_valid_from > issued_at
+            or attestation_expiry > key_valid_until
+            or key_valid_from > now
+            or key_valid_until <= now
         ):
             raise PermissionError("Runner attestation or signing key has expired")
         from backend.app.tools.conformance import verify_evidence_manifest
@@ -1768,6 +1788,19 @@ class ToolRequestRepository:
             ).fetchone()
             if current_attestation is None:
                 raise PermissionError("Trusted runner key is revoked or attestation is missing")
+            evidence_reference = json.dumps(
+                [f"evidence-package:{evidence_package_id}"],
+                separators=(",", ":"),
+            )
+            duplicate_certification = self.database.connect().execute(
+                """
+                SELECT 1 FROM external_adapter_certifications
+                WHERE evidence_references_json = ?
+                """,
+                (evidence_reference,),
+            ).fetchone()
+            if duplicate_certification is not None:
+                raise PermissionError("Evidence package has already been certified")
             self.database.connect().execute(
                 """
                 INSERT INTO external_adapter_certifications (
@@ -1786,7 +1819,7 @@ class ToolRequestRepository:
                     package["test_suite_version"],
                     json.dumps(package["conformance_results"], sort_keys=True, separators=(",", ":")),
                     package["manifest_sha256"],
-                    json.dumps([f"evidence-package:{evidence_package_id}"]),
+                    evidence_reference,
                     package["verified_at"], expiry.astimezone(timezone.utc).isoformat(), approved_by.strip(),
                     now_text,
                 ),
@@ -1876,6 +1909,21 @@ class ToolRequestRepository:
                 ):
                     continue
                 key = self.get_trusted_runner_key(attestation["key_id"])
+                issued_at = _parse_timestamp(
+                    attestation["payload"]["issued_at"], "issued_at"
+                )
+                attestation_expiry = _parse_timestamp(
+                    attestation["payload"]["expires_at"], "expires_at"
+                )
+                key_valid_from = _parse_timestamp(key["valid_from"], "valid_from")
+                key_valid_until = _parse_timestamp(key["valid_until"], "valid_until")
+                if (
+                    key["runner_id"] != attestation["runner_id"]
+                    or key_valid_from > issued_at
+                    or attestation_expiry > key_valid_until
+                    or key_valid_until <= datetime.now(timezone.utc)
+                ):
+                    continue
                 if verify_package_attestation(
                     key["public_key"], attestation["payload"],
                     attestation["signature"], package=package,
