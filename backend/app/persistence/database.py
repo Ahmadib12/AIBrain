@@ -609,6 +609,71 @@ class Database:
                 END;
                 """
             ),
+            (
+                12,
+                """
+                CREATE TABLE external_adapter_certifications (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    test_suite_version TEXT NOT NULL,
+                    test_report_sha256 TEXT NOT NULL
+                        CHECK (length(test_report_sha256) = 64),
+                    evidence_references_json TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX idx_external_adapter_certification_lookup
+                    ON external_adapter_certifications(
+                        provider_id, adapter_id, adapter_version,
+                        provider_scope, expires_at
+                    );
+
+                CREATE TABLE external_adapter_certification_revocations (
+                    id TEXT PRIMARY KEY,
+                    certification_id TEXT NOT NULL,
+                    revoked_by TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(certification_id)
+                        REFERENCES external_adapter_certifications(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_external_adapter_certification_revocations
+                    ON external_adapter_certification_revocations(certification_id);
+
+                CREATE TRIGGER prevent_external_adapter_certification_update
+                BEFORE UPDATE ON external_adapter_certifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certifications are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_certification_delete
+                BEFORE DELETE ON external_adapter_certifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certifications are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_revocation_update
+                BEFORE UPDATE ON external_adapter_certification_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certification revocations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_revocation_delete
+                BEFORE DELETE ON external_adapter_certification_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certification revocations are immutable');
+                END;
+                """
+            ),
         )
 
         with self._lock:
