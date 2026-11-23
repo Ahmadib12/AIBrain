@@ -267,10 +267,12 @@ example, in a dedicated CI runner secret store or hardware-backed key service).
 The runner and operator workflows are exposed through separate API
 credential boundaries. `AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN` authenticates
 evidence upload, attestation-payload requests, and signed attestation submission.
-`AIBRAIN_PROVIDER_OPERATOR_TOKEN` authenticates public-key registration,
-key revocation, certification approval, and certification revocation. Both
-tokens must be at least 32 characters and are compared in constant time. The
-runner credential cannot perform operator actions.
+`AIBRAIN_SECURITY_OPERATOR_TOKEN` authenticates public-key registration,
+key revocation, certification approval, and certification revocation.
+`AIBRAIN_PROVIDER_OPERATOR_TOKEN` remains limited to provider administration.
+All three tokens must be at least 32 characters and are compared in constant
+time. The runner and provider credentials cannot perform security operator
+actions.
 
 Runner API routes:
 - `POST /api/v1/tools/runner/evidence`
@@ -290,8 +292,8 @@ stores the private signing key. API responses do not return public or private
 key material. Evidence upload has global request-body limits and per-package
 artifact size/count limits enforced by the conformance verifier.
 
-The operator credential is currently a shared bearer secret. The `approved_by`,
-`registered_by`, and `revoked_by` fields are operator-provided audit labels,
+The security operator credential is currently a shared bearer secret. The
+`approved_by`, `registered_by`, and `revoked_by` fields are operator-provided audit labels,
 not independently established human identities. Production operation therefore
 still needs individual operator identity/SSO, stronger audit attribution,
 secret rotation, and a controlled key-registration ceremony.
