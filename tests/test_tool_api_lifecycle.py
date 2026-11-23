@@ -562,3 +562,20 @@ def test_passkey_api_completes_real_signed_approval(
     assert persisted_challenge["consumed_at"] is not None
     assert persisted_credential["sign_count"] == 1
     assert authorization_count == 1
+
+    # Passkey approval is authorization evidence, not permission to dispatch.
+    from backend.app.api.v1.tools import _get_tool_gateway
+
+    gateway = _get_tool_gateway()
+    with pytest.raises(PermissionError, match="complete confirmation policy"):
+        gateway.execute(
+            {
+                "id": request["id"],
+                "user_id": user_id,
+            },
+            user_id=user_id,
+        )
+
+    unchanged_request = state.tool_requests.get(user_id, request["id"])
+    assert unchanged_request["status"] == "approved"
+    assert unchanged_request["consumed_at"] is None
