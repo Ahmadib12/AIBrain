@@ -1,9 +1,12 @@
 from typing import Literal
+import base64
+import binascii
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
+from backend.app.auth.operator import require_provider_operator
 from backend.app.tools import ToolContract, ToolExecutionGateway, ToolRegistry, ToolRisk
 from backend.app.app_state import get_app_state
 
@@ -45,6 +48,51 @@ class ToolProposalRequest(BaseModel):
 
     tool_id: str = Field(min_length=1, max_length=100)
     arguments: dict = Field(default_factory=dict, max_length=20)
+
+
+
+
+class TrustedRunnerKeyRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str = Field(min_length=1, max_length=256)
+    runner_id: str = Field(min_length=1, max_length=256)
+    public_key_base64: str = Field(min_length=40, max_length=64)
+    valid_from: str = Field(min_length=1, max_length=64)
+    valid_until: str = Field(min_length=1, max_length=64)
+    registered_by: str = Field(min_length=1, max_length=256)
+
+
+class TrustedRunnerKeyRevocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revoked_by: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class RunnerEvidenceAttestationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str = Field(min_length=1, max_length=256)
+    runner_id: str = Field(min_length=1, max_length=256)
+    nonce: str = Field(min_length=32, max_length=128)
+    issued_at: str = Field(min_length=1, max_length=64)
+    expires_at: str = Field(min_length=1, max_length=64)
+    signature: str = Field(min_length=1, max_length=256)
+
+
+class EvidenceCertificationApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved_by: str = Field(min_length=1, max_length=256)
+    expires_at: str = Field(min_length=1, max_length=64)
+
+
+class CertificationRevocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revoked_by: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class ToolExecutionReconciliationRequest(BaseModel):
@@ -365,4 +413,176 @@ async def cancel_tool(
         raise HTTPException(
             status_code=404,
             detail={"code": "TOOL_REQUEST_NOT_FOUND", "message": "Tool request not found"},
+        ) from None
+
+
+
+@router.post("/operator/trusted-runner-keys", status_code=201)
+async def register_trusted_runner_key(
+    request: TrustedRunnerKeyRegistrationRequest,
+    _operator: None = Depends(require_provider_operator),
+) -> dict:
+    """Register an externally generated Ed25519 public key."""
+    try:
+        public_key = base64.b64decode(
+            request.public_key_base64, validate=True
+        )
+        key = get_app_state().tool_requests.register_trusted_runner_key(
+            key_id=request.key_id,
+            runner_id=request.runner_id,
+            public_key=public_key,
+            valid_from=request.valid_from,
+            valid_until=request.valid_until,
+            registered_by=request.registered_by,
+        )
+        return {
+            "key_id": key["key_id"],
+            "runner_id": key["runner_id"],
+            "algorithm": key["algorithm"],
+            "valid_from": key["valid_from"],
+            "valid_until": key["valid_until"],
+            "created_at": key["created_at"],
+        }
+    except (ValueError, binascii.Error):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_RUNNER_KEY", "message": "Invalid trusted runner key"},
+        ) from None
+
+
+@router.post("/operator/trusted-runner-keys/{key_id}/revoke")
+async def revoke_trusted_runner_key(
+    key_id: str,
+    request: TrustedRunnerKeyRevocationRequest,
+    _operator: None = Depends(require_provider_operator),
+) -> dict:
+    try:
+        get_app_state().tool_requests.revoke_trusted_runner_key(
+            key_id, revoked_by=request.revoked_by, reason=request.reason
+        )
+        return {"key_id": key_id, "status": "revoked"}
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "RUNNER_KEY_NOT_FOUND", "message": "Trusted runner key not found"},
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RUNNER_KEY_ALREADY_REVOKED", "message": "Trusted runner key is already revoked"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_RUNNER_KEY_REVOCATION", "message": "Invalid key revocation request"},
+        ) from None
+
+
+@router.post("/operator/evidence/{package_id}/attest")
+async def attest_external_adapter_evidence(
+    package_id: str,
+    request: RunnerEvidenceAttestationRequest,
+    _operator: None = Depends(require_provider_operator),
+) -> dict:
+    try:
+        attestation = get_app_state().tool_requests.attest_external_adapter_evidence(
+            package_id,
+            key_id=request.key_id,
+            runner_id=request.runner_id,
+            nonce=request.nonce,
+            issued_at=request.issued_at,
+            expires_at=request.expires_at,
+            signature=request.signature,
+        )
+        return {
+            "package_id": attestation["package_id"],
+            "key_id": attestation["key_id"],
+            "runner_id": attestation["runner_id"],
+            "payload_sha256": attestation["payload_sha256"],
+            "verified_at": attestation["verified_at"],
+        }
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "EVIDENCE_OR_KEY_NOT_FOUND", "message": "Evidence package or trusted runner key not found"},
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RUNNER_ATTESTATION_REJECTED", "message": "Runner attestation could not be verified"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_RUNNER_ATTESTATION", "message": "Invalid runner attestation"},
+        ) from None
+
+
+@router.post("/operator/evidence/{package_id}/certify", status_code=201)
+async def certify_external_adapter_evidence(
+    package_id: str,
+    request: EvidenceCertificationApprovalRequest,
+    _operator: None = Depends(require_provider_operator),
+) -> dict:
+    try:
+        certificate = get_app_state().tool_requests.certify_external_adapter(
+            evidence_package_id=package_id,
+            approved_by=request.approved_by,
+            expires_at=request.expires_at,
+        )
+        return {
+            "id": certificate["id"],
+            "provider_id": certificate["provider_id"],
+            "adapter_id": certificate["adapter_id"],
+            "adapter_version": certificate["adapter_version"],
+            "provider_scope": certificate["provider_scope"],
+            "tool_id": certificate["tool_id"],
+            "test_report_sha256": certificate["test_report_sha256"],
+            "expires_at": certificate["expires_at"],
+            "approved_by": certificate["approved_by"],
+        }
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "EVIDENCE_PACKAGE_NOT_FOUND", "message": "Evidence package not found"},
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "EVIDENCE_CERTIFICATION_REJECTED", "message": "Evidence package is not eligible for certification"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_EVIDENCE_CERTIFICATION", "message": "Invalid certification request"},
+        ) from None
+
+
+@router.post("/operator/certifications/{certification_id}/revoke")
+async def revoke_external_adapter_certification(
+    certification_id: str,
+    request: CertificationRevocationRequest,
+    _operator: None = Depends(require_provider_operator),
+) -> dict:
+    try:
+        get_app_state().tool_requests.revoke_external_adapter_certification(
+            certification_id,
+            revoked_by=request.revoked_by,
+            reason=request.reason,
+        )
+        return {"certification_id": certification_id, "status": "revoked"}
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "CERTIFICATION_NOT_FOUND", "message": "Adapter certification not found"},
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CERTIFICATION_ALREADY_REVOKED", "message": "Adapter certification is already revoked"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_CERTIFICATION_REVOCATION", "message": "Invalid certification revocation"},
         ) from None
