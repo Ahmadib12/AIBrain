@@ -13,7 +13,7 @@ dependencies = [
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
   "webauthn==3.0.1",
-  "cryptography>=42,<47",
+  "cryptography>=49,<51",
 ]
 
 [project.optional-dependencies]
