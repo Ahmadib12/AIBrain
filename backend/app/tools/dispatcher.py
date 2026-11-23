@@ -75,6 +75,8 @@ class ExternalToolDispatcher:
         adapter = self.adapters.get(contract.tool_id)
         if adapter is None:
             raise PermissionError("No trusted external adapter is registered")
+        capabilities = adapter.capabilities
+        snapshot = _capability_snapshot(adapter)
         proposed = self.repository.get(user_id, request_id)
         if proposed["tool_id"] != contract.tool_id:
             raise PermissionError("Tool contract does not match the authorized request")
@@ -85,8 +87,6 @@ class ExternalToolDispatcher:
             request_id,
             expected_contract_fingerprint=fingerprint,
         )
-        capabilities = adapter.capabilities
-        snapshot = _capability_snapshot(adapter)
         payload = claimed["arguments"]
         adapter_id = capabilities.adapter_id
         adapter_version = capabilities.adapter_version
