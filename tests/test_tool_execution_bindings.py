@@ -93,6 +93,7 @@ def test_persists_owner_scoped_immutable_dispatch_binding(tmp_path):
             contract_fingerprint=fingerprint,
             adapter_id="fake-adapter",
             adapter_version="1",
+            provider_id="fake-provider",
             provider_scope="fake-account",
         )
         assert binding["payload"] == arguments
