@@ -32,10 +32,6 @@ class Settings(BaseSettings):
         default=None,
         min_length=32,
     )
-    security_operator_token: SecretStr | None = Field(
-        default=None,
-        min_length=32,
-    )
     security_operator_emails: str = ""
     login_rate_limit_attempts: int = Field(default=5, gt=0)
     login_rate_limit_window_seconds: int = Field(default=300, gt=0)
@@ -56,13 +52,12 @@ class Settings(BaseSettings):
             for token in (
                 self.provider_operator_token,
                 self.trusted_runner_ingest_token,
-                self.security_operator_token,
             )
             if token is not None
         ]
         if len(configured) != len(set(configured)):
             raise ValueError(
-                "Provider, runner, and security operator tokens must be distinct"
+                "Provider operator and runner ingestion tokens must be distinct"
             )
         return self
 
