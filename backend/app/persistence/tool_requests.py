@@ -1548,6 +1548,42 @@ class ToolRequestRepository:
                  reason.strip(), _utc_now()),
             )
 
+    def build_external_adapter_evidence_attestation_payload(
+        self, package_id: str, *, key_id: str, runner_id: str,
+        nonce: str, issued_at: str, expires_at: str,
+    ) -> dict:
+        """Build the exact canonical statement for an external runner to sign."""
+        from backend.app.tools.attestation import (
+            _parse_timestamp, build_attestation_payload,
+        )
+        package = self.get_external_adapter_evidence_package(package_id)
+        key = self.get_trusted_runner_key(key_id)
+        now = datetime.now(timezone.utc)
+        if key["revocation"] is not None:
+            raise PermissionError("Trusted runner key has been revoked")
+        if runner_id != key["runner_id"]:
+            raise PermissionError("Runner identity does not match trusted key")
+        start = _parse_timestamp(key["valid_from"], "valid_from")
+        end = _parse_timestamp(key["valid_until"], "valid_until")
+        issued = _parse_timestamp(issued_at, "issued_at")
+        expiry = _parse_timestamp(expires_at, "expires_at")
+        if not (start <= issued <= now < expiry <= end):
+            raise PermissionError("Attestation is outside the trusted key validity window")
+        if expiry > _parse_timestamp(package["expires_at"], "package_expires_at"):
+            raise PermissionError("Attestation cannot outlive its evidence package")
+        return build_attestation_payload(
+            package_id=package_id,
+            manifest_sha256=package["manifest_sha256"],
+            artifact_hashes=package["artifact_hashes"],
+            runner_id=runner_id,
+            provider_id=package["provider_id"],
+            adapter_id=package["adapter_id"],
+            adapter_version=package["adapter_version"],
+            provider_scope=package["provider_scope"],
+            sandbox_environment=package["sandbox_environment"],
+            nonce=nonce, issued_at=issued_at, expires_at=expires_at,
+        )
+
     def attest_external_adapter_evidence(
         self, package_id: str, *, key_id: str, runner_id: str,
         nonce: str, issued_at: str, expires_at: str, signature: str,
