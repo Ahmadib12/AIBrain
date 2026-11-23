@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 from fastapi.testclient import TestClient
+
+import backend.app.auth.webauthn_service as webauthn_service_module
+from webauthn.helpers.bytes_to_base64url import bytes_to_base64url
 
 from backend.app.app_state import get_app_state
 from backend.app.main import app
@@ -315,3 +319,96 @@ def test_passkey_verify_endpoint_hides_assertion_verification_details(
     assert error["code"] == "PASSKEY_APPROVAL_REJECTED"
     assert error["message"] == "Passkey approval could not be verified"
     assert "Detailed cryptographic failure" not in response.text
+
+
+
+def test_passkey_api_uses_real_service_and_preserves_pending_state(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "passkey-real-service-api@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+
+    request = state.tool_requests.create(
+        user_id,
+        tool_id="state-change-api-test",
+        arguments={"value": "review before execution"},
+        status="pending",
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat(),
+        contract_fingerprint="a" * 64,
+        authorization_policy="passkey",
+    )
+    credential_id = bytes_to_base64url(b"api-integration-credential")
+    state.webauthn.create_credential(
+        user_id=user_id,
+        credential_id=credential_id,
+        public_key=b"test-public-key",
+        sign_count=0,
+        transports=("internal",),
+    )
+
+    # Keep the real service, repository, challenge binding, and API route.
+    # Only replace option serialization so this test does not depend on a
+    # browser authenticator or real WebAuthn cryptographic material.
+    monkeypatch.setattr(
+        state.webauthn_service,
+        "_require_enabled",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        webauthn_service_module,
+        "generate_authentication_options",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        webauthn_service_module,
+        "options_to_json",
+        lambda options: json.dumps({"challenge": "test-browser-challenge"}),
+    )
+
+    options_response = client.post(
+        f"/api/v1/tools/requests/{request['id']}/passkey/options",
+        headers=auth_header(token),
+    )
+
+    assert options_response.status_code == 200
+    options_body = options_response.json()
+    assert options_body["options"]["challenge"] == "test-browser-challenge"
+
+    challenge = state.webauthn.get_challenge(
+        user_id,
+        options_body["challenge_record_id"],
+    )
+    assert challenge is not None
+    assert challenge["purpose"] == "tool_approval"
+    assert challenge["request_id"] == request["id"]
+    assert challenge["consumed_at"] is None
+
+    credential = state.webauthn.list_credentials(user_id)[0]
+    verify_response = client.post(
+        f"/api/v1/tools/requests/{request['id']}/passkey/verify",
+        headers=auth_header(token),
+        json={
+            "challenge_record_id": challenge["id"],
+            "credential_record_id": credential["id"],
+            "assertion": {},
+        },
+    )
+
+    assert verify_response.status_code == 409
+    assert (
+        verify_response.json()["error"]["code"]
+        == "PASSKEY_APPROVAL_REJECTED"
+    )
+
+    persisted_request = state.tool_requests.get(user_id, request["id"])
+    persisted_challenge = state.webauthn.get_challenge(
+        user_id,
+        challenge["id"],
+    )
+    assert persisted_request["status"] == "pending"
+    assert persisted_request["consumed_at"] is None
+    assert persisted_challenge["consumed_at"] is None
