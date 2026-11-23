@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 
+import cbor2
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
 import backend.app.auth.webauthn_service as webauthn_service_module
@@ -412,3 +416,144 @@ def test_passkey_api_uses_real_service_and_preserves_pending_state(
     assert persisted_request["status"] == "pending"
     assert persisted_request["consumed_at"] is None
     assert persisted_challenge["consumed_at"] is None
+
+
+
+def test_passkey_api_completes_real_signed_approval(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "passkey-success-api@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+
+    request = state.tool_requests.create(
+        user_id,
+        tool_id="state-change-api-test",
+        arguments={"value": "explicitly approved"},
+        status="pending",
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat(),
+        contract_fingerprint="a" * 64,
+        authorization_policy="passkey",
+    )
+
+    credential_id = bytes_to_base64url(b"api-real-signed-credential")
+    credential = state.webauthn.create_credential(
+        user_id=user_id,
+        credential_id=credential_id,
+        public_key=b"placeholder-public-key",
+        sign_count=0,
+        transports=("internal",),
+    )
+
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_numbers = private_key.public_key().public_numbers()
+    cose_public_key = cbor2.dumps({
+        1: 2,
+        3: -7,
+        -1: 1,
+        -2: public_numbers.x.to_bytes(32, "big"),
+        -3: public_numbers.y.to_bytes(32, "big"),
+    })
+    with state.database.transaction():
+        state.database.connect().execute(
+            "UPDATE webauthn_credentials SET public_key = ? WHERE id = ? AND user_id = ?",
+            (cose_public_key, credential["id"], user_id),
+        )
+
+    # Keep the real WebAuthn option generation, assertion parser,
+    # signature verification, repository transaction and API endpoints.
+    # Only bypass deployment configuration in this isolated test client.
+    monkeypatch.setattr(
+        state.webauthn_service,
+        "_require_enabled",
+        lambda: None,
+    )
+
+    options_response = client.post(
+        f"/api/v1/tools/requests/{request['id']}/passkey/options",
+        headers=auth_header(token),
+    )
+    assert options_response.status_code == 200
+    options_body = options_response.json()
+
+    challenge = state.webauthn.get_challenge(
+        user_id,
+        options_body["challenge_record_id"],
+    )
+    assert challenge["request_id"] == request["id"]
+    assert challenge["consumed_at"] is None
+
+    client_data_json = json.dumps(
+        {
+            "type": "webauthn.get",
+            "challenge": options_body["options"]["challenge"],
+            "origin": "https://example.com",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    authenticator_data = (
+        hashlib.sha256(b"example.com").digest()
+        + b"\x05"
+        + (1).to_bytes(4, "big")
+    )
+    signature_base = (
+        authenticator_data + hashlib.sha256(client_data_json).digest()
+    )
+    signature = private_key.sign(
+        signature_base,
+        ec.ECDSA(hashes.SHA256()),
+    )
+    assertion = {
+        "id": credential_id,
+        "rawId": credential_id,
+        "type": "public-key",
+        "response": {
+            "authenticatorData": bytes_to_base64url(authenticator_data),
+            "clientDataJSON": bytes_to_base64url(client_data_json),
+            "signature": bytes_to_base64url(signature),
+            "userHandle": None,
+        },
+        "clientExtensionResults": {},
+    }
+
+    verify_response = client.post(
+        f"/api/v1/tools/requests/{request['id']}/passkey/verify",
+        headers=auth_header(token),
+        json={
+            "challenge_record_id": challenge["id"],
+            "credential_record_id": credential["id"],
+            "assertion": assertion,
+        },
+    )
+
+    assert verify_response.status_code == 200
+    assert verify_response.json() == {
+        "id": request["id"],
+        "tool_id": "state-change-api-test",
+        "arguments": {"value": "explicitly approved"},
+        "status": "approved",
+        "expires_at": request["expires_at"],
+    }
+
+    persisted_request = state.tool_requests.get(user_id, request["id"])
+    persisted_challenge = state.webauthn.get_challenge(
+        user_id,
+        challenge["id"],
+    )
+    persisted_credential = state.webauthn.get_credential(
+        user_id,
+        credential["id"],
+    )
+    authorization_count = state.database.connect().execute(
+        "SELECT COUNT(*) FROM tool_authorizations WHERE request_id = ?",
+        (request["id"],),
+    ).fetchone()[0]
+
+    assert persisted_request["status"] == "approved"
+    assert persisted_request["consumed_at"] is None
+    assert persisted_challenge["consumed_at"] is not None
+    assert persisted_credential["sign_count"] == 1
+    assert authorization_count == 1
