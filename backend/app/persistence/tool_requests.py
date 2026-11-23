@@ -1447,8 +1447,35 @@ class ToolRequestRepository:
             separators=(",", ":"), allow_nan=False,
         )
         for row in rows:
-            if row["capabilities_json"] == expected:
-                return self.get_external_adapter_certification(row["id"])
+            if row["capabilities_json"] != expected:
+                continue
+            certification = self.get_external_adapter_certification(row["id"])
+            try:
+                package_id = certification["evidence_references"][0].split(":", 1)[1]
+                package = self.get_external_adapter_evidence_package(package_id)
+                from backend.app.tools.conformance import verify_evidence_manifest
+
+                verified = verify_evidence_manifest(
+                    package["manifest"],
+                    {name: item["content"] for name, item in package["artifacts"].items()},
+                )
+            except (IndexError, KeyError, LookupError, TypeError, ValueError):
+                continue
+            if (
+                verified["manifest_sha256"] != certification["test_report_sha256"]
+                or verified["manifest_sha256"] != package["manifest_sha256"]
+                or verified["artifact_sha256"] != package["artifact_hashes"]
+                or package["expires_at"] <= now
+                or package["provider_id"] != provider_id
+                or package["adapter_id"] != adapter_id
+                or package["adapter_version"] != adapter_version
+                or package["provider_scope"] != provider_scope
+                or package["tool_id"] != tool_id
+                or package["tool_contract_fingerprint"] != tool_contract_fingerprint
+                or package["capabilities"] != capabilities
+            ):
+                continue
+            return certification
         return None
 
     def revoke_external_adapter_certification(
