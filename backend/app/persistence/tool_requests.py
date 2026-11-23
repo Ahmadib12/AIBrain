@@ -955,7 +955,8 @@ class ToolRequestRepository:
                         attestation_row["valid_until"], "valid_until"
                     )
                     if (
-                        attestation_expires <= datetime.now(timezone.utc)
+                        attestation_issued > datetime.now(timezone.utc)
+                        or attestation_expires <= datetime.now(timezone.utc)
                         or runner_key_start > attestation_issued
                         or attestation_expires > runner_key_end
                         or runner_key_start > datetime.now(timezone.utc)
@@ -1785,7 +1786,8 @@ class ToolRequestRepository:
         key_valid_from = _parse_timestamp(key["valid_from"], "valid_from")
         key_valid_until = _parse_timestamp(key["valid_until"], "valid_until")
         if (
-            attestation_expiry <= now
+            issued_at > now
+            or attestation_expiry <= now
             or key_valid_from > issued_at
             or attestation_expiry > key_valid_until
             or key_valid_from > now
@@ -1977,6 +1979,7 @@ class ToolRequestRepository:
                         )
                     )
                     or attestation["nonce"] != attestation["payload"].get("nonce")
+                    or issued_at > datetime.now(timezone.utc)
                     or key_valid_from > issued_at
                     or attestation_expiry > key_valid_until
                     or key_valid_until <= datetime.now(timezone.utc)
