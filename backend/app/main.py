@@ -43,6 +43,10 @@ register_error_handlers(app)
 app.add_middleware(
     RequestBodyLimitMiddleware,
     max_body_bytes=settings.max_request_body_bytes,
+    path_limits={
+        f"{settings.api_v1_prefix}/tools/runner/evidence":
+            settings.runner_evidence_max_request_body_bytes,
+    },
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
