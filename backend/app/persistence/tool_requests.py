@@ -1482,15 +1482,19 @@ class ToolRequestRepository:
         }
 
     def register_trusted_runner_key(
-        self, *, key_id: str, runner_id: str, public_key: bytes,
-        valid_from: str, valid_until: str, registered_by: str,
+        self, *, key_id: str, runner_id: str, provider_id: str,
+        adapter_id: str, adapter_version: str, provider_scope: str,
+        tool_id: str, public_key: bytes, valid_from: str,
+        valid_until: str, registered_by: str,
     ) -> dict:
         """Register an externally generated Ed25519 public key; never stores private keys."""
         from backend.app.tools.attestation import _parse_timestamp
 
         for field, value in (
             ("key_id", key_id), ("runner_id", runner_id),
-            ("registered_by", registered_by),
+            ("provider_id", provider_id), ("adapter_id", adapter_id),
+            ("adapter_version", adapter_version), ("provider_scope", provider_scope),
+            ("tool_id", tool_id), ("registered_by", registered_by),
         ):
             if not isinstance(value, str) or not value.strip() or len(value) > 256:
                 raise ValueError(f"{field} must be a non-empty bounded identifier")
@@ -1505,12 +1509,18 @@ class ToolRequestRepository:
             self.database.connect().execute(
                 """
                 INSERT INTO trusted_runner_keys (
-                    key_id, runner_id, algorithm, public_key,
-                    valid_from, valid_until, registered_by, created_at
-                ) VALUES (?, ?, 'Ed25519', ?, ?, ?, ?, ?)
+                    key_id, runner_id, provider_id, adapter_id,
+                    adapter_version, provider_scope, tool_id,
+                    algorithm, public_key, valid_from, valid_until,
+                    registered_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Ed25519', ?, ?, ?, ?, ?)
                 """,
-                (key_id, runner_id, public_key, start.isoformat(),
-                 end.isoformat(), registered_by.strip(), now.isoformat()),
+                (
+                    key_id, runner_id, provider_id, adapter_id,
+                    adapter_version, provider_scope, tool_id, public_key,
+                    start.isoformat(), end.isoformat(), registered_by.strip(),
+                    now.isoformat(),
+                ),
             )
         return self.get_trusted_runner_key(key_id)
 
@@ -1526,6 +1536,9 @@ class ToolRequestRepository:
         ).fetchone()
         return {
             "key_id": row["key_id"], "runner_id": row["runner_id"],
+            "provider_id": row["provider_id"], "adapter_id": row["adapter_id"],
+            "adapter_version": row["adapter_version"],
+            "provider_scope": row["provider_scope"], "tool_id": row["tool_id"],
             "algorithm": row["algorithm"], "public_key": bytes(row["public_key"]),
             "valid_from": row["valid_from"], "valid_until": row["valid_until"],
             "registered_by": row["registered_by"], "created_at": row["created_at"],
@@ -1576,6 +1589,14 @@ class ToolRequestRepository:
             raise PermissionError("Trusted runner key has been revoked")
         if runner_id != key["runner_id"]:
             raise PermissionError("Runner identity does not match trusted key")
+        if any(
+            key[field] != package[field]
+            for field in (
+                "provider_id", "adapter_id", "adapter_version",
+                "provider_scope", "tool_id",
+            )
+        ):
+            raise PermissionError("Evidence package is outside the trusted runner key scope")
         start = _parse_timestamp(key["valid_from"], "valid_from")
         end = _parse_timestamp(key["valid_until"], "valid_until")
         issued = _parse_timestamp(issued_at, "issued_at")
@@ -1634,6 +1655,14 @@ class ToolRequestRepository:
             raise PermissionError("Evidence package integrity verification failed")
         if runner_id != key["runner_id"]:
             raise PermissionError("Attestation runner does not match trusted key")
+        if any(
+            key[field] != package[field]
+            for field in (
+                "provider_id", "adapter_id", "adapter_version",
+                "provider_scope", "tool_id",
+            )
+        ):
+            raise PermissionError("Evidence package is outside the trusted runner key scope")
         payload = build_attestation_payload(
             package_id=package_id,
             manifest_sha256=package["manifest_sha256"],
