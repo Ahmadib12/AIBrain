@@ -298,8 +298,8 @@ secret rotation, and a controlled key-registration ceremony.
 
 Trusted runner keys are scoped to exactly one provider ID, adapter ID and
 version, provider account scope, and tool ID. A key registered for one such
-binding cannot attest another provider or account; register separate keys for
-separate provider/tool scopes. This scope is enforced during payload creation,
+binding cannot attest another provider, adapter, version, account, or tool;
+register separate keys for separate trust scopes. This scope is enforced during payload creation,
 attestation ingestion, certification approval, active-certification lookup,
 and the final dispatch transaction.
 
