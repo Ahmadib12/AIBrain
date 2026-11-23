@@ -873,3 +873,114 @@ def test_verified_registration_rolls_back_credential_if_challenge_consumption_fa
     assert repository.list_credentials(user_id) == []
     assert repository.get_challenge(user_id, challenge["id"])["consumed_at"] is None
 
+
+def _authorize_tool_request_fixture(fixture):
+    fixture["webauthn"].commit_verified_tool_authorization(
+        user_id=fixture["user_id"],
+        request_id=fixture["request"]["id"],
+        challenge_record_id=fixture["challenge"]["id"],
+        credential_record_id=fixture["credential"]["id"],
+        verified_sign_count=1,
+    )
+
+
+def test_passkey_authorized_request_can_be_claimed_separately(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    claimed = fixture["requests"].claim_passkey_authorized_for_execution(
+        fixture["user_id"],
+        fixture["request"]["id"],
+        expected_contract_fingerprint=fixture["fingerprint"],
+    )
+
+    assert claimed["status"] == "executing"
+    assert claimed["consumed_at"] is not None
+
+
+def test_passkey_claim_rejects_missing_authorization(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    connection = fixture["database"].connect()
+    connection.execute(
+        "UPDATE tool_requests SET status = 'approved' WHERE id = ?",
+        (fixture["request"]["id"],),
+    )
+    connection.commit()
+
+    with pytest.raises(PermissionError, match="valid passkey authorization"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"], fixture["request"]["id"]
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+
+
+def test_passkey_claim_rejects_tampered_proposal(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    connection = fixture["database"].connect()
+    connection.execute(
+        "UPDATE tool_requests SET arguments_json = ? WHERE id = ?",
+        ('{"value":"tampered"}', fixture["request"]["id"]),
+    )
+    connection.commit()
+
+    with pytest.raises(PermissionError, match="proposal has changed"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"], fixture["request"]["id"]
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+
+
+def test_passkey_claim_rejects_revoked_authorizing_credential(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+    fixture["webauthn"].revoke_credential(
+        fixture["user_id"], fixture["credential"]["id"]
+    )
+
+    with pytest.raises(PermissionError, match="has been revoked"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint=fixture["fingerprint"],
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"], fixture["request"]["id"]
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+
+
+def test_passkey_claim_rejects_changed_contract_fingerprint(tmp_path):
+    fixture = create_tool_approval_fixture(tmp_path)
+    _authorize_tool_request_fixture(fixture)
+
+    with pytest.raises(PermissionError, match="contract changed"):
+        fixture["requests"].claim_passkey_authorized_for_execution(
+            fixture["user_id"],
+            fixture["request"]["id"],
+            expected_contract_fingerprint="b" * 64,
+        )
+
+    stored = fixture["requests"].get(
+        fixture["user_id"], fixture["request"]["id"]
+    )
+    assert stored["status"] == "approved"
+    assert stored["consumed_at"] is None
+
