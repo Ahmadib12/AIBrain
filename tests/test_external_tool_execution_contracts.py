@@ -29,6 +29,7 @@ def action_digest(**overrides):
         "contract_fingerprint": "a" * 64,
         "adapter_id": "mail-send",
         "adapter_version": "1",
+        "provider_id": "mail-provider",
         "provider_scope": "account-123",
     }
     values.update(overrides)
@@ -214,6 +215,7 @@ def test_action_digest_is_stable_for_equivalent_mapping_order():
         {"contract_fingerprint": "b" * 64},
         {"adapter_id": "another-adapter"},
         {"adapter_version": "2"},
+        {"provider_id": "another-provider"},
         {"provider_scope": "another-account"},
         {"arguments": {"recipient": "person@example.com", "text": "Changed"}},
     ],
@@ -233,6 +235,7 @@ def test_action_digest_changes_when_any_dispatch_binding_changes(change):
         {"contract_fingerprint": None},
         {"adapter_id": ""},
         {"adapter_version": " "},
+        {"provider_id": ""},
         {"provider_scope": ""},
         {"arguments": []},
     ],
