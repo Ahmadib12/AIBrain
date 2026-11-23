@@ -558,6 +558,12 @@ class Database:
                           AND r.status = 'executing'
                           AND r.consumed_at IS NOT NULL
                           AND a.status = 'claimed'
+                          AND NOT EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS prior_start
+                            WHERE prior_start.request_id = r.id
+                              AND prior_start.user_id = r.user_id
+                              AND prior_start.event_type = 'dispatch_started'
+                          )
                           AND EXISTS (
                             SELECT 1 FROM tool_execution_bindings AS b
                             WHERE b.request_id = r.id
@@ -576,6 +582,14 @@ class Database:
                           AND r.status = 'executing'
                           AND r.consumed_at IS NOT NULL
                           AND a.status = 'claimed'
+                          AND NOT EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS prior_outcome
+                            WHERE prior_outcome.request_id = r.id
+                              AND prior_outcome.user_id = r.user_id
+                              AND prior_outcome.event_type IN (
+                                'dispatch_succeeded', 'dispatch_failed', 'dispatch_unknown'
+                              )
+                          )
                           AND EXISTS (
                             SELECT 1 FROM tool_dispatch_audit_events AS s
                             WHERE s.request_id = r.id
