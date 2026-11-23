@@ -179,7 +179,14 @@ def test_binding_requires_a_claimed_execution_and_owner_scope(tmp_path):
                 adapter_version="1",
                 provider_id="fake-provider",
                 provider_scope="fake-account",
-                capabilities={},
+                capabilities={
+                    "idempotency_mode": "provider_enforced",
+                    "key_scope": "provider-account-and-operation",
+                    "idempotency_retention_seconds": 86400,
+                    "rejects_payload_mismatch": True,
+                    "concurrent_deduplication": True,
+                    "supports_outcome_lookup": True,
+                },
             )
     finally:
         database.close()
