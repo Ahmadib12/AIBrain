@@ -624,14 +624,20 @@ class ToolRequestRepository:
                 SELECT r.status AS request_status, r.consumed_at, r.audit_json,
                        a.status AS attempt_status
                 FROM tool_requests AS r
-                JOIN tool_execution_attempts AS a
+                LEFT JOIN tool_execution_attempts AS a
                   ON a.request_id = r.id AND a.user_id = r.user_id
                 WHERE r.id = ? AND r.user_id = ?
                 """,
                 (request_id, user_id),
             ).fetchone()
             if row is None:
-                raise LookupError("Tool request or execution attempt not found")
+                raise LookupError("Tool request not found")
+            if (
+                row["request_status"] != "outcome_unknown"
+                or row["attempt_status"] != "outcome_unknown"
+                or row["consumed_at"] is None
+            ):
+                raise PermissionError("Tool execution is not awaiting reconciliation")
             if (
                 row["request_status"] != "outcome_unknown"
                 or row["attempt_status"] != "outcome_unknown"
