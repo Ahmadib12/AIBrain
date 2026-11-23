@@ -11,6 +11,45 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
+
+
+def _insert_security_operator_audit(
+    connection,
+    principal: dict,
+    *,
+    action: str,
+    target_type: str,
+    target_id: str,
+    details: dict | None = None,
+) -> None:
+    """Insert the audit event inside the caller's business transaction."""
+    actor_id = principal.get("id")
+    actor_email = principal.get("email")
+    if not isinstance(actor_id, str) or not actor_id:
+        raise ValueError("Authenticated operator user ID is required for audit")
+    if not isinstance(actor_email, str) or not actor_email.strip():
+        raise ValueError("Authenticated operator email is required for audit")
+    connection.execute(
+        """
+        INSERT INTO security_operator_audit_events (
+            id, actor_user_id, actor_email, action, target_type,
+            target_id, outcome, details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'succeeded', ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            actor_id,
+            actor_email.strip().lower(),
+            action,
+            target_type,
+            target_id,
+            json.dumps(details or {}, sort_keys=True, separators=(",", ":")),
+            _utc_now(),
+        ),
+    )
+
+
 def _request_digest(
     tool_id: str,
     arguments: dict,
@@ -1501,6 +1540,7 @@ class ToolRequestRepository:
         tool_id: str, tool_contract_fingerprint: str,
         public_key: bytes, valid_from: str,
         valid_until: str, registered_by: str,
+        audit_actor: dict | None = None,
     ) -> dict:
         """Register an externally generated Ed25519 public key; never stores private keys."""
         from backend.app.tools.attestation import _parse_timestamp
@@ -1546,6 +1586,14 @@ class ToolRequestRepository:
                     now.isoformat(),
                 ),
             )
+            if audit_actor is not None:
+                _insert_security_operator_audit(
+                    self.database.connect(), audit_actor,
+                    action="runner_key.register",
+                    target_type="trusted_runner_key",
+                    target_id=key_id,
+                    details={"runner_id": runner_id, "provider_id": provider_id, "adapter_id": adapter_id},
+                )
         return self.get_trusted_runner_key(key_id)
 
     def get_trusted_runner_key(self, key_id: str) -> dict:
@@ -1571,7 +1619,8 @@ class ToolRequestRepository:
         }
 
     def revoke_trusted_runner_key(
-        self, key_id: str, *, revoked_by: str, reason: str
+        self, key_id: str, *, revoked_by: str, reason: str,
+        audit_actor: dict | None = None,
     ) -> None:
         if not isinstance(revoked_by, str) or not revoked_by.strip():
             raise ValueError("Revoking operator must be identified")
@@ -1598,6 +1647,14 @@ class ToolRequestRepository:
                 (str(uuid.uuid4()), key_id, revoked_by.strip(),
                  reason.strip(), _utc_now()),
             )
+            if audit_actor is not None:
+                _insert_security_operator_audit(
+                    self.database.connect(), audit_actor,
+                    action="runner_key.revoke",
+                    target_type="trusted_runner_key",
+                    target_id=key_id,
+                    details={"reason": reason.strip()},
+                )
 
     def build_external_adapter_evidence_attestation_payload(
         self, package_id: str, *, key_id: str, runner_id: str,
@@ -1764,6 +1821,7 @@ class ToolRequestRepository:
         evidence_package_id: str,
         approved_by: str,
         expires_at: str,
+        audit_actor: dict | None = None,
     ) -> dict:
         """Human approval of a previously verified, exact-scope evidence package."""
         if not isinstance(approved_by, str) or not approved_by.strip():
@@ -1889,6 +1947,14 @@ class ToolRequestRepository:
                     now_text,
                 ),
             )
+            if audit_actor is not None:
+                _insert_security_operator_audit(
+                    self.database.connect(), audit_actor,
+                    action="evidence.certify",
+                    target_type="adapter_certification",
+                    target_id=certification_id,
+                    details={"evidence_package_id": evidence_package_id},
+                )
         return self.get_external_adapter_certification(certification_id)
 
     def get_external_adapter_certification(self, certification_id: str) -> dict:
@@ -2032,7 +2098,8 @@ class ToolRequestRepository:
         return None
 
     def revoke_external_adapter_certification(
-        self, certification_id: str, *, revoked_by: str, reason: str
+        self, certification_id: str, *, revoked_by: str, reason: str,
+        audit_actor: dict | None = None,
     ) -> None:
         if not isinstance(revoked_by, str) or not revoked_by.strip():
             raise ValueError("Revoking operator must be identified")
@@ -2061,6 +2128,14 @@ class ToolRequestRepository:
                 (str(uuid.uuid4()), certification_id, revoked_by, reason.strip(),
                  _utc_now()),
             )
+            if audit_actor is not None:
+                _insert_security_operator_audit(
+                    self.database.connect(), audit_actor,
+                    action="certification.revoke",
+                    target_type="adapter_certification",
+                    target_id=certification_id,
+                    details={"reason": reason.strip()},
+                )
 
     def cancel_pending(self, user_id: str, request_id: str) -> dict:
         """Cancel a pending or approved request before execution is claimed."""
