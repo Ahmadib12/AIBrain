@@ -2,9 +2,6 @@ from typing import Literal
 import base64
 import binascii
 import sqlite3
-import json
-import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,36 +33,6 @@ tool_registry.register(ToolContract(
     output_schema={"text": {"type": "string"}},
 ))
 
-
-def _record_security_operator_audit(
-    principal: dict,
-    *,
-    action: str,
-    target_type: str,
-    target_id: str,
-    details: dict | None = None,
-) -> None:
-    """Append an immutable audit record for an authenticated operator action."""
-    state = get_app_state()
-    with state.database.transaction(immediate=True):
-        state.database.connect().execute(
-            """
-            INSERT INTO security_operator_audit_events (
-                id, actor_user_id, actor_email, action, target_type,
-                target_id, outcome, details_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'succeeded', ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                principal["id"],
-                principal["email"].strip().lower(),
-                action,
-                target_type,
-                target_id,
-                json.dumps(details or {}, sort_keys=True, separators=(",", ":")),
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
 
 def _get_tool_gateway() -> ToolExecutionGateway:
     return ToolExecutionGateway(
@@ -537,6 +504,7 @@ async def get_runner_attestation_payload(
             nonce=request.nonce,
             issued_at=request.issued_at,
             expires_at=request.expires_at,
+            audit_actor=operator,
         )
     except LookupError:
         raise HTTPException(
@@ -578,8 +546,8 @@ async def register_trusted_runner_key(
             valid_from=request.valid_from,
             valid_until=request.valid_until,
             registered_by=operator["email"],
+            audit_actor=operator,
         )
-        _record_security_operator_audit(operator, action="runner_key.register", target_type="trusted_runner_key", target_id=key["key_id"], details={"runner_id": key["runner_id"], "provider_id": key["provider_id"], "adapter_id": key["adapter_id"]})
         return {
             "key_id": key["key_id"],
             "runner_id": key["runner_id"],
@@ -614,9 +582,8 @@ async def revoke_trusted_runner_key(
 ) -> dict:
     try:
         get_app_state().tool_requests.revoke_trusted_runner_key(
-            key_id, revoked_by=operator["email"], reason=request.reason
+            key_id, revoked_by=operator["email"], reason=request.reason, audit_actor=operator
         )
-        _record_security_operator_audit(operator, action="runner_key.revoke", target_type="trusted_runner_key", target_id=key_id, details={"reason": request.reason})
         return {"key_id": key_id, "status": "revoked"}
     except LookupError:
         raise HTTPException(
@@ -687,7 +654,6 @@ async def certify_external_adapter_evidence(
             approved_by=operator["email"],
             expires_at=request.expires_at,
         )
-        _record_security_operator_audit(operator, action="evidence.certify", target_type="adapter_certification", target_id=certificate["id"], details={"evidence_package_id": package_id})
         return {
             "id": certificate["id"],
             "provider_id": certificate["provider_id"],
@@ -727,8 +693,8 @@ async def revoke_external_adapter_certification(
             certification_id,
             revoked_by=operator["email"],
             reason=request.reason,
+            audit_actor=operator,
         )
-        _record_security_operator_audit(operator, action="certification.revoke", target_type="adapter_certification", target_id=certification_id, details={"reason": request.reason})
         return {"certification_id": certification_id, "status": "revoked"}
     except LookupError:
         raise HTTPException(
