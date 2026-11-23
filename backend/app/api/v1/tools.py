@@ -611,7 +611,7 @@ async def register_trusted_runner_key(
 async def revoke_trusted_runner_key(
     key_id: str,
     request: TrustedRunnerKeyRevocationRequest,
-    _operator: None = Depends(require_security_operator),
+    operator: dict = Depends(require_security_operator),
 ) -> dict:
     try:
         get_app_state().tool_requests.revoke_trusted_runner_key(
