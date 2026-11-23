@@ -280,6 +280,20 @@ genuine or uncompromised. Hardware-backed remote attestation and deployment of
 an independently trusted runner remain future operational work. Production
 external execution remains disabled.
 
+Trusted runner keys are scoped to one exact provider, adapter ID/version,
+provider account scope, and tool ID. Register a separate key for every distinct
+trust scope. A key for one provider or account cannot attest another provider
+or account.
+
+The external runner client is `scripts/submit_conformance_evidence.py`. It
+accepts a completed manifest and its artifact directory, uploads the evidence,
+requests AIBrain's canonical signing payload, signs it locally with
+`AIBRAIN_RUNNER_PRIVATE_KEY_B64`, and submits the attestation. The script does
+not run provider tests or create the evidence manifest: an independently
+controlled runner job must run the provider-specific conformance suite first.
+The raw Ed25519 private key must be held only by the isolated runner.
+
 GitHub Actions CI is defined in `.github/workflows/ci.yml` and runs the full
 test suite on Python 3.11 and 3.14 for pushes to `main` and `dev/**` branches
-and for pull requests.
+and for pull requests. This generic CI workflow does not itself establish
+provider-specific conformance or trusted-runner status.
