@@ -148,12 +148,18 @@ create duplicate effects. It is not registered with or connected to the
 application gateway. Tests are in
 `tests/test_fake_external_tool_provider.py`.
 
-Migration 10 adds an owner-scoped `tool_execution_bindings` table. The
-repository persists one canonical payload/provider/adapter/capability snapshot
-per claimed execution, validates that the payload and action digest match the
-persisted request, and prevents updates to the binding. The table is not yet
-consumed by a dispatcher; no external action is sent. Tests are in
-`tests/test_tool_execution_bindings.py`.
+Migration 10 adds owner-scoped immutable dispatch bindings; migration 11
+adds append-only dispatch audit events. `ExternalToolDispatcher` now provides
+a guarded, provider-neutral execution boundary: it claims only passkey-authorized
+state-change requests, freezes the exact adapter/provider/capability snapshot,
+revalidates authorization and binding immediately before dispatch, and records
+one dispatch start plus a normalized outcome. Transport exceptions become
+`outcome_unknown`; automatic retries are never attempted. Provider lookup is
+read-only and separately audited. These components are not wired into the
+application gateway or API routes, and no real provider is registered. The
+existing state-changing execution path remains disabled. Tests are in
+`tests/test_tool_execution_bindings.py` and
+`tests/test_external_tool_dispatcher.py`.
 
 ### Inspecting and reconciling uncertain tool executions
 
