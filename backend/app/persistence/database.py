@@ -374,7 +374,71 @@ class Database:
                             'unknown',
                             'read_only',
                             'passkey'
+                
+            (
+                9,
+                """
+                CREATE TABLE tool_execution_attempts (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL
+                        CHECK (
+                            status IN (
+                                'claimed',
+                                'succeeded',
+                                'failed',
+                                'outcome_unknown'
+                            )
+                        ),
+                    claimed_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    error_code TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE,
+                    CHECK (
+                        (status = 'claimed' AND finished_at IS NULL)
+                        OR
+                        (
+                            status IN (
+                                'succeeded',
+                                'failed',
+                                'outcome_unknown'
+                            )
+                            AND finished_at IS NOT NULL
                         )
+                    )
+                );
+
+                CREATE INDEX idx_tool_execution_attempts_status_claimed
+                    ON tool_execution_attempts(status, claimed_at);
+
+                CREATE INDEX idx_tool_execution_attempts_user
+                    ON tool_execution_attempts(user_id);
+
+                CREATE TRIGGER prevent_tool_execution_attempt_for_inactive_user
+                BEFORE INSERT ON tool_execution_attempts
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool execution attempt requires an active request owner'
+                    );
+                END;
+                """,
+            ),
+        )
                     );
                 """,
             ),
