@@ -73,6 +73,16 @@ def verify(repository, manifest=None, artifacts=None):
     )
 
 
+
+def runner_scope(package):
+    return {
+        "provider_id": package["provider_id"],
+        "adapter_id": package["adapter_id"],
+        "adapter_version": package["adapter_version"],
+        "provider_scope": package["provider_scope"],
+        "tool_id": package["tool_id"],
+    }
+
 def certify(repository, **overrides):
     package = verify(repository)
     public_key, private_key = generate_test_keypair()
@@ -81,6 +91,7 @@ def certify(repository, **overrides):
     repository.register_trusted_runner_key(
         key_id=key_id,
         runner_id="trusted-sandbox-runner",
+        **runner_scope(package),
         public_key=public_key,
         valid_from=(now - timedelta(days=1)).isoformat(),
         valid_until=(now + timedelta(days=30)).isoformat(),
@@ -330,7 +341,7 @@ def test_attestation_signature_binds_manifest_and_scope(repository):
     now = datetime.now(timezone.utc)
     key_id = "runner-key-binding"
     repository.register_trusted_runner_key(
-        key_id=key_id, runner_id="runner-a", public_key=public_key,
+        key_id=key_id, runner_id="runner-a", **runner_scope(package), public_key=public_key,
         valid_from=(now - timedelta(minutes=1)).isoformat(),
         valid_until=(now + timedelta(days=1)).isoformat(),
         registered_by="security-admin",
@@ -362,7 +373,7 @@ def test_attestation_nonce_and_package_cannot_be_replayed(repository):
     now = datetime.now(timezone.utc)
     key_id = "runner-key-replay"
     repository.register_trusted_runner_key(
-        key_id=key_id, runner_id="runner-replay", public_key=public_key,
+        key_id=key_id, runner_id="runner-replay", **runner_scope(package), public_key=public_key,
         valid_from=(now - timedelta(minutes=1)).isoformat(),
         valid_until=(now + timedelta(days=1)).isoformat(),
         registered_by="security-admin",
@@ -421,7 +432,7 @@ def test_runner_identity_must_match_registered_key(repository):
     now = datetime.now(timezone.utc)
     repository.register_trusted_runner_key(
         key_id="runner-key-identity", runner_id="approved-runner",
-        public_key=public_key,
+        **runner_scope(package), public_key=public_key,
         valid_from=(now - timedelta(minutes=1)).isoformat(),
         valid_until=(now + timedelta(days=1)).isoformat(),
         registered_by="security-admin",
@@ -442,7 +453,7 @@ def test_attestation_cannot_outlive_trusted_runner_key(repository):
     now = datetime.now(timezone.utc)
     repository.register_trusted_runner_key(
         key_id="runner-key-short-lived", runner_id="short-lived-runner",
-        public_key=public_key,
+        **runner_scope(package), public_key=public_key,
         valid_from=(now - timedelta(minutes=1)).isoformat(),
         valid_until=(now + timedelta(minutes=30)).isoformat(),
         registered_by="security-admin",
@@ -468,7 +479,7 @@ def test_key_rotation_accepts_new_key_without_rewriting_old_key(repository):
     ):
         repository.register_trusted_runner_key(
             key_id=key_id, runner_id="rotating-runner",
-            public_key=public_key,
+            **runner_scope(package), public_key=public_key,
             valid_from=(now - timedelta(minutes=1)).isoformat(),
             valid_until=(now + timedelta(days=2)).isoformat(),
             registered_by="security-admin",
@@ -527,8 +538,10 @@ def test_runner_key_and_attestation_records_are_immutable(repository):
 def test_revoked_public_key_cannot_be_re_registered_under_new_id(repository):
     public_key, _ = generate_test_keypair()
     now = datetime.now(timezone.utc)
+    package = verify(repository)
     values = {
         "runner_id": "runner-key-alias",
+        **runner_scope(package),
         "public_key": public_key,
         "valid_from": (now - timedelta(minutes=1)).isoformat(),
         "valid_until": (now + timedelta(days=1)).isoformat(),
@@ -553,7 +566,7 @@ def test_nonce_cannot_be_reused_across_distinct_evidence_packages(repository):
     now = datetime.now(timezone.utc)
     key_id = "runner-key-global-nonce"
     repository.register_trusted_runner_key(
-        key_id=key_id, runner_id="nonce-runner", public_key=public_key,
+        key_id=key_id, runner_id="nonce-runner", **runner_scope(first), public_key=public_key,
         valid_from=(now - timedelta(minutes=1)).isoformat(),
         valid_until=(now + timedelta(days=2)).isoformat(),
         registered_by="security-admin",
