@@ -397,6 +397,7 @@ def test_revoked_runner_key_invalidates_existing_certification(repository):
         reason="Runner signing key compromise",
     )
     assert lookup(repository) is None
+    assert repository.get_external_adapter_evidence_package(package_id)["provenance"] == "runner_attestation_revoked"
     with pytest.raises(PermissionError, match="already revoked"):
         repository.revoke_trusted_runner_key(
             attestation["key_id"], revoked_by="security-admin",
@@ -454,3 +455,41 @@ def test_runner_key_expiry_is_enforced(repository):
             valid_until=(now - timedelta(days=1)).isoformat(),
             registered_by="security-admin",
         )
+
+
+
+def test_key_rotation_accepts_new_key_without_rewriting_old_key(repository):
+    package = verify(repository)
+    now = datetime.now(timezone.utc)
+    old_public, _ = generate_test_keypair()
+    new_public, new_private = generate_test_keypair()
+    for key_id, public_key in (
+        ("runner-key-old", old_public), ("runner-key-new", new_public)
+    ):
+        repository.register_trusted_runner_key(
+            key_id=key_id, runner_id="rotating-runner",
+            public_key=public_key,
+            valid_from=(now - timedelta(minutes=1)).isoformat(),
+            valid_until=(now + timedelta(days=2)).isoformat(),
+            registered_by="security-admin",
+        )
+    issued_at = now.isoformat()
+    expires_at = (now + timedelta(hours=1)).isoformat()
+    payload = build_attestation_payload(
+        package_id=package["id"], manifest_sha256=package["manifest_sha256"],
+        artifact_hashes=package["artifact_hashes"], runner_id="rotating-runner",
+        provider_id=package["provider_id"], adapter_id=package["adapter_id"],
+        adapter_version=package["adapter_version"],
+        provider_scope=package["provider_scope"],
+        sandbox_environment=package["sandbox_environment"],
+        nonce="nonce_" + "r" * 32, issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    repository.attest_external_adapter_evidence(
+        package["id"], key_id="runner-key-new", runner_id="rotating-runner",
+        nonce=payload["nonce"], issued_at=issued_at, expires_at=expires_at,
+        signature=sign_attestation_for_runner(new_private, payload),
+    )
+    assert repository.get_external_adapter_evidence_attestation(
+        package["id"]
+    )["key_id"] == "runner-key-new"
