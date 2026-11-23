@@ -1298,10 +1298,25 @@ class ToolRequestRepository:
             """,
             (package_id,),
         ).fetchall()
-        attested = self.database.connect().execute(
-            "SELECT 1 FROM external_adapter_evidence_attestations WHERE package_id = ?",
-            (package_id,),
-        ).fetchone() is not None
+        attestation_state = self.database.connect().execute(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM external_adapter_evidence_attestations AS a
+                WHERE a.package_id = ?
+            ) AS attested,
+            EXISTS(
+                SELECT 1 FROM external_adapter_evidence_attestations AS a
+                JOIN trusted_runner_key_revocations AS r ON r.key_id = a.key_id
+                WHERE a.package_id = ?
+            ) AS revoked
+            """,
+            (package_id, package_id),
+        ).fetchone()
+        provenance = (
+            "runner_attestation_revoked" if attestation_state["revoked"]
+            else "runner_attested" if attestation_state["attested"]
+            else row["provenance"]
+        )
         return {
             "id": row["id"],
             "provider_id": row["provider_id"],
@@ -1325,7 +1340,7 @@ class ToolRequestRepository:
             "executed_at": row["executed_at"],
             "verified_at": row["verified_at"],
             "expires_at": row["expires_at"],
-            "provenance": "runner_attested" if attested else row["provenance"],
+            "provenance": provenance,
         }
 
     def register_trusted_runner_key(
