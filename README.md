@@ -148,11 +148,15 @@ create duplicate effects. It is not registered with or connected to the
 application gateway. Tests are in
 `tests/test_fake_external_tool_provider.py`.
 
-Migration 10 adds owner-scoped immutable dispatch bindings; migration 11
-adds append-only dispatch audit events; migration 12 adds immutable provider-adapter
-certifications and append-only revocations. External dispatch requires a matching,
-unexpired, non-revoked certification for the exact provider, adapter version,
-account scope, and capability snapshot. `ExternalToolDispatcher` now provides
+Migrations 10–12 add immutable dispatch bindings, append-only dispatch
+audit events, adapter certifications, and revocations. Migration 13 adds
+immutable conformance evidence packages and artifact bytes. Certification now
+requires a verified evidence-package ID and explicit operator approval; raw
+caller-supplied Boolean results and report hashes are no longer accepted.
+The verifier canonicalizes the manifest, checks exact provider/adapter/version/
+scope/tool/contract/capability binding, validates every required test result,
+checks timestamps and bounded artifact sizes, and hashes the actual artifact
+bytes. Certification use re-verifies the stored package and its binding. `ExternalToolDispatcher` now provides
 a guarded, provider-neutral execution boundary: it claims only passkey-authorized
 state-change requests, freezes the exact adapter/provider/capability snapshot,
 revalidates authorization and binding immediately before dispatch, and records
@@ -225,3 +229,13 @@ Additional passkey execution-claim invariants are covered in
 `tests/test_webauthn_repository.py`: claim rollback on attempt persistence failure,
 rejection of deleted accounts, and rejection of altered challenge-to-proposal
 bindings. These tests do not enable state-changing execution.
+
+
+Conformance evidence manifests use schema
+`aibrain-conformance-evidence-v1`. The verifier checks byte integrity and
+manifest consistency, but SHA-256 is not producer authentication: packages
+currently have `unattested` provenance until a trusted sandbox runner
+attestation or provider signature is implemented. A successful local
+verification must not be represented as proof that a provider actually ran the
+tests. This milestone does not enable production adapters or external
+state-changing execution.
