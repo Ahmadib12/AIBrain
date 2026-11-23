@@ -374,12 +374,19 @@ def test_attestation_signature_binds_manifest_and_scope(repository):
         )
 
 
-def test_runner_signing_key_cannot_attest_outside_registered_provider_scope(repository):
+def test_runner_signing_key_cannot_attest_outside_registered_provider_or_contract_scope(repository):
     manifest, artifacts = evidence()
     first_package = repository.verify_external_adapter_evidence(manifest, artifacts)
-    other_manifest = json.loads(json.dumps(manifest))
-    other_manifest["provider_id"] = "provider-y"
-    other_package = repository.verify_external_adapter_evidence(other_manifest, artifacts)
+    other_provider_manifest = json.loads(json.dumps(manifest))
+    other_provider_manifest["provider_id"] = "provider-y"
+    other_provider_package = repository.verify_external_adapter_evidence(
+        other_provider_manifest, artifacts
+    )
+    other_contract_manifest = json.loads(json.dumps(manifest))
+    other_contract_manifest["tool_contract_fingerprint"] = "d" * 64
+    other_contract_package = repository.verify_external_adapter_evidence(
+        other_contract_manifest, artifacts
+    )
 
     public_key, _ = generate_test_keypair()
     now = datetime.now(timezone.utc)
@@ -392,15 +399,16 @@ def test_runner_signing_key_cannot_attest_outside_registered_provider_scope(repo
         valid_until=(now + timedelta(days=1)).isoformat(),
         registered_by="security-admin",
     )
-    with pytest.raises(PermissionError, match="outside the trusted runner key scope"):
-        repository.build_external_adapter_evidence_attestation_payload(
-            other_package["id"],
-            key_id="provider-scoped-key",
-            runner_id="provider-x-runner",
-            nonce="nonce_" + "p" * 32,
-            issued_at=now.isoformat(),
-            expires_at=(now + timedelta(hours=1)).isoformat(),
-        )
+    for package in (other_provider_package, other_contract_package):
+        with pytest.raises(PermissionError, match="outside the trusted runner key scope"):
+            repository.build_external_adapter_evidence_attestation_payload(
+                package["id"],
+                key_id="provider-scoped-key",
+                runner_id="provider-x-runner",
+                nonce="nonce_" + "p" * 32,
+                issued_at=now.isoformat(),
+                expires_at=(now + timedelta(hours=1)).isoformat(),
+            )
 
 
 def test_attestation_nonce_and_package_cannot_be_replayed(repository):
