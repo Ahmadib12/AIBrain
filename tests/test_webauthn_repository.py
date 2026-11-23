@@ -483,8 +483,10 @@ def test_verified_tool_authorization_commits_all_state_atomically(
     ).fetchone()
 
     assert result is not None
-    assert request["status"] == "executing"
-    assert request["consumed_at"] is not None
+    # Passkey verification authorizes the exact proposal; execution must
+    # be claimed separately by the execution gateway.
+    assert request["status"] == "approved"
+    assert request["consumed_at"] is None
     assert challenge["consumed_at"] is not None
     assert credential["sign_count"] == 1
     assert credential["last_used_at"] is not None
