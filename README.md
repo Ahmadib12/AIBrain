@@ -239,3 +239,21 @@ attestation or provider signature is implemented. A successful local
 verification must not be represented as proof that a provider actually ran the
 tests. This milestone does not enable production adapters or external
 state-changing execution.
+
+
+### Trusted evidence provenance and attestation authority
+
+Migration 14 adds Ed25519 trusted-runner public-key registration, key rotation
+by registering a new key ID, append-only key revocation, signed canonical
+evidence attestations, and one-time nonce replay protection. Attestations bind
+the exact evidence package, manifest and artifact hashes, runner identity,
+provider/adapter/version/scope, sandbox label, and validity window. Certification
+now requires a valid, non-revoked runner attestation and cannot outlive it.
+Active certification lookup rechecks the signature and key status.
+
+AIBrain never stores runner private keys. Key registration and revocation are
+operator/service-layer operations, not public API endpoints. A signature proves
+possession of a registered key, not that a sandbox was genuine or uncompromised;
+hardware-backed remote attestation and deployment of an independently trusted
+runner remain future operational work. Human certification approval remains
+a separate step. Production external execution remains disabled.
