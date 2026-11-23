@@ -80,6 +80,11 @@ class TrustedRunnerKeyRegistrationRequest(BaseModel):
 
     key_id: str = Field(min_length=1, max_length=256)
     runner_id: str = Field(min_length=1, max_length=256)
+    provider_id: str = Field(min_length=1, max_length=256)
+    adapter_id: str = Field(min_length=1, max_length=256)
+    adapter_version: str = Field(min_length=1, max_length=256)
+    provider_scope: str = Field(min_length=1, max_length=256)
+    tool_id: str = Field(min_length=1, max_length=256)
     public_key_base64: str = Field(min_length=40, max_length=64)
     valid_from: str = Field(min_length=1, max_length=64)
     valid_until: str = Field(min_length=1, max_length=64)
@@ -531,6 +536,11 @@ async def register_trusted_runner_key(
         key = get_app_state().tool_requests.register_trusted_runner_key(
             key_id=request.key_id,
             runner_id=request.runner_id,
+            provider_id=request.provider_id,
+            adapter_id=request.adapter_id,
+            adapter_version=request.adapter_version,
+            provider_scope=request.provider_scope,
+            tool_id=request.tool_id,
             public_key=public_key,
             valid_from=request.valid_from,
             valid_until=request.valid_until,
@@ -539,6 +549,11 @@ async def register_trusted_runner_key(
         return {
             "key_id": key["key_id"],
             "runner_id": key["runner_id"],
+            "provider_id": key["provider_id"],
+            "adapter_id": key["adapter_id"],
+            "adapter_version": key["adapter_version"],
+            "provider_scope": key["provider_scope"],
+            "tool_id": key["tool_id"],
             "algorithm": key["algorithm"],
             "valid_from": key["valid_from"],
             "valid_until": key["valid_until"],
