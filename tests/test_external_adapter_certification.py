@@ -113,12 +113,36 @@ def test_revoked_certification_is_not_active(repository):
         )
 
 
-def test_expired_certification_is_rejected(repository):
-    certificate = certify(repository)
-    repository.database.connect().execute(
-        "UPDATE external_adapter_certifications SET expires_at = ? WHERE id = ?",
-        (
-            (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
-            certificate["id"],
-        ),
-    )
+def test_expired_certification_is_rejected(repository, monkeypatch):
+    import backend.app.persistence.tool_requests as repository_module
+
+    class FrozenDateTime(datetime):
+        current = datetime.now(timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            value = cls.current
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(repository_module, "datetime", FrozenDateTime)
+    expiry = (FrozenDateTime.current + timedelta(seconds=1)).isoformat()
+    certify(repository, expires_at=expiry)
+    FrozenDateTime.current += timedelta(seconds=2)
+
+    assert lookup(repository) is None
+
+
+def test_incomplete_or_failed_conformance_evidence_is_rejected(repository):
+    incomplete = {"stable_idempotency_key": True}
+    with pytest.raises(ValueError, match="conformance checks"):
+        certify(repository, conformance_results=incomplete)
+
+    failed = {name: True for name in CHECKS}
+    failed["lookup_never_dispatches"] = False
+    with pytest.raises(ValueError, match="conformance checks"):
+        certify(repository, conformance_results=failed)
+
+
+def test_missing_evidence_reference_is_rejected(repository):
+    with pytest.raises(ValueError, match="evidence reference"):
+        certify(repository, evidence_references=[])
