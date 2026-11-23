@@ -53,11 +53,14 @@ class RepositoryStub:
         self.payload = {"recipient": "person@example.com", "text": "Hello"}
         self.binding = None
         self.status = "claimed"
+        self.certification_available = True
 
     def get_active_external_adapter_certification(
         self, *, provider_id, adapter_id, adapter_version, provider_scope,
         tool_id, tool_contract_fingerprint, capabilities,
     ):
+        if not self.certification_available:
+            return None
         return {
             "id": "sandbox-certification-1",
             "provider_id": provider_id,
@@ -146,6 +149,20 @@ def test_dispatch_uses_claim_binding_final_check_then_provider():
     assert provider.dispatch_count == 1
     assert provider.effect_count == 1
     assert repository.calls[-1] == ("outcome", "succeeded")
+
+
+def test_dispatch_fails_closed_without_matching_certification():
+    repository = RepositoryStub()
+    repository.certification_available = False
+    provider = FakeExternalToolProvider()
+    dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+
+    with pytest.raises(PermissionError, match="sandbox certification"):
+        dispatcher.dispatch("user-1", "request-1", contract=contract())
+
+    assert repository.calls == []
+    assert provider.dispatch_count == 0
+    assert provider.effect_count == 0
 
 
 def test_transport_timeout_becomes_unknown_without_retry():
