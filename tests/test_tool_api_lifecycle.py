@@ -159,6 +159,14 @@ def test_passkey_options_endpoint_is_authenticated_and_request_scoped(
         authorization_policy="passkey",
     )
 
+    # Bypass the feature-availability guard so this test reaches the
+    # request lookup and verifies cross-account resource isolation.
+    monkeypatch.setattr(
+        state.webauthn_service,
+        "_require_enabled",
+        lambda: None,
+    )
+
     response = client.post(
         f"/api/v1/tools/requests/{request['id']}/passkey/options",
         headers=auth_header(other_token),
@@ -303,7 +311,7 @@ def test_passkey_verify_endpoint_hides_assertion_verification_details(
     )
 
     assert response.status_code == 409
-    assert response.json()["error"] == {
-        "code": "PASSKEY_APPROVAL_REJECTED",
-        "message": "Passkey approval could not be verified",
-    }
+    error = response.json()["error"]
+    assert error["code"] == "PASSKEY_APPROVAL_REJECTED"
+    assert error["message"] == "Passkey approval could not be verified"
+    assert "Detailed cryptographic failure" not in response.text
