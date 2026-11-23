@@ -77,6 +77,17 @@ class ExternalToolDispatcher:
             raise PermissionError("No trusted external adapter is registered")
         capabilities = adapter.capabilities
         snapshot = _capability_snapshot(adapter)
+        certification = self.repository.get_active_external_adapter_certification(
+            provider_id=capabilities.provider_id,
+            adapter_id=capabilities.adapter_id,
+            adapter_version=capabilities.adapter_version,
+            provider_scope=capabilities.provider_scope,
+            capabilities=snapshot,
+        )
+        if certification is None:
+            raise PermissionError(
+                "External adapter has no active, matching sandbox certification"
+            )
         proposed = self.repository.get(user_id, request_id)
         if proposed["tool_id"] != contract.tool_id:
             raise PermissionError("Tool contract does not match the authorized request")
