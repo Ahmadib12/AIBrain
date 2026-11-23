@@ -1,4 +1,7 @@
 import json
+import hashlib
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -11,6 +14,9 @@ from backend.app.tools import (
     execution_action_digest,
 )
 from backend.app.tools.dispatcher import ExternalToolDispatcher
+from backend.app.persistence.database import Database
+from backend.app.persistence.tool_requests import ToolRequestRepository, _request_digest
+from backend.app.tools.contracts import contract_fingerprint
 
 
 def contract():
@@ -185,3 +191,170 @@ def test_lookup_is_read_only_and_requires_unknown_outcome():
     assert provider.dispatch_count == 1
     assert provider.lookup_count == 1
     assert repository.calls[-1] == ("lookup", "succeeded")
+
+
+def claimed_passkey_dispatch(tmp_path):
+    database = Database(f"sqlite:///{tmp_path / 'passkey-dispatch.db'}")
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat()
+    user_id = "passkey-dispatch-owner"
+    request_id = None
+    database.connect().execute(
+        """
+        INSERT INTO users (id, email, password_salt, password_hash, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (user_id, "dispatch-owner@example.com", "salt", "hash", now_text),
+    )
+    database.connect().commit()
+    repository = ToolRequestRepository(database)
+    tool_contract = contract()
+    fingerprint = contract_fingerprint(tool_contract)
+    arguments = {"recipient": "person@example.com", "text": "Hello"}
+    request = repository.create(
+        user_id,
+        tool_id=tool_contract.tool_id,
+        arguments=arguments,
+        status="approved",
+        expires_at=(now + timedelta(minutes=5)).isoformat(),
+        contract_fingerprint=fingerprint,
+        authorization_policy="passkey",
+    )
+    request_id = request["id"]
+    proposal_digest = _request_digest(
+        tool_contract.tool_id, arguments, fingerprint
+    )
+    credential_id = str(uuid.uuid4())
+    challenge_id = str(uuid.uuid4())
+    authorization_id = str(uuid.uuid4())
+    database.connect().execute(
+        """
+        INSERT INTO webauthn_credentials
+            (id, user_id, credential_id, public_key, sign_count, created_at)
+        VALUES (?, ?, ?, ?, 0, ?)
+        """,
+        (credential_id, user_id, "credential-dispatch", b"public-key", now_text),
+    )
+    database.connect().execute(
+        """
+        INSERT INTO webauthn_challenges
+            (id, user_id, challenge_hash, purpose, request_id,
+             proposal_digest, contract_fingerprint, expires_at,
+             consumed_at, created_at)
+        VALUES (?, ?, ?, 'tool_approval', ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            challenge_id, user_id, hashlib.sha256(b"challenge").hexdigest(),
+            request_id, proposal_digest, fingerprint,
+            (now + timedelta(minutes=5)).isoformat(), now_text, now_text,
+        ),
+    )
+    database.connect().execute(
+        """
+        INSERT INTO tool_authorizations
+            (id, user_id, request_id, challenge_id, credential_id,
+             proposal_digest, contract_fingerprint, authorized_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            authorization_id, user_id, request_id, challenge_id,
+            credential_id, proposal_digest, fingerprint, now_text,
+        ),
+    )
+    database.connect().commit()
+    repository.claim_passkey_authorized_for_execution(
+        user_id, request_id, expected_contract_fingerprint=fingerprint
+    )
+    provider = FakeExternalToolProvider()
+    caps = provider.capabilities
+    snapshot = {
+        "idempotency_mode": caps.idempotency_mode.value,
+        "key_scope": caps.key_scope,
+        "idempotency_retention_seconds": caps.idempotency_retention_seconds,
+        "rejects_payload_mismatch": caps.rejects_payload_mismatch,
+        "concurrent_deduplication": caps.concurrent_deduplication,
+        "supports_outcome_lookup": caps.supports_outcome_lookup,
+    }
+    digest = execution_action_digest(
+        user_id=user_id,
+        tool_id=tool_contract.tool_id,
+        arguments=arguments,
+        contract_fingerprint=fingerprint,
+        adapter_id=caps.adapter_id,
+        adapter_version=caps.adapter_version,
+        provider_id=caps.provider_id,
+        provider_scope=caps.provider_scope,
+    )
+    repository.create_execution_binding(
+        user_id,
+        request_id,
+        idempotency_key=request_id,
+        action_digest=digest,
+        payload=arguments,
+        tool_contract_fingerprint=fingerprint,
+        adapter_id=caps.adapter_id,
+        adapter_version=caps.adapter_version,
+        provider_id=caps.provider_id,
+        provider_scope=caps.provider_scope,
+        capabilities=snapshot,
+    )
+    return database, repository, user_id, request_id, fingerprint, provider, snapshot
+
+
+def test_final_dispatch_gate_rechecks_passkey_and_audits_start(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        frozen = repository.begin_external_dispatch(
+            user_id,
+            request_id,
+            expected_contract_fingerprint=fingerprint,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_id=provider.capabilities.provider_id,
+            provider_scope=provider.capabilities.provider_scope,
+            capabilities=snapshot,
+        )
+        assert len(frozen["action_digest"]) == 64
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        assert [event["event_type"] for event in audit] == ["dispatch_started"]
+        with pytest.raises(PermissionError, match="already been initiated"):
+            repository.begin_external_dispatch(
+                user_id,
+                request_id,
+                expected_contract_fingerprint=fingerprint,
+                adapter_id=provider.capabilities.adapter_id,
+                adapter_version=provider.capabilities.adapter_version,
+                provider_id=provider.capabilities.provider_id,
+                provider_scope=provider.capabilities.provider_scope,
+                capabilities=snapshot,
+            )
+    finally:
+        database.close()
+
+
+def test_final_dispatch_gate_rejects_revoked_passkey(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        database.connect().execute(
+            "UPDATE webauthn_credentials SET revoked_at = ? WHERE user_id = ?",
+            (datetime.now(timezone.utc).isoformat(), user_id),
+        )
+        database.connect().commit()
+        with pytest.raises(PermissionError, match="passkey authorization"):
+            repository.begin_external_dispatch(
+                user_id,
+                request_id,
+                expected_contract_fingerprint=fingerprint,
+                adapter_id=provider.capabilities.adapter_id,
+                adapter_version=provider.capabilities.adapter_version,
+                provider_id=provider.capabilities.provider_id,
+                provider_scope=provider.capabilities.provider_scope,
+                capabilities=snapshot,
+            )
+        assert repository.get_dispatch_audit(user_id, request_id) == []
+    finally:
+        database.close()
