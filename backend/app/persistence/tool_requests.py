@@ -1226,6 +1226,179 @@ class ToolRequestRepository:
 
         return self.get(user_id, request_id)
 
+    def certify_external_adapter(
+        self,
+        *,
+        provider_id: str,
+        adapter_id: str,
+        adapter_version: str,
+        provider_scope: str,
+        capabilities: dict,
+        test_suite_version: str,
+        test_report_sha256: str,
+        evidence_references: list[str],
+        approved_by: str,
+        expires_at: str,
+    ) -> dict:
+        """Record an explicitly approved, evidence-backed adapter certification.
+
+        This is an operator/service-layer operation, not a public user endpoint.
+        The caller must authenticate and authorize the approver before invoking it.
+        """
+        identifiers = {
+            "provider_id": provider_id,
+            "adapter_id": adapter_id,
+            "adapter_version": adapter_version,
+            "provider_scope": provider_scope,
+            "test_suite_version": test_suite_version,
+            "approved_by": approved_by,
+        }
+        if any(not isinstance(value, str) or not value.strip()
+               for value in identifiers.values()):
+            raise ValueError("Certification identifiers must be non-empty strings")
+        if not isinstance(capabilities, dict) or not capabilities:
+            raise ValueError("A complete capability snapshot is required")
+        if (
+            not isinstance(test_report_sha256, str)
+            or len(test_report_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in test_report_sha256)
+        ):
+            raise ValueError("Test report SHA-256 digest is invalid")
+        if (
+            not isinstance(evidence_references, list)
+            or not evidence_references
+            or any(
+                not isinstance(item, str) or not item.strip() or len(item) > 512
+                for item in evidence_references
+            )
+        ):
+            raise ValueError("At least one bounded evidence reference is required")
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Certification expiry must be an ISO timestamp") from exc
+        if expiry.tzinfo is None:
+            raise ValueError("Certification expiry must include a timezone")
+        now = datetime.now(timezone.utc)
+        if expiry <= now:
+            raise ValueError("Certification expiry must be in the future")
+
+        certification_id = str(uuid.uuid4())
+        now_text = now.isoformat()
+        capabilities_json = json.dumps(
+            capabilities, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        )
+        evidence_json = json.dumps(
+            evidence_references, ensure_ascii=False, separators=(",", ":"),
+        )
+        with self.database.transaction(immediate=True):
+            self.database.connect().execute(
+                """
+                INSERT INTO external_adapter_certifications (
+                    id, provider_id, adapter_id, adapter_version, provider_scope,
+                    capabilities_json, test_suite_version, test_report_sha256,
+                    evidence_references_json, verified_at, expires_at,
+                    approved_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    certification_id, provider_id, adapter_id, adapter_version,
+                    provider_scope, capabilities_json, test_suite_version,
+                    test_report_sha256, evidence_json, now_text, expiry.isoformat(),
+                    approved_by, now_text,
+                ),
+            )
+        return self.get_external_adapter_certification(certification_id)
+
+    def get_external_adapter_certification(self, certification_id: str) -> dict:
+        row = self.database.connect().execute(
+            "SELECT * FROM external_adapter_certifications WHERE id = ?",
+            (certification_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Adapter certification not found")
+        return {
+            "id": row["id"],
+            "provider_id": row["provider_id"],
+            "adapter_id": row["adapter_id"],
+            "adapter_version": row["adapter_version"],
+            "provider_scope": row["provider_scope"],
+            "capabilities": json.loads(row["capabilities_json"]),
+            "test_suite_version": row["test_suite_version"],
+            "test_report_sha256": row["test_report_sha256"],
+            "evidence_references": json.loads(row["evidence_references_json"]),
+            "verified_at": row["verified_at"],
+            "expires_at": row["expires_at"],
+            "approved_by": row["approved_by"],
+            "created_at": row["created_at"],
+        }
+
+    def get_active_external_adapter_certification(
+        self,
+        *,
+        provider_id: str,
+        adapter_id: str,
+        adapter_version: str,
+        provider_scope: str,
+        capabilities: dict,
+    ) -> dict | None:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = self.database.connect().execute(
+            """
+            SELECT c.*
+            FROM external_adapter_certifications AS c
+            WHERE c.provider_id = ? AND c.adapter_id = ?
+              AND c.adapter_version = ? AND c.provider_scope = ?
+              AND c.expires_at > ?
+              AND NOT EXISTS (
+                SELECT 1 FROM external_adapter_certification_revocations AS r
+                WHERE r.certification_id = c.id
+              )
+            ORDER BY c.created_at DESC, c.id DESC
+            """,
+            (provider_id, adapter_id, adapter_version, provider_scope, now),
+        ).fetchall()
+        expected = json.dumps(
+            capabilities, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        )
+        for row in rows:
+            if row["capabilities_json"] == expected:
+                return self.get_external_adapter_certification(row["id"])
+        return None
+
+    def revoke_external_adapter_certification(
+        self, certification_id: str, *, revoked_by: str, reason: str
+    ) -> None:
+        if not isinstance(revoked_by, str) or not revoked_by.strip():
+            raise ValueError("Revoking operator must be identified")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise ValueError("Revocation reason must be 1 to 1000 characters")
+        with self.database.transaction(immediate=True):
+            exists = self.database.connect().execute(
+                "SELECT 1 FROM external_adapter_certifications WHERE id = ?",
+                (certification_id,),
+            ).fetchone()
+            if exists is None:
+                raise LookupError("Adapter certification not found")
+            already = self.database.connect().execute(
+                "SELECT 1 FROM external_adapter_certification_revocations "
+                "WHERE certification_id = ?",
+                (certification_id,),
+            ).fetchone()
+            if already is not None:
+                raise PermissionError("Adapter certification is already revoked")
+            self.database.connect().execute(
+                """
+                INSERT INTO external_adapter_certification_revocations
+                    (id, certification_id, revoked_by, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), certification_id, revoked_by, reason.strip(),
+                 _utc_now()),
+            )
+
     def cancel_pending(self, user_id: str, request_id: str) -> dict:
         """Cancel a pending or approved request before execution is claimed."""
         now = _utc_now()
