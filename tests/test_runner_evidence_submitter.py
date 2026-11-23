@@ -81,6 +81,13 @@ def test_runner_signs_payload_locally_and_never_sends_private_key(monkeypatch):
                 "expires_at": (now + timedelta(days=1)).isoformat(),
             }
         if path.endswith("/attestation-payload"):
+            # The client generates the nonce and timestamps for each run.
+            # The server signs exactly the values the client requested.
+            signed_payload["nonce"] = payload["nonce"]
+            signed_payload["issued_at"] = payload["issued_at"]
+            signed_payload["expires_at"] = payload["expires_at"]
+            assert payload["key_id"] == "trusted-key"
+            assert payload["runner_id"] == "isolated-runner"
             return signed_payload
         if path.endswith("/attest"):
             assert payload["nonce"] == signed_payload["nonce"]
