@@ -124,7 +124,7 @@ def verify_evidence_manifest(
     total = 0
     verified_hashes = {}
     for name, expected in declared.items():
-        if not isinstance(name, str) or not name or len(name) > 256 or "/" in name or "\\\\" in name or "\x00" in name:
+        if not isinstance(name, str) or not name or len(name) > 256 or "/" in name or "\\" in name or "\x00" in name:
             raise ValueError("Artifact names must be safe logical identifiers")
         if not isinstance(expected, str) or not _SHA256.fullmatch(expected):
             raise ValueError("Artifact digest must be lowercase SHA-256")
