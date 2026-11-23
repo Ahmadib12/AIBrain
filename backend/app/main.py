@@ -23,12 +23,14 @@ async def lifespan(app: FastAPI):
         interval_seconds=settings.tool_execution_recovery_interval_seconds,
         stale_after_seconds=settings.tool_execution_stale_after_seconds,
     )
-    await recovery_worker.start()
     try:
+        await recovery_worker.start()
         yield
     finally:
-        await recovery_worker.stop()
-        reset_app_state()
+        try:
+            await recovery_worker.stop()
+        finally:
+            reset_app_state()
 
 
 app = FastAPI(
