@@ -317,4 +317,4 @@ def test_cancelled_approved_request_cannot_be_claimed(tmp_path):
                 expected_contract_fingerprint="a" * 64,
             )
     finally:
-        database.close()
+        database.shutdown()
