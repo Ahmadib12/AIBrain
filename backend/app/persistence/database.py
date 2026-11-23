@@ -760,13 +760,42 @@ class Database:
                     public_key BLOB NOT NULL CHECK (length(public_key) = 32),
                     valid_from TEXT NOT NULL,
                     valid_until TEXT NOT NULL,
-                    revoked_at TEXT,
                     registered_by TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
 
                 CREATE INDEX idx_trusted_runner_keys_runner
                     ON trusted_runner_keys(runner_id, valid_until);
+
+                CREATE TABLE trusted_runner_key_revocations (
+                    id TEXT PRIMARY KEY,
+                    key_id TEXT NOT NULL,
+                    revoked_by TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(key_id) REFERENCES trusted_runner_keys(key_id)
+                );
+
+                CREATE INDEX idx_trusted_runner_key_revocations
+                    ON trusted_runner_key_revocations(key_id);
+
+                CREATE TRIGGER prevent_trusted_runner_key_update
+                BEFORE UPDATE ON trusted_runner_keys
+                BEGIN
+                    SELECT RAISE(ABORT, 'trusted runner keys are immutable');
+                END;
+
+                CREATE TRIGGER prevent_runner_key_revocation_update
+                BEFORE UPDATE ON trusted_runner_key_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner key revocations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_runner_key_revocation_delete
+                BEFORE DELETE ON trusted_runner_key_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner key revocations are immutable');
+                END;
 
                 CREATE TABLE external_adapter_evidence_attestations (
                     id TEXT PRIMARY KEY,
