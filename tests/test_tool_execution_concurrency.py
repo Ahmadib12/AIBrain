@@ -132,7 +132,7 @@ def test_concurrent_reconciliation_allows_exactly_one_terminal_transition(
             "failed",
         )
         assert audit["execution_reconciliation"]["reconciled_by"] == user_id
-        assert set(audit).count("execution_reconciliation") == 1
+        assert set(audit) == {"proposal", "execution_reconciliation"}
     finally:
         database_b.shutdown()
         database_a.shutdown()
@@ -302,6 +302,55 @@ def test_reconciliation_rolls_back_request_and_audit_if_attempt_update_fails(
         ).fetchone()
         audit = json.loads(row["audit_json"])
         assert "execution_reconciliation" not in audit
+    finally:
+        database_b.shutdown()
+        database_a.shutdown()
+
+
+
+def test_recovery_rolls_back_attempt_if_request_transition_fails(tmp_path):
+    import sqlite3
+
+    database_a, database_b, user_id, repository_a, _ = create_repositories(
+        tmp_path
+    )
+    try:
+        request = repository_a.create(
+            user_id,
+            tool_id="recovery-rollback-test",
+            arguments={"operation": "recover stale claim"},
+            status="approved",
+            authorization_policy="read_only",
+        )
+        repository_a.claim_for_execution(user_id, request["id"])
+        database_a.connect().execute(
+            """
+            CREATE TRIGGER reject_recovery_request_update
+            BEFORE UPDATE ON tool_requests
+            WHEN NEW.id = OLD.id AND NEW.status = 'outcome_unknown'
+            BEGIN
+                SELECT RAISE(ABORT, 'request update rejected');
+            END
+            """
+        )
+        database_a.connect().commit()
+
+        stale_before = (
+            datetime.now(timezone.utc) + timedelta(minutes=1)
+        ).isoformat()
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="request update rejected",
+        ):
+            repository_a.recover_stale_execution_attempts(
+                stale_before=stale_before
+            )
+
+        persisted = repository_a.get(user_id, request["id"])
+        attempt = repository_a.get_execution_attempt(user_id, request["id"])
+        assert persisted["status"] == "executing"
+        assert attempt["status"] == "claimed"
+        assert attempt["finished_at"] is None
     finally:
         database_b.shutdown()
         database_a.shutdown()
