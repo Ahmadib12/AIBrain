@@ -211,6 +211,7 @@ def test_matching_approved_certification_is_active(repository):
         certificate["evidence_references"][0].split(":", 1)[1]
     )
     assert certificate["test_report_sha256"] == package["manifest_sha256"]
+    assert package["provenance"] == "runner_attested"
 
 
 @pytest.mark.parametrize(
@@ -409,4 +410,47 @@ def test_certification_requires_trusted_runner_attestation(repository):
         repository.certify_external_adapter(
             evidence_package_id=package["id"], approved_by="security-reviewer",
             expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        )
+
+
+
+def test_runner_identity_must_match_registered_key(repository):
+    package = verify(repository)
+    public_key, _ = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    repository.register_trusted_runner_key(
+        key_id="runner-key-identity", runner_id="approved-runner",
+        public_key=public_key,
+        valid_from=(now - timedelta(minutes=1)).isoformat(),
+        valid_until=(now + timedelta(days=1)).isoformat(),
+        registered_by="security-admin",
+    )
+    with pytest.raises(PermissionError, match="does not match"):
+        repository.attest_external_adapter_evidence(
+            package["id"], key_id="runner-key-identity",
+            runner_id="different-runner", nonce="nonce_" + "z" * 32,
+            issued_at=now.isoformat(),
+            expires_at=(now + timedelta(hours=1)).isoformat(),
+            signature="invalid-signature",
+        )
+
+
+def test_runner_key_expiry_is_enforced(repository):
+    package = verify(repository)
+    public_key, _ = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    repository.register_trusted_runner_key(
+        key_id="runner-key-expired", runner_id="expired-runner",
+        public_key=public_key,
+        valid_from=(now - timedelta(days=2)).isoformat(),
+        valid_until=(now - timedelta(days=1)).isoformat(),
+        registered_by="security-admin",
+    )
+    with pytest.raises(ValueError, match="expired"):
+        repository.register_trusted_runner_key(
+            key_id="runner-key-already-expired", runner_id="expired-runner",
+            public_key=public_key,
+            valid_from=(now - timedelta(days=2)).isoformat(),
+            valid_until=(now - timedelta(days=1)).isoformat(),
+            registered_by="security-admin",
         )
