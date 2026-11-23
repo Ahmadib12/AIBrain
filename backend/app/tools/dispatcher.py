@@ -30,11 +30,35 @@ def _capability_snapshot(adapter: ExternalToolAdapter) -> dict[str, Any]:
     }
 
 
+class ExternalToolAdapterRegistry:
+    """Trusted, application-configured adapter registry keyed by tool ID."""
+
+    def __init__(self) -> None:
+        self._adapters: dict[str, ExternalToolAdapter] = {}
+
+    def register(self, tool_id: str, adapter: ExternalToolAdapter) -> None:
+        if not isinstance(tool_id, str) or not tool_id.strip():
+            raise ValueError("Tool ID must be a non-empty string")
+        if not isinstance(adapter, ExternalToolAdapter):
+            raise TypeError("A conforming external adapter is required")
+        if tool_id in self._adapters:
+            raise ValueError("An external adapter is already registered for this tool")
+        self._adapters[tool_id] = adapter
+
+    def get(self, tool_id: str) -> ExternalToolAdapter | None:
+        return self._adapters.get(tool_id)
+
+
 class ExternalToolDispatcher:
     """One-shot external dispatcher; unknown outcomes are never retried."""
 
-    def __init__(self, repository: ToolRequestRepository) -> None:
+    def __init__(
+        self,
+        repository: ToolRequestRepository,
+        adapters: ExternalToolAdapterRegistry,
+    ) -> None:
         self.repository = repository
+        self.adapters = adapters
 
     def dispatch(
         self,
@@ -42,15 +66,15 @@ class ExternalToolDispatcher:
         request_id: str,
         *,
         contract: ToolContract,
-        adapter: ExternalToolAdapter,
     ) -> dict:
         if not isinstance(contract, ToolContract):
             raise TypeError("A registered ToolContract is required")
         if contract.risk is not ToolRisk.STATE_CHANGE:
             raise PermissionError("External dispatch requires a state-change contract")
-        if not isinstance(adapter, ExternalToolAdapter):
-            raise TypeError("A conforming external adapter is required")
         fingerprint = contract_fingerprint(contract)
+        adapter = self.adapters.get(contract.tool_id)
+        if adapter is None:
+            raise PermissionError("No trusted external adapter is registered")
         proposed = self.repository.get(user_id, request_id)
         if proposed["tool_id"] != contract.tool_id:
             raise PermissionError("Tool contract does not match the authorized request")
@@ -190,12 +214,12 @@ class ExternalToolDispatcher:
         self,
         user_id: str,
         request_id: str,
-        *,
-        adapter: ExternalToolAdapter,
     ) -> ExternalToolExecutionOutcome:
         """Read provider state only; this method never executes or retries."""
-        if not isinstance(adapter, ExternalToolAdapter):
-            raise TypeError("A conforming external adapter is required")
+        request = self.repository.get(user_id, request_id)
+        adapter = self.adapters.get(request["tool_id"])
+        if adapter is None:
+            raise PermissionError("No trusted external adapter is registered")
         binding = self.repository.get_execution_binding(user_id, request_id)
         attempt = self.repository.get_execution_attempt(user_id, request_id)
         if attempt["status"] != "outcome_unknown":
