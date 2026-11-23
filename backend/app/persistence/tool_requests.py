@@ -559,7 +559,7 @@ class ToolRequestRepository:
                 if attempt.rowcount != 1:
                     continue
 
-                connection.execute(
+                request_update = connection.execute(
                     """
                     UPDATE tool_requests
                     SET status = 'outcome_unknown', updated_at = ?
@@ -568,6 +568,12 @@ class ToolRequestRepository:
                     """,
                     (now, row["request_id"], row["user_id"]),
                 )
+                if request_update.rowcount != 1:
+                    # Roll back the attempt transition as well. A recovered
+                    # attempt and its owning request must never diverge.
+                    raise PermissionError(
+                        "Tool request is no longer awaiting recovery"
+                    )
                 recovered += 1
         return recovered
 
