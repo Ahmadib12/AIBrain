@@ -389,7 +389,7 @@ def claimed_passkey_dispatch(tmp_path):
         registered_by="test-security-admin",
     )
     issued_at = now.isoformat()
-    attestation_expires = (now + timedelta(days=3)).isoformat()
+    attestation_expires = (now + timedelta(hours=20)).isoformat()
     nonce = "nonce_" + uuid.uuid4().hex
     payload = build_attestation_payload(
         package_id=package["id"],
@@ -410,7 +410,7 @@ def claimed_passkey_dispatch(tmp_path):
     )
     repository.certify_external_adapter(
         evidence_package_id=package["id"], approved_by="test-operator",
-        expires_at=(now + timedelta(days=2)).isoformat(),
+        expires_at=(now + timedelta(hours=12)).isoformat(),
     )
     return database, repository, user_id, request_id, fingerprint, provider, snapshot
 
