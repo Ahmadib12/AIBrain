@@ -170,3 +170,12 @@ pytest -q tests/test_tool_execution_concurrency.py
 The tests verify that request and attempt state remain aligned and that only one
 reconciliation can transition an uncertain attempt. Recovery remains conservative:
 it records uncertainty and never retries an external operation.
+
+Application lifespan integration tests are in `tests/test_app_lifespan.py`.
+They verify that the recovery worker starts before the application serves,
+stops before shared application state is reset, and that state cleanup still
+runs if worker startup or shutdown raises an exception. Run them with:
+
+```bash
+pytest -q tests/test_app_lifespan.py
+```
