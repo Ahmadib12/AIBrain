@@ -618,8 +618,12 @@ class Database:
                     adapter_id TEXT NOT NULL,
                     adapter_version TEXT NOT NULL,
                     provider_scope TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
                     capabilities_json TEXT NOT NULL,
                     test_suite_version TEXT NOT NULL,
+                    conformance_results_json TEXT NOT NULL,
                     test_report_sha256 TEXT NOT NULL
                         CHECK (length(test_report_sha256) = 64),
                     evidence_references_json TEXT NOT NULL,
@@ -632,7 +636,7 @@ class Database:
                 CREATE INDEX idx_external_adapter_certification_lookup
                     ON external_adapter_certifications(
                         provider_id, adapter_id, adapter_version,
-                        provider_scope, expires_at
+                        provider_scope, tool_id, tool_contract_fingerprint, expires_at
                     );
 
                 CREATE TABLE external_adapter_certification_revocations (
