@@ -441,6 +441,70 @@ class Database:
                 END;
                 """,
             ),
+            (
+                10,
+                """
+                CREATE TABLE tool_execution_bindings (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    action_digest TEXT NOT NULL
+                        CHECK (length(action_digest) = 64),
+                    payload_json TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_execution_bindings_user
+                    ON tool_execution_bindings(user_id);
+
+                CREATE TRIGGER prevent_tool_execution_binding_insert_unclaimed
+                BEFORE INSERT ON tool_execution_bindings
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND r.status = 'executing'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'claimed'
+                      AND a.idempotency_key = NEW.idempotency_key
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'dispatch binding requires an active claimed execution'
+                    );
+                END;
+
+                CREATE TRIGGER prevent_tool_execution_binding_update
+                BEFORE UPDATE ON tool_execution_bindings
+                BEGIN
+                    SELECT RAISE(ABORT, 'tool execution bindings are immutable');
+                END;
+
+                CREATE TRIGGER prevent_tool_execution_binding_delete
+                BEFORE DELETE ON tool_execution_bindings
+                BEGIN
+                    SELECT RAISE(ABORT, 'tool execution bindings are immutable');
+                END;
+                """,
+            ),
         )
 
         with self._lock:
