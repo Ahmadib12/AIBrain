@@ -89,7 +89,7 @@ def certify(repository, **overrides):
     issued_at = now.isoformat()
     attestation_expires = min(
         datetime.fromisoformat(package["expires_at"]),
-        now + timedelta(hours=1),
+        now + timedelta(days=5),
     ).isoformat()
     payload = build_attestation_payload(
         package_id=package["id"],
