@@ -436,24 +436,24 @@ def test_runner_identity_must_match_registered_key(repository):
         )
 
 
-def test_runner_key_expiry_is_enforced(repository):
+def test_attestation_cannot_outlive_trusted_runner_key(repository):
     package = verify(repository)
     public_key, _ = generate_test_keypair()
     now = datetime.now(timezone.utc)
     repository.register_trusted_runner_key(
-        key_id="runner-key-expired", runner_id="expired-runner",
+        key_id="runner-key-short-lived", runner_id="short-lived-runner",
         public_key=public_key,
-        valid_from=(now - timedelta(days=2)).isoformat(),
-        valid_until=(now - timedelta(days=1)).isoformat(),
+        valid_from=(now - timedelta(minutes=1)).isoformat(),
+        valid_until=(now + timedelta(minutes=30)).isoformat(),
         registered_by="security-admin",
     )
-    with pytest.raises(ValueError, match="expired"):
-        repository.register_trusted_runner_key(
-            key_id="runner-key-already-expired", runner_id="expired-runner",
-            public_key=public_key,
-            valid_from=(now - timedelta(days=2)).isoformat(),
-            valid_until=(now - timedelta(days=1)).isoformat(),
-            registered_by="security-admin",
+    with pytest.raises(PermissionError, match="outside the trusted key validity"):
+        repository.attest_external_adapter_evidence(
+            package["id"], key_id="runner-key-short-lived",
+            runner_id="short-lived-runner", nonce="nonce_" + "s" * 32,
+            issued_at=now.isoformat(),
+            expires_at=(now + timedelta(hours=1)).isoformat(),
+            signature="invalid-signature",
         )
 
 
