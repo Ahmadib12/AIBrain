@@ -289,12 +289,19 @@ class ToolRequestRepository:
                     a.contract_fingerprint AS authorized_contract_fingerprint,
                     a.credential_id AS authorized_credential_id,
                     c.revoked_at AS credential_revoked_at,
+                    h.purpose AS challenge_purpose,
+                    h.request_id AS challenge_request_id,
+                    h.proposal_digest AS challenge_proposal_digest,
+                    h.contract_fingerprint AS challenge_contract_fingerprint,
+                    h.consumed_at AS challenge_consumed_at,
                     u.deleted_at AS user_deleted_at
                 FROM tool_requests AS r
                 LEFT JOIN tool_authorizations AS a
                     ON a.request_id = r.id AND a.user_id = r.user_id
                 LEFT JOIN webauthn_credentials AS c
                     ON c.id = a.credential_id AND c.user_id = a.user_id
+                LEFT JOIN webauthn_challenges AS h
+                    ON h.id = a.challenge_id AND h.user_id = a.user_id
                 LEFT JOIN users AS u ON u.id = r.user_id
                 WHERE r.id = ? AND r.user_id = ?
                 """,
@@ -315,6 +322,12 @@ class ToolRequestRepository:
                 raise PermissionError("A valid passkey authorization is required")
             if row["credential_revoked_at"] is not None:
                 raise PermissionError("Authorizing passkey has been revoked")
+            if (
+                row["challenge_purpose"] != "tool_approval"
+                or row["challenge_request_id"] != request_id
+                or row["challenge_consumed_at"] is None
+            ):
+                raise PermissionError("Passkey authorization challenge is invalid")
 
             if (
                 row["contract_fingerprint"] != expected_contract_fingerprint
@@ -354,7 +367,12 @@ class ToolRequestRepository:
                 != expected_contract_fingerprint
             ):
                 raise PermissionError("Tool request proposal has changed")
-            if row["authorized_proposal_digest"] != current_digest:
+            if (
+                row["authorized_proposal_digest"] != current_digest
+                or row["challenge_proposal_digest"] != current_digest
+                or row["challenge_contract_fingerprint"]
+                != expected_contract_fingerprint
+            ):
                 raise PermissionError("Passkey authorization does not match this proposal")
 
             claimed = connection.execute(
