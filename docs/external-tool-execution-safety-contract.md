@@ -334,3 +334,10 @@ project test extra, compiles backend and tests, and runs the complete pytest
 suite on Python 3.11 and 3.14 for development/main pushes and pull requests.
 The workflow itself must still complete successfully on GitHub before Phase 1
 can be marked CI-verified.
+
+
+The runner evidence route family has a dedicated `AIBRAIN_RUNNER_EVIDENCE_MAX_REQUEST_BODY_BYTES`
+limit (15 MiB default), while ordinary API requests retain the 1 MiB default.
+The conformance verifier still caps each artifact at 2 MiB, total artifact
+bytes at 10 MiB, and artifact count at 64. A request-path prefix cannot extend
+the larger body limit to similarly named unrelated routes.
