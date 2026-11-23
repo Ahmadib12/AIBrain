@@ -108,6 +108,22 @@ def test_timeout_after_acceptance_is_resolved_by_lookup_without_resubmit():
     assert provider.lookup_count == 1
 
 
+def test_failure_before_acceptance_leaves_no_provider_effect():
+    def reject_before_acceptance(action):
+        raise ConnectionError("simulated connection failure before acceptance")
+
+    provider = FakeExternalToolProvider(before_accept=reject_before_acceptance)
+    action = make_action()
+
+    with pytest.raises(ConnectionError, match="before acceptance"):
+        provider.execute(action)
+
+    outcome = provider.lookup(action.idempotency_key)
+    assert outcome.status is ExternalToolOutcomeStatus.UNKNOWN
+    assert provider.dispatch_count == 0
+    assert provider.effect_count == 0
+
+
 def test_lookup_for_unseen_key_is_unknown_and_never_dispatches():
     provider = FakeExternalToolProvider()
 
