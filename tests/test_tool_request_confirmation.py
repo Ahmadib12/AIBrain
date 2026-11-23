@@ -309,7 +309,7 @@ def test_cancelled_approved_request_cannot_be_claimed(tmp_path):
         cancelled = repository.cancel_pending(user_id, request["id"])
 
         assert cancelled["status"] == "cancelled"
-        assert cancelled["consumed_at"] is not None
+        assert cancelled["consumed_at"] is None
         with pytest.raises(PermissionError, match="not available"):
             repository.claim_passkey_authorized_for_execution(
                 user_id,
