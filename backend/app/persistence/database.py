@@ -498,11 +498,6 @@ class Database:
                     SELECT RAISE(ABORT, 'tool execution bindings are immutable');
                 END;
 
-                CREATE TRIGGER prevent_tool_execution_binding_delete
-                BEFORE DELETE ON tool_execution_bindings
-                BEGIN
-                    SELECT RAISE(ABORT, 'tool execution bindings are immutable');
-                END;
                 """,
             ),
         )
