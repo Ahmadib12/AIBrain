@@ -200,19 +200,21 @@ async def verify_passkey_approval(
 ) -> dict:
     """Verify a passkey assertion and return sanitized authorization state."""
     try:
-        approved = get_app_state().webauthn_service.verify_tool_approval(
+        state = get_app_state()
+        state.webauthn_service.verify_tool_approval(
             user_id=user["id"],
             request_id=request_id,
             challenge_record_id=request.challenge_record_id,
             credential_record_id=request.credential_record_id,
             assertion=request.assertion,
         )
+        approved_request = state.tool_requests.get(user["id"], request_id)
         return {
-            "id": approved["id"],
-            "tool_id": approved["tool_id"],
-            "arguments": approved["arguments"],
-            "status": approved["status"],
-            "expires_at": approved["expires_at"],
+            "id": approved_request["id"],
+            "tool_id": approved_request["tool_id"],
+            "arguments": approved_request["arguments"],
+            "status": approved_request["status"],
+            "expires_at": approved_request["expires_at"],
         }
     except LookupError:
         raise HTTPException(
