@@ -1,3 +1,4 @@
+import copy
 import threading
 from dataclasses import dataclass
 from typing import Callable
@@ -94,7 +95,7 @@ class FakeExternalToolProvider:
                 return ExternalToolExecutionOutcome(
                     status=ExternalToolOutcomeStatus.SUCCEEDED,
                     operation_reference=existing.operation_reference,
-                    result=dict(existing.result),
+                    result=copy.deepcopy(existing.result),
                     evidence_reference="fake-provider-idempotency-record",
                 )
 
@@ -118,7 +119,7 @@ class FakeExternalToolProvider:
             return ExternalToolExecutionOutcome(
                 status=ExternalToolOutcomeStatus.SUCCEEDED,
                 operation_reference=operation_reference,
-                result=dict(result),
+                result=copy.deepcopy(result),
                 evidence_reference="fake-provider-acceptance",
             )
 
@@ -136,6 +137,6 @@ class FakeExternalToolProvider:
             return ExternalToolExecutionOutcome(
                 status=ExternalToolOutcomeStatus.SUCCEEDED,
                 operation_reference=record.operation_reference,
-                result=dict(record.result),
+                result=copy.deepcopy(record.result),
                 evidence_reference="fake-provider-lookup",
             )
