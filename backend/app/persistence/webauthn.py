@@ -831,11 +831,11 @@ class WebAuthnRepository:
             request_update = connection.execute(
                 """
                 UPDATE tool_requests
-                SET status = 'executing', consumed_at = ?, updated_at = ?
+                SET status = 'approved', updated_at = ?
                 WHERE id = ? AND user_id = ?
                   AND status = 'pending' AND consumed_at IS NULL
                 """,
-                (now_text, now_text, request_id, user_id),
+                (now_text, request_id, user_id),
             )
             if request_update.rowcount != 1:
                 raise PermissionError("Tool request is no longer awaiting authorization")
