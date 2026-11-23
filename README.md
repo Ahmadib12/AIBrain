@@ -251,9 +251,35 @@ provider/adapter/version/scope, sandbox label, and validity window. Certificatio
 now requires a valid, non-revoked runner attestation and cannot outlive it.
 Active certification lookup rechecks the signature and key status.
 
-AIBrain never stores runner private keys. Key registration and revocation are
-operator/service-layer operations, not public API endpoints. A signature proves
-possession of a registered key, not that a sandbox was genuine or uncompromised;
-hardware-backed remote attestation and deployment of an independently trusted
-runner remain future operational work. Human certification approval remains
-a separate step. Production external execution remains disabled.
+AIBrain never stores runner private keys. The runner ingestion API uses
+`AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN`, while key registration, key revocation,
+certification approval, and certification revocation use the separate
+`AIBRAIN_PROVIDER_OPERATOR_TOKEN`. Both secrets must be at least 32 characters
+and must be provisioned independently through the deployment secret manager.
+
+Runner API:
+- `POST /api/v1/tools/runner/evidence` — submit the manifest and base64 artifacts.
+- `POST /api/v1/tools/runner/evidence/{package_id}/attestation-payload` — obtain the exact canonical statement for the runner to sign locally.
+- `POST /api/v1/tools/runner/evidence/{package_id}/attest` — submit the Ed25519 signature and consume the one-time nonce.
+
+Operator API:
+- `POST /api/v1/tools/operator/trusted-runner-keys` — register a public key.
+- `POST /api/v1/tools/operator/trusted-runner-keys/{key_id}/revoke` — revoke a key.
+- `POST /api/v1/tools/operator/evidence/{package_id}/certify` — approve certification separately.
+- `POST /api/v1/tools/operator/certifications/{certification_id}/revoke` — revoke certification.
+
+Runner endpoints require `X-AIBrain-Runner-Token`; operator endpoints require
+`X-AIBrain-Operator-Token`. The runner token cannot register or revoke keys or
+approve certifications. Private signing keys remain outside AIBrain. The
+operator credential is currently a shared bearer secret; production deployments
+still need individual operator identities, stronger audit attribution, secret
+rotation, and a controlled key-registration ceremony.
+
+A signature proves possession of a registered key, not that a sandbox was
+genuine or uncompromised. Hardware-backed remote attestation and deployment of
+an independently trusted runner remain future operational work. Production
+external execution remains disabled.
+
+GitHub Actions CI is defined in `.github/workflows/ci.yml` and runs the full
+test suite on Python 3.11 and 3.14 for pushes to `main` and `dev/**` branches
+and for pull requests.
