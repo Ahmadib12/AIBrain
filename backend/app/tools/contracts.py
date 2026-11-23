@@ -199,15 +199,17 @@ def execution_action_digest(
     contract_fingerprint: str,
     adapter_id: str,
     adapter_version: str,
+    provider_id: str,
     provider_scope: str,
 ) -> str:
-    """Bind one logical action to its owner, contract, adapter, and provider scope."""
+    """Bind one logical action to its owner, contract, adapter, provider, and scope."""
     values = {
         "user_id": user_id,
         "tool_id": tool_id,
         "contract_fingerprint": contract_fingerprint,
         "adapter_id": adapter_id,
         "adapter_version": adapter_version,
+        "provider_id": provider_id,
         "provider_scope": provider_scope,
     }
     if any(
