@@ -69,8 +69,37 @@ def verify_evidence_manifest(
     fingerprint = manifest["tool_contract_fingerprint"]
     if not isinstance(fingerprint, str) or not _SHA256.fullmatch(fingerprint):
         raise ValueError("Invalid tool contract fingerprint")
-    if not isinstance(manifest["capabilities"], dict) or not manifest["capabilities"]:
+    capability_fields = {
+        "idempotency_mode", "key_scope", "idempotency_retention_seconds",
+        "rejects_payload_mismatch", "concurrent_deduplication",
+        "supports_outcome_lookup",
+    }
+    capabilities = manifest["capabilities"]
+    if not isinstance(capabilities, dict) or set(capabilities) != capability_fields:
         raise ValueError("A complete capability snapshot is required")
+    if capabilities["idempotency_mode"] not in ("none", "provider_enforced"):
+        raise ValueError("Capability idempotency mode is invalid")
+    for field in ("rejects_payload_mismatch", "concurrent_deduplication", "supports_outcome_lookup"):
+        if not isinstance(capabilities[field], bool):
+            raise ValueError(f"Capability {field} must be boolean")
+    if capabilities["idempotency_mode"] == "provider_enforced":
+        if (
+            not isinstance(capabilities["key_scope"], str)
+            or not capabilities["key_scope"].strip()
+            or isinstance(capabilities["idempotency_retention_seconds"], bool)
+            or not isinstance(capabilities["idempotency_retention_seconds"], int)
+            or capabilities["idempotency_retention_seconds"] <= 0
+            or capabilities["rejects_payload_mismatch"] is not True
+            or capabilities["concurrent_deduplication"] is not True
+        ):
+            raise ValueError("Provider-enforced idempotency snapshot is incomplete")
+    elif (
+        capabilities["key_scope"] is not None
+        or capabilities["idempotency_retention_seconds"] is not None
+        or capabilities["rejects_payload_mismatch"] is True
+        or capabilities["concurrent_deduplication"] is True
+    ):
+        raise ValueError("Non-idempotent snapshot cannot claim deduplication")
     if not isinstance(manifest["sandbox_environment"], str):
         raise ValueError("Sandbox environment is required")
 
@@ -95,7 +124,7 @@ def verify_evidence_manifest(
     total = 0
     verified_hashes = {}
     for name, expected in declared.items():
-        if not isinstance(name, str) or not name or len(name) > 256 or "/" in name or "\\\\" in name:
+        if not isinstance(name, str) or not name or len(name) > 256 or "/" in name or "\\\\" in name or "\x00" in name:
             raise ValueError("Artifact names must be safe logical identifiers")
         if not isinstance(expected, str) or not _SHA256.fullmatch(expected):
             raise ValueError("Artifact digest must be lowercase SHA-256")
@@ -120,6 +149,7 @@ def verify_evidence_manifest(
             not isinstance(result, dict)
             or set(result) != {"status", "artifact"}
             or result["status"] != "passed"
+            or not isinstance(result["artifact"], str)
             or result["artifact"] not in verified_hashes
         ):
             raise ValueError(f"Missing, failed, or ungrounded conformance test: {test_id}")
