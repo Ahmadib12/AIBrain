@@ -81,6 +81,7 @@ def runner_scope(package):
         "adapter_version": package["adapter_version"],
         "provider_scope": package["provider_scope"],
         "tool_id": package["tool_id"],
+        "tool_contract_fingerprint": package["tool_contract_fingerprint"],
     }
 
 def certify(repository, **overrides):
