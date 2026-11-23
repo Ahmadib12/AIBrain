@@ -596,3 +596,32 @@ def test_passkey_api_completes_real_signed_approval(
     unchanged_request = state.tool_requests.get(user_id, request["id"])
     assert unchanged_request["status"] == "approved"
     assert unchanged_request["consumed_at"] is None
+
+
+
+def test_owner_can_cancel_approved_passkey_request(client: TestClient) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "passkey-cancel-approved@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+    request = state.tool_requests.create(
+        user_id,
+        tool_id="state-change-api-test",
+        arguments={"value": "approved but not executed"},
+        status="approved",
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat(),
+        contract_fingerprint="a" * 64,
+        authorization_policy="passkey",
+    )
+
+    response = client.post(
+        f"/api/v1/tools/requests/{request['id']}/cancel",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    persisted = state.tool_requests.get(user_id, request["id"])
+    assert persisted["status"] == "cancelled"
+    assert persisted["consumed_at"] is not None
