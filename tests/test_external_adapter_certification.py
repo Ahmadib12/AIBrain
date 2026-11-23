@@ -205,6 +205,38 @@ def test_revoked_certification_is_not_active(repository):
         )
 
 
+
+def test_active_certification_fails_closed_if_persisted_artifact_is_tampered(repository):
+    certificate = certify(repository)
+    package_id = certificate["evidence_references"][0].split(":", 1)[1]
+    connection = repository.database.connect()
+    connection.execute(
+        "DROP TRIGGER prevent_external_adapter_evidence_artifact_update"
+    )
+    connection.execute(
+        """
+        UPDATE external_adapter_evidence_artifacts
+        SET content = ?
+        WHERE package_id = ? AND artifact_name = ?
+        """,
+        (b"tampered after verification", package_id, "sandbox-report.json"),
+    )
+    connection.commit()
+
+    assert lookup(repository) is None
+
+
+def test_verified_evidence_records_are_immutable(repository):
+    package = verify(repository)
+    connection = repository.database.connect()
+    with pytest.raises(Exception):
+        connection.execute(
+            "UPDATE external_adapter_evidence_packages SET provenance = 'provider_signed' WHERE id = ?",
+            (package["id"],),
+        )
+    connection.rollback()
+
+
 def test_certification_cannot_outlive_evidence_package(repository):
     package = verify(repository)
     with pytest.raises(ValueError, match="outlive"):
