@@ -275,6 +275,139 @@ class ToolRequestRepository:
 
         return self.get(user_id, request_id)
 
+    def create_execution_binding(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        idempotency_key: str,
+        action_digest: str,
+        payload: dict,
+        tool_contract_fingerprint: str,
+        adapter_id: str,
+        adapter_version: str,
+        provider_id: str,
+        provider_scope: str,
+        capabilities: dict,
+    ) -> dict:
+        """Persist the immutable provider/action binding for an already claimed request."""
+        identifiers = {
+            "idempotency_key": idempotency_key,
+            "action_digest": action_digest,
+            "tool_contract_fingerprint": tool_contract_fingerprint,
+            "adapter_id": adapter_id,
+            "adapter_version": adapter_version,
+            "provider_id": provider_id,
+            "provider_scope": provider_scope,
+        }
+        for name, value in identifiers.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        for name in ("action_digest", "tool_contract_fingerprint"):
+            value = identifiers[name]
+            if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+        if not isinstance(payload, dict) or not isinstance(capabilities, dict):
+            raise ValueError("Binding payload and capabilities must be objects")
+
+        payload_json = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        )
+        capabilities_json = json.dumps(
+            capabilities, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        )
+        now_text = _utc_now()
+
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT r.tool_id, r.arguments_json, r.contract_fingerprint,
+                       r.status, r.consumed_at, a.status AS attempt_status,
+                       a.idempotency_key
+                FROM tool_requests AS r
+                JOIN tool_execution_attempts AS a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                WHERE r.id = ? AND r.user_id = ?
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("Claimed tool execution not found")
+            if (
+                row["status"] != "executing"
+                or row["consumed_at"] is None
+                or row["attempt_status"] != "claimed"
+            ):
+                raise PermissionError("Tool execution is not awaiting dispatch binding")
+            if idempotency_key != request_id or row["idempotency_key"] != request_id:
+                raise PermissionError("Dispatch binding idempotency key does not match request")
+            if row["contract_fingerprint"] != tool_contract_fingerprint:
+                raise PermissionError("Tool contract fingerprint does not match request")
+
+            persisted_arguments = json.loads(row["arguments_json"])
+            persisted_json = json.dumps(
+                persisted_arguments, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            )
+            if persisted_json != payload_json:
+                raise PermissionError("Dispatch payload differs from authorized request")
+
+            digest_input = {
+                "user_id": user_id,
+                "tool_id": row["tool_id"],
+                "contract_fingerprint": tool_contract_fingerprint,
+                "adapter_id": adapter_id,
+                "adapter_version": adapter_version,
+                "provider_scope": provider_scope,
+                "arguments": persisted_arguments,
+            }
+            expected_digest = hashlib.sha256(
+                json.dumps(
+                    digest_input, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if action_digest != expected_digest:
+                raise PermissionError("Dispatch action digest does not match authorized action")
+
+            binding_id = str(uuid.uuid4())
+            connection.execute(
+                """
+                INSERT INTO tool_execution_bindings (
+                    id, user_id, request_id, idempotency_key, action_digest,
+                    payload_json, tool_contract_fingerprint, adapter_id,
+                    adapter_version, provider_id, provider_scope,
+                    capabilities_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    binding_id, user_id, request_id, idempotency_key,
+                    action_digest, payload_json, tool_contract_fingerprint,
+                    adapter_id, adapter_version, provider_id, provider_scope,
+                    capabilities_json, now_text,
+                ),
+            )
+
+        return self.get_execution_binding(user_id, request_id)
+
+    def get_execution_binding(self, user_id: str, request_id: str) -> dict:
+        row = self.database.connect().execute(
+            """
+            SELECT * FROM tool_execution_bindings
+            WHERE request_id = ? AND user_id = ?
+            """,
+            (request_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Tool execution binding not found")
+        result = dict(row)
+        result["payload"] = json.loads(result.pop("payload_json"))
+        result["capabilities"] = json.loads(result.pop("capabilities_json"))
+        return result
+
     def claim_passkey_authorized_for_execution(
         self,
         user_id: str,
