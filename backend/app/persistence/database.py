@@ -374,7 +374,10 @@ class Database:
                             'unknown',
                             'read_only',
                             'passkey'
-                
+                        )
+                    );
+                """,
+            ),
             (
                 9,
                 """
@@ -436,10 +439,6 @@ class Database:
                         'tool execution attempt requires an active request owner'
                     );
                 END;
-                """,
-            ),
-        )
-                    );
                 """,
             ),
         )
