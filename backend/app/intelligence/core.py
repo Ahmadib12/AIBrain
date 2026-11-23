@@ -17,6 +17,8 @@ from backend.app.intelligence.adapters import (
     AdapterResult,
     CapabilityAdapter,
     InvalidAdapterResultError,
+    ProviderRoutingAdapter,
+    ProviderRoutingAdapterError,
 )
 from backend.app.intelligence.capabilities import (
     CapabilityMetadata,
@@ -24,7 +26,7 @@ from backend.app.intelligence.capabilities import (
     CapabilityUnavailableError,
 )
 from backend.app.intelligence.classifier import DeterministicTaskClassifier
-from backend.app.intelligence.context import RequestContext
+from backend.app.intelligence.context import ExecutionState, RequestContext
 from backend.app.intelligence.trace import (
     DecisionReasonCode,
     DecisionTraceBuilder,
@@ -38,6 +40,11 @@ _PUBLIC_METADATA_TYPES = {
     "direction": str,
 }
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}\Z")
+
+
+def _task_is_cancelled() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
 
 
 def _public_metadata(result: AdapterResult) -> dict[str, bool | str]:
@@ -279,23 +286,95 @@ class OrchestrationCore(CentralIntelligenceCore):
             )
         )
 
-        context = RequestContext(validated.context_id)
+        loop = asyncio.get_running_loop()
+        execution_state = ExecutionState(
+            deadline=loop.time() + self.timeout_seconds,
+        )
+        context = RequestContext(
+            validated.context_id,
+            execution_state=execution_state,
+        )
         for message in validated.messages:
             context.add_turn(message.role, message.content)
 
+        def record_routing_summary() -> None:
+            if context.routing_summary is None:
+                return
+            record_trace(
+                lambda builder: builder.record_routing_summary(
+                    context.routing_summary,
+                )
+            )
+
         try:
+            remaining_budget = execution_state.remaining_budget(loop)
+            if remaining_budget <= 0:
+                record_routing_summary()
+                return finish(IntelligenceResponse(
+                    task_type=classification.task_type,
+                    status=ResponseStatus.ERROR,
+                    error_code="REQUEST_TIMEOUT",
+                    warnings=("The overall execution deadline was exhausted",),
+                ))
             result = await asyncio.wait_for(
                 adapter.execute(validated, context),
-                timeout=self.timeout_seconds,
+                timeout=remaining_budget,
             )
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
+            if _task_is_cancelled():
+                raise
+            if isinstance(adapter, ProviderRoutingAdapter):
+                record_routing_summary()
+                return finish(IntelligenceResponse(
+                    task_type=classification.task_type,
+                    status=ResponseStatus.ERROR,
+                    error_code="REQUEST_TIMEOUT",
+                    warnings=("The overall execution deadline was exhausted",),
+                ))
             return finish(IntelligenceResponse(
                 task_type=classification.task_type,
                 status=ResponseStatus.ERROR,
                 error_code="ADAPTER_TIMEOUT",
                 warnings=("The capability timed out",),
+            ))
+        except ProviderRoutingAdapterError as error:
+            record_routing_summary()
+            category = error.category
+            if category == "INVALID_PROVIDER_REQUEST":
+                return finish(IntelligenceResponse(
+                    task_type=classification.task_type,
+                    status=ResponseStatus.ERROR,
+                    error_code="INVALID_PROVIDER_REQUEST",
+                    warnings=("The provider or model selection is invalid",),
+                ))
+            if category == "REQUEST_TIMEOUT":
+                return finish(IntelligenceResponse(
+                    task_type=classification.task_type,
+                    status=ResponseStatus.ERROR,
+                    error_code="REQUEST_TIMEOUT",
+                    warnings=("The overall execution deadline was exhausted",),
+                ))
+            if category == "PROVIDER_TIMEOUT":
+                return finish(IntelligenceResponse(
+                    task_type=classification.task_type,
+                    status=ResponseStatus.ERROR,
+                    error_code="PROVIDER_TIMEOUT",
+                    warnings=("The provider requests timed out",),
+                ))
+            if category == "PROVIDER_FAILURE":
+                return finish(IntelligenceResponse(
+                    task_type=classification.task_type,
+                    status=ResponseStatus.ERROR,
+                    error_code="PROVIDER_FAILURE",
+                    warnings=("A provider could not complete the request",),
+                ))
+            return finish(IntelligenceResponse(
+                task_type=classification.task_type,
+                status=ResponseStatus.ERROR,
+                error_code="ALL_PROVIDERS_FAILED",
+                warnings=("All eligible providers failed",),
             ))
         except AdapterFailureError as error:
             error_code = (
@@ -338,6 +417,7 @@ class OrchestrationCore(CentralIntelligenceCore):
                 warnings=("The capability returned an invalid result",),
             ))
 
+        record_routing_summary()
         return finish(IntelligenceResponse(
             task_type=classification.task_type,
             status=ResponseStatus.COMPLETED,

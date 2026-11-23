@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
+import json
 import re
 from typing import Any
 from uuid import uuid4
@@ -206,7 +207,17 @@ class IntelligenceRequest(BaseModel):
             raise ValueError(
                 "Sensitive credentials cannot be provided in metadata"
             )
-        if len(str(value)) > 4_096:
+        try:
+            serialized = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError, RecursionError) as error:
+            raise ValueError("Request metadata must be valid JSON") from error
+
+        if len(serialized.encode("utf-8")) > 4_096:
             raise ValueError("Request metadata is too large")
         return value
 

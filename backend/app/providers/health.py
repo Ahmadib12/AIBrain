@@ -1,11 +1,18 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
+from backend.app.providers.errors import (
+    ProviderHealthTimeoutError,
+    ProviderHealthUnavailableError,
+)
 from backend.app.providers.schemas import ProviderAvailability, ProviderHealth
 
 
 class ProviderHealthMonitor:
     def __init__(self) -> None:
         self._statuses: dict[str, ProviderHealth] = {}
+        self._health_check_locks: dict[str, asyncio.Lock] = {}
 
     @staticmethod
     def _timestamp() -> str:
@@ -65,3 +72,42 @@ class ProviderHealthMonitor:
     def is_available(self, provider_id: str) -> bool:
         status = self._statuses.get(provider_id)
         return status is None or status.availability != ProviderAvailability.UNAVAILABLE
+
+    async def check_health(
+        self,
+        provider_id: str,
+        health_check: Callable[[], Awaitable[ProviderHealth]],
+        *,
+        timeout_seconds: float,
+    ) -> ProviderHealth:
+        if timeout_seconds <= 0:
+            raise ValueError("Health-check timeout must be positive")
+
+        lock = self._health_check_locks.setdefault(
+            provider_id,
+            asyncio.Lock(),
+        )
+        async with lock:
+            try:
+                status = await asyncio.wait_for(
+                    health_check(),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                self.record_failure(provider_id)
+                raise ProviderHealthTimeoutError(provider_id) from None
+            except Exception:
+                self.record_failure(provider_id)
+                raise
+
+            if status.provider_id != provider_id:
+                self.record_failure(provider_id)
+                raise ProviderHealthUnavailableError(provider_id)
+
+            if status.availability == ProviderAvailability.AVAILABLE:
+                return self.record_success(provider_id)
+
+            self.record_failure(provider_id)
+            raise ProviderHealthUnavailableError(provider_id)

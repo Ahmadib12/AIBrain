@@ -2,7 +2,8 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from backend.app.concurrency import require_ai_capacity
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.app.api.v1.dependencies import get_intelligence_core
 from backend.app.intelligence.core import (
@@ -32,10 +33,15 @@ def _response_status_code(response: IntelligenceResponse) -> int:
     return {
         "INVALID_REQUEST": 400,
         "LANGUAGE_NOT_FOUND": 404,
+        "INVALID_PROVIDER_REQUEST": 400,
         "CAPABILITY_UNAVAILABLE": 503,
         "ADAPTER_UNAVAILABLE": 503,
+        "REQUEST_TIMEOUT": 504,
+        "PROVIDER_TIMEOUT": 504,
         "ADAPTER_TIMEOUT": 504,
         "ADAPTER_FAILURE": 502,
+        "PROVIDER_FAILURE": 502,
+        "ALL_PROVIDERS_FAILED": 503,
         "INVALID_ADAPTER_RESULT": 502,
     }.get(response.error_code, 500)
 
@@ -55,6 +61,7 @@ def _response_status_code(response: IntelligenceResponse) -> int:
 async def process_intelligence(
     request: IntelligenceRequest,
     core: CentralIntelligenceCore = Depends(get_intelligence_core),
+    _capacity: None = Depends(require_ai_capacity, scope='request'),
 ) -> IntelligenceResponse | JSONResponse:
     try:
         response = await core.process(request)
@@ -94,4 +101,37 @@ async def process_intelligence(
     return JSONResponse(
         status_code=status_code,
         content=response.model_dump(mode="json"),
+    )
+
+
+@router.post("/process/stream")
+async def process_intelligence_stream(
+    request: IntelligenceRequest,
+    core: CentralIntelligenceCore = Depends(get_intelligence_core),
+    _capacity: None = Depends(require_ai_capacity, scope='request'),
+):
+    async def event_stream():
+        try:
+            response = await core.process(request)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("aibrain.intelligence").warning(
+                "Stream intelligence core failure"
+            )
+            response = IntelligenceResponse(
+                task_type=TaskType.UNSUPPORTED,
+                status=ResponseStatus.ERROR,
+                error_code="INTELLIGENCE_FAILURE",
+                warnings=("The request could not be processed",),
+            )
+        yield (
+            "data: "
+            + response.model_dump_json()
+            + "\n\n"
+        )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
     )

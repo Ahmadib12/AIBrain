@@ -29,6 +29,10 @@ from backend.app.providers.health import ProviderHealthMonitor
 from backend.app.providers.mock import MockAIProvider
 from backend.app.providers.registry import ProviderRegistry
 from backend.app.providers.router import ModelRouter
+from backend.app.providers.interface import AIProvider
+from backend.app.providers.errors import (
+    ProviderUnavailableError,
+)
 from backend.app.providers.schemas import ChatRequest, ChatResponse
 
 
@@ -68,6 +72,147 @@ class CapturingProviderRouter:
         )
 
 
+class APIUnavailableProvider(AIProvider):
+    def __init__(self, provider_id: str, priority: int) -> None:
+        self._id = provider_id
+        self._priority = priority
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def name(self) -> str:
+        return f"Unavailable {self._id}"
+
+    @property
+    def priority(self) -> int:
+        return self._priority
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return ("test-chat-v1",)
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return ("text_generation",)
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        raise ProviderUnavailableError(
+            self.id,
+            f"UNAVAILABLE_SECRET_{self.id}",
+        )
+
+    async def health_check(self):
+        return await MockAIProvider().health_check()
+
+
+class APISlowProvider(AIProvider):
+    @property
+    def id(self) -> str:
+        return "api-slow"
+
+    @property
+    def name(self) -> str:
+        return "API slow provider"
+
+    @property
+    def priority(self) -> int:
+        return 100
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return ("test-chat-v1",)
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return ("text_generation",)
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        await asyncio.sleep(1)
+        raise AssertionError("slow provider should time out")
+
+    async def health_check(self):
+        return await MockAIProvider().health_check()
+
+
+class APIUnexpectedProvider(AIProvider):
+    @property
+    def id(self) -> str:
+        return "api-unexpected"
+
+    @property
+    def name(self) -> str:
+        return "API unexpected provider"
+
+    @property
+    def priority(self) -> int:
+        return 100
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return ("test-chat-v1",)
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return ("text_generation",)
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        raise RuntimeError("UNEXPECTED_PROVIDER_SECRET_SENTINEL")
+
+    async def health_check(self):
+        return await MockAIProvider().health_check()
+
+
+class APIProviderInvalidRequestProvider(AIProvider):
+    @property
+    def id(self) -> str:
+        return "api-provider-invalid"
+
+    @property
+    def name(self) -> str:
+        return "API provider-invalid"
+
+    @property
+    def priority(self) -> int:
+        return 100
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return ("test-chat-v1",)
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return ("text_generation",)
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        from backend.app.providers.errors import InvalidProviderRequestError
+        raise InvalidProviderRequestError(
+            self.id,
+            "PROVIDER_SIDE_INVALID_SECRET",
+            source="provider",
+        )
+
+    async def health_check(self):
+        return await MockAIProvider().health_check()
+
+
 def build_mock_provider_router() -> ModelRouter:
     registry = ProviderRegistry()
     registry.register(MockAIProvider())
@@ -78,6 +223,22 @@ def build_mock_provider_router() -> ModelRouter:
         max_attempts=1,
     )
     return ModelRouter(registry, health, fallback)
+
+
+def build_custom_provider_router(
+    *providers: AIProvider,
+    timeout: float = 0.01,
+) -> ModelRouter:
+    registry = ProviderRegistry()
+    for provider in providers:
+        registry.register(provider)
+    health = ProviderHealthMonitor()
+    fallback = FallbackExecutor(
+        health_monitor=health,
+        timeout_seconds=timeout,
+        max_attempts=1,
+    )
+    return ModelRouter(registry, health, fallback, fallback_enabled=True)
 
 
 @pytest.fixture
@@ -289,6 +450,40 @@ def test_unavailable_capability_returns_503(client_for_core) -> None:
     assert body.decision_trace.execution_status.value == "not_attempted"
 
 
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("missing-provider", None),
+        ("mock", "missing-model"),
+    ],
+)
+def test_invalid_explicit_provider_or_model_returns_400(
+    client_for_core,
+    provider: str,
+    model: str | None,
+) -> None:
+    core = OrchestrationCore(
+        adapters={
+            "text_generation": ProviderRoutingAdapter(build_mock_provider_router())
+        }
+    )
+    body = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "provider": provider,
+    }
+    if model is not None:
+        body["model"] = model
+
+    with client_for_core(core) as client:
+        response = client.post("/api/v1/intelligence/process", json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "INVALID_PROVIDER_REQUEST"
+    trace = response.json()["decision_trace"]
+    assert trace["execution_status"] == "not_attempted"
+    assert trace["fallback_attempted"] is False
+
+
 def test_agli_adapter_delegation(client_for_core) -> None:
     core = OrchestrationCore(
         adapters={
@@ -344,10 +539,18 @@ def test_fastapi_dependency_override_is_used(client_for_core) -> None:
     assert response.json()["content"] == "[mock response] Override test"
 
 
-def test_existing_health_and_provider_endpoints_remain_functional() -> None:
+def test_existing_health_and_provider_endpoints_remain_functional(
+    monkeypatch,
+) -> None:
+    operator_token = "test-provider-operator-token-32chars"
+    monkeypatch.setenv("AIBRAIN_PROVIDER_OPERATOR_TOKEN", operator_token)
+
     with TestClient(app) as client:
         health = client.get("/health")
-        providers = client.get("/api/v1/providers")
+        providers = client.get(
+            "/api/v1/providers",
+            headers={"X-AIBrain-Operator-Token": operator_token},
+        )
 
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
@@ -368,6 +571,102 @@ async def test_intelligence_endpoint_propagates_cancellation() -> None:
     )
     with pytest.raises(asyncio.CancelledError):
         await process_intelligence(request, core=CancellingCore())
+
+
+@pytest.mark.parametrize(
+    ("providers", "expected_status", "expected_code"),
+    [
+        (
+            (
+                APIUnavailableProvider("api-unavailable-a", 100),
+                APIUnavailableProvider("api-unavailable-b", 50),
+            ),
+            503,
+            "ALL_PROVIDERS_FAILED",
+        ),
+        (
+            (APISlowProvider(),),
+            504,
+            "PROVIDER_TIMEOUT",
+        ),
+        (
+            (APIProviderInvalidRequestProvider(),),
+            503,
+            "ALL_PROVIDERS_FAILED",
+        ),
+        (
+            (APIUnexpectedProvider(),),
+            503,
+            "ALL_PROVIDERS_FAILED",
+        ),
+    ],
+)
+def test_public_provider_failure_mapping_is_sanitized(
+    client_for_core,
+    caplog,
+    providers,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    core = OrchestrationCore(
+        adapters={
+            "text_generation": ProviderRoutingAdapter(
+                build_custom_provider_router(
+                    *providers,
+                    timeout=0.01,
+                )
+            )
+        },
+        timeout_seconds=1,
+    )
+    with caplog.at_level("ERROR"):
+        with client_for_core(core) as client:
+            response = client.post(
+                "/api/v1/intelligence/process",
+                json={
+                    "messages": [{
+                        "role": "user",
+                        "content": "PUBLIC_FAILURE_SENTINEL",
+                    }],
+                },
+            )
+
+    assert response.status_code == expected_status
+    assert response.json()["error_code"] == expected_code
+    trace = response.json()["decision_trace"]
+    assert trace["execution_status"] in {"failed", "timed_out"}
+    serialized = response.text + caplog.text
+    assert "UNAVAILABLE_SECRET" not in serialized
+    assert "PROVIDER_SIDE_INVALID_SECRET" not in serialized
+    assert "UNEXPECTED_PROVIDER_SECRET_SENTINEL" not in serialized
+    assert "PUBLIC_FAILURE_SENTINEL" not in serialized
+    assert "routing_summary" not in serialized
+
+
+def test_overall_deadline_through_intelligence_api(
+    client_for_core,
+) -> None:
+    core = OrchestrationCore(
+        adapters={
+            "text_generation": ProviderRoutingAdapter(
+                build_custom_provider_router(
+                    APISlowProvider(),
+                    timeout=1,
+                )
+            )
+        },
+        timeout_seconds=0.01,
+    )
+    with client_for_core(core) as client:
+        response = client.post(
+            "/api/v1/intelligence/process",
+            json={"messages": [{"role": "user", "content": "Hello"}]},
+        )
+
+    assert response.status_code == 504
+    assert response.json()["error_code"] == "REQUEST_TIMEOUT"
+    assert response.json()["decision_trace"]["execution_status"] == "timed_out"
+    assert "routing_summary" not in response.text
 
 
 @pytest.mark.asyncio

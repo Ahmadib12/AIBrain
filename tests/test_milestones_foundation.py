@@ -1,0 +1,1259 @@
+import asyncio
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.app.main import app
+from backend.app.app_state import get_app_state
+from backend.app.providers.local import LocalAIProvider
+from backend.app.providers.schemas import ChatRequest
+from backend.app.providers.errors import ProviderUnavailableError
+from backend.app.intelligence.multimodal import MediaReference, Modality, StreamEvent
+from backend.app.tools import ToolRisk
+from backend.app.agli.interfaces import LanguageProcessingEngine
+
+
+@pytest.fixture
+def client():
+    state = get_app_state()
+    with state.database.transaction():
+        state.database.connect().execute("DELETE FROM tool_requests")
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def register_and_login(client: TestClient, email: str) -> str:
+    registered = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": "safe-password-123",
+            "display_name": "Test User",
+        },
+    )
+    assert registered.status_code == 200
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "safe-password-123"},
+    )
+    assert login.status_code == 200
+    return login.json()["access_token"]
+
+
+def auth_header(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+
+
+def test_unknown_login_email_performs_dummy_password_hash() -> None:
+    import backend.app.persistence.identity as identity_module
+
+    state = get_app_state()
+    state.identity.register(
+        email="timing-test@example.com",
+        password="safe-password-123",
+        display_name="Timing Test",
+    )
+
+    original_hash = identity_module._hash_password
+    salts = []
+
+    def tracking_hash(password: str, salt: str) -> str:
+        salts.append(salt)
+        return original_hash(password, salt)
+
+    identity_module._hash_password = tracking_hash
+    try:
+        with pytest.raises(ValueError, match="Invalid email or password"):
+            state.identity.authenticate(
+                email="timing-test@example.com",
+                password="wrong-password",
+            )
+
+        with pytest.raises(ValueError, match="Invalid email or password"):
+            state.identity.authenticate(
+                email="unknown-timing-test@example.com",
+                password="wrong-password",
+            )
+    finally:
+        identity_module._hash_password = original_hash
+
+    assert len(salts) == 2
+    assert salts[0] != salts[1]
+    assert salts[1] == identity_module._DUMMY_PASSWORD_SALT
+
+def test_auth_registration_login_me_and_logout(client: TestClient) -> None:
+    token = register_and_login(client, "foundation@example.com")
+
+    me = client.get(
+        "/api/v1/auth/me",
+        headers=auth_header(token),
+    )
+    assert me.status_code == 200
+    assert me.json()["user"]["email"] == "foundation@example.com"
+
+    logout = client.post(
+        "/api/v1/auth/logout",
+        headers=auth_header(token),
+    )
+    assert logout.status_code == 200
+
+    after_logout = client.get(
+        "/api/v1/auth/me",
+        headers=auth_header(token),
+    )
+    assert after_logout.status_code == 401
+
+
+
+def test_login_route_blocks_repeated_failed_attempts(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.api.v1.auth as auth_module
+    from backend.app.auth.rate_limit import LoginRateLimiter
+
+    monkeypatch.setattr(
+        auth_module,
+        "_login_rate_limiter",
+        LoginRateLimiter(limit=2, window_seconds=60),
+    )
+
+    email = "rate-limit-test@example.com"
+
+    first = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+    second = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+    third = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert third.status_code == 429
+    assert third.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
+
+
+
+def test_successful_login_resets_failed_attempts(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.api.v1.auth as auth_module
+    from backend.app.auth.rate_limit import LoginRateLimiter
+
+    monkeypatch.setattr(
+        auth_module,
+        "_login_rate_limiter",
+        LoginRateLimiter(limit=2, window_seconds=60),
+    )
+
+    email = "reset-limit-test@example.com"
+    register_and_login(client, email)
+
+    failed = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+    assert failed.status_code == 401
+
+    successful = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "safe-password-123"},
+    )
+    assert successful.status_code == 200
+
+    second_failed = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+    third_failed = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+    fourth_failed = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+
+    assert second_failed.status_code == 401
+    assert third_failed.status_code == 401
+    assert fourth_failed.status_code == 429
+    assert fourth_failed.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
+
+
+def test_memory_isolated_by_user(client: TestClient) -> None:
+    token_a = register_and_login(client, "memory-a@example.com")
+    token_b = register_and_login(client, "memory-b@example.com")
+
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token_a),
+        json={
+            "memory_type": "preference",
+            "key": "language",
+            "value": "English",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert created.status_code == 200
+
+    memory_b = client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token_b),
+    )
+    assert memory_b.status_code == 200
+    assert memory_b.json() == []
+
+    export_a = client.post(
+        "/api/v1/personal/memory/export",
+        headers=auth_header(token_a),
+    )
+    assert export_a.status_code == 200
+    assert export_a.json()["memories"][0]["key"] == "language"
+
+
+def test_memory_update_delete_and_user_isolation(client: TestClient) -> None:
+    token = register_and_login(client, "memory-update@example.com")
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "goal",
+            "key": "project",
+            "value": "Build AIBrain",
+            "source": "explicit",
+            "confidence": 0.9,
+        },
+    )
+    memory_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+        json={"value": "Build trusted AIBrain", "confidence": 1.0},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["value"] == "Build trusted AIBrain"
+
+    deleted = client.delete(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+
+
+def test_learning_engine_observations_require_explicit_adaptation_approval(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "learning@example.com")
+
+    observation = client.post(
+        "/api/v1/personal/learning/observations",
+        headers=auth_header(token),
+        json={
+            "source": "explicit-feedback",
+            "observation": {"pattern": "prefers concise answers"},
+        },
+    )
+    assert observation.status_code == 200
+
+    adaptation = client.post(
+        "/api/v1/personal/learning/adaptations",
+        headers=auth_header(token),
+        json={"proposal": {"setting": "concise", "confidence": 0.6}},
+    )
+    assert adaptation.status_code == 200
+    assert adaptation.json()["status"] == "pending"
+
+    approved = client.patch(
+        f"/api/v1/personal/learning/adaptations/{adaptation.json()['id']}",
+        headers=auth_header(token),
+        json={"status": "approved"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+
+    revoked = client.patch(
+        f"/api/v1/personal/learning/adaptations/{adaptation.json()['id']}",
+        headers=auth_header(token),
+        json={"status": "revoked"},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+
+
+def test_safe_tool_discovery_and_execution(client: TestClient) -> None:
+    token = register_and_login(client, "tools@example.com")
+    listed = client.get(
+        "/api/v1/tools",
+        headers=auth_header(token),
+    )
+    assert listed.status_code == 200
+    assert listed.json()[0]["tool_id"] == "echo"
+
+    executed = client.post(
+        "/api/v1/tools/execute",
+        headers=auth_header(token),
+        json={"tool_id": "echo", "arguments": {"text": "Hello"}},
+    )
+    assert executed.status_code == 200
+    assert executed.json()["result"]["text"] == "Hello"
+
+
+def test_unauthenticated_personal_and_tool_routes_are_blocked(
+    client: TestClient,
+) -> None:
+    memory = client.get("/api/v1/personal/memory")
+    tools = client.get("/api/v1/tools")
+    assert memory.status_code == 401
+    assert tools.status_code == 401
+
+
+def test_local_provider_is_unconfigured_interface() -> None:
+    provider = LocalAIProvider()
+    assert provider.enabled is False
+    assert provider.models == ()
+
+    async def check() -> None:
+        with pytest.raises(ProviderUnavailableError):
+            await provider.generate(
+                ChatRequest(messages=[{"role": "user", "content": "Hello"}])
+            )
+
+    asyncio.run(check())
+
+
+def test_multimodal_contracts_are_typed_without_claiming_runtime_support() -> None:
+    media = MediaReference(
+        modality=Modality.IMAGE,
+        uri="https://example.invalid/image",
+        mime_type="image/png",
+        size_bytes=100,
+    )
+    event = StreamEvent(
+        event_type="partial",
+        sequence=0,
+        payload={"text": "hello"},
+    )
+    assert media.modality == Modality.IMAGE
+    assert event.sequence == 0
+
+
+def test_language_processing_engine_is_an_unimplemented_interface() -> None:
+    assert LanguageProcessingEngine.__abstractmethods__
+
+
+def test_database_migrations_are_versioned_and_persisted(client: TestClient) -> None:
+    database = get_app_state().database
+    rows = database.connect().execute(
+        "SELECT version FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    assert [row["version"] for row in rows] >= [1, 2, 3]
+
+
+def test_streaming_intelligence_endpoint_is_available(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/intelligence/process/stream",
+        json={"messages": [{"role": "user", "content": "Hello"}]},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "data:" in response.text
+
+
+def test_account_deletion_removes_personal_records(client: TestClient) -> None:
+    token = register_and_login(client, "delete-all@example.com")
+
+    memory = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "preference",
+            "key": "delete-me",
+            "value": "private",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert memory.status_code == 200
+    observation = client.post(
+        "/api/v1/personal/learning/observations",
+        headers=auth_header(token),
+        json={"source": "explicit", "observation": {"pattern": "private"}},
+    )
+    assert observation.status_code == 200
+    adaptation = client.post(
+        "/api/v1/personal/learning/adaptations",
+        headers=auth_header(token),
+        json={"proposal": {"setting": "private"}},
+    )
+    assert adaptation.status_code == 200
+
+    # Seed linked WebAuthn records to exercise account-deletion cleanup.
+    state = get_app_state()
+    user = state.identity.resolve_token(token)
+    user_id = user["id"]
+    connection = state.database.connect()
+    timestamp = "2026-11-22T00:00:00+00:00"
+
+    with state.database.transaction():
+        connection.execute(
+            """INSERT INTO tool_requests (
+                id, user_id, tool_id, arguments_json, status,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("delete-webauthn-request", user_id, "test-tool", "{}", "pending",
+             timestamp, timestamp),
+        )
+        connection.execute(
+            """INSERT INTO webauthn_credentials (
+                id, user_id, credential_id, public_key, created_at
+            ) VALUES (?, ?, ?, ?, ?)""",
+            ("delete-webauthn-credential", user_id,
+             "external-delete-credential", b"test-public-key", timestamp),
+        )
+        connection.execute(
+            """INSERT INTO webauthn_challenges (
+                id, user_id, challenge_hash, purpose, request_id,
+                proposal_digest, contract_fingerprint, expires_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("delete-webauthn-challenge", user_id, "delete-challenge-hash",
+             "tool_approval", "delete-webauthn-request", "test-digest",
+             "test-fingerprint", "2027-01-01T00:00:00+00:00", timestamp),
+        )
+        connection.execute(
+            """INSERT INTO webauthn_recovery_codes (
+                id, user_id, code_hash, created_at
+            ) VALUES (?, ?, ?, ?)""",
+            ("delete-webauthn-recovery", user_id,
+             "delete-recovery-hash", timestamp),
+        )
+        connection.execute(
+            """INSERT INTO tool_authorizations (
+                id, user_id, request_id, challenge_id, credential_id,
+                proposal_digest, contract_fingerprint, authorized_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("delete-webauthn-authorization", user_id,
+             "delete-webauthn-request", "delete-webauthn-challenge",
+             "delete-webauthn-credential", "test-digest",
+             "test-fingerprint", timestamp),
+        )
+
+    deleted = client.delete(
+        "/api/v1/auth/me",
+        headers=auth_header(token),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+
+    after = client.get(
+        "/api/v1/auth/me",
+        headers=auth_header(token),
+    )
+    assert after.status_code == 401
+
+    state = get_app_state()
+    user_row = state.database.connect().execute(
+        "SELECT id FROM users "
+        "WHERE email = ?",
+        ("delete-all@example.com",),
+    ).fetchone()
+    assert user_row is not None
+    user_id = user_row["id"]
+    for table in (
+        "memory_items",
+        "observations",
+        "adaptations",
+        "tool_authorizations",
+        "webauthn_challenges",
+        "webauthn_recovery_codes",
+        "webauthn_credentials",
+        "tool_requests",
+    ):
+        row = state.database.connect().execute(
+            f"SELECT 1 FROM {table} WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        assert row is None
+
+
+def test_deleted_user_cannot_create_sessions_or_personal_records(
+    client: TestClient,
+) -> None:
+    import sqlite3
+
+    token = register_and_login(client, "deleted-write@example.com")
+    state = get_app_state()
+    user = state.identity.resolve_token(token)
+    user_id = user["id"]
+
+    state.identity.delete_user(user_id)
+
+    # Simulate requests that passed authentication before account deletion.
+    with pytest.raises(sqlite3.IntegrityError):
+        state.memory.create(
+            user_id,
+            memory_type="preference",
+            key="late-memory",
+            value="must not persist",
+            source="explicit",
+            confidence=1.0,
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        state.learning.record_observation(
+            user_id,
+            source="explicit",
+            observation={"pattern": "must not persist"},
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        state.learning.propose_adaptation(
+            user_id,
+            proposal={"setting": "must not persist"},
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        state.tool_requests.create(
+            user_id,
+            tool_id="echo",
+            arguments={"text": "must not persist"},
+            status="approved",
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        state.database.connect().execute(
+            "INSERT INTO sessions "
+            "(token_hash, user_id, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                "stale-session-hash",
+                user_id,
+                "2999-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+
+    # Sessions are retained for auditability, but must all be revoked.
+    connection = state.database.connect()
+    session_count = connection.execute(
+        "SELECT COUNT(*) FROM sessions WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()[0]
+    active_session_count = connection.execute(
+        "SELECT COUNT(*) FROM sessions "
+        "WHERE user_id = ? AND revoked_at IS NULL",
+        (user_id,),
+    ).fetchone()[0]
+
+    assert session_count >= 1
+    assert active_session_count == 0
+
+    # Personal records must be physically removed.
+    for table in (
+        "memory_items",
+        "observations",
+        "adaptations",
+        "tool_requests",
+    ):
+        row = connection.execute(
+            f"SELECT 1 FROM {table} WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        assert row is None, f"Unexpected personal data remained in {table}"
+
+
+def test_cross_user_memory_read_update_delete_is_rejected(
+    client: TestClient,
+) -> None:
+    token_a = register_and_login(client, "owner@example.com")
+    token_b = register_and_login(client, "other@example.com")
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token_a),
+        json={
+            "memory_type": "preference",
+            "key": "private",
+            "value": "owner-only",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    memory_id = created.json()["id"]
+
+    read = client.patch(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token_b),
+        json={"value": "hijacked", "confidence": 1.0},
+    )
+    delete = client.delete(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token_b),
+    )
+    assert read.status_code in {404, 400}
+    assert delete.status_code == 404
+
+
+def test_expired_memory_is_not_listed_retrieved_updated_or_exported(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "expired@example.com")
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "context",
+            "key": "old",
+            "value": "expired-value",
+            "source": "test",
+            "confidence": 1.0,
+            "expires_at": "2000-01-01T00:00:00+00:00",
+        },
+    )
+    assert created.status_code == 200
+    memory_id = created.json()["id"]
+
+    listed = client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    )
+    assert listed.status_code == 200
+    assert memory_id not in {item["id"] for item in listed.json()}
+
+    updated = client.patch(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+        json={"value": "revived", "confidence": 1.0},
+    )
+    assert updated.status_code == 404
+
+    exported = client.post(
+        "/api/v1/personal/memory/export",
+        headers=auth_header(token),
+    )
+    assert memory_id not in {
+        item["id"] for item in exported.json()["memories"]
+    }
+
+
+def test_cross_user_learning_access_is_sanitized(
+    client: TestClient,
+) -> None:
+    token_a = register_and_login(client, "learning-owner@example.com")
+    token_b = register_and_login(client, "learning-other@example.com")
+    observation = client.post(
+        "/api/v1/personal/learning/observations",
+        headers=auth_header(token_a),
+        json={"source": "explicit", "observation": {"pattern": "private"}},
+    )
+    observation_id = observation.json()["id"]
+    adaptation = client.post(
+        "/api/v1/personal/learning/adaptations",
+        headers=auth_header(token_a),
+        json={"proposal": {"setting": "private"}},
+    )
+    adaptation_id = adaptation.json()["id"]
+
+    observation_read = client.get(
+        f"/api/v1/personal/learning/observations/{observation_id}",
+        headers=auth_header(token_b),
+    )
+    adaptation_read = client.get(
+        f"/api/v1/personal/learning/adaptations/{adaptation_id}",
+        headers=auth_header(token_b),
+    )
+    adaptation_update = client.patch(
+        f"/api/v1/personal/learning/adaptations/{adaptation_id}",
+        headers=auth_header(token_b),
+        json={"status": "approved"},
+    )
+    assert observation_read.status_code == 404
+    assert adaptation_read.status_code == 404
+    assert adaptation_update.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"api_key": "secret"},
+        {"one": {"two": {"three": {"four": {"five": {"six": {"seven": "too deep"}}}}}}},
+        {"items": list(range(101))},
+        {"value": "Bearer abcdefghijklmnop"},
+    ],
+)
+def test_personal_payload_validation_rejects_sensitive_or_unbounded_values(
+    client: TestClient,
+    value: dict,
+) -> None:
+    token = register_and_login(client, f"payload-{id(value)}@example.com")
+    response = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "context",
+            "key": "payload",
+            "value": value,
+            "source": "test",
+            "confidence": 1.0,
+        },
+    )
+    assert response.status_code in {400, 422}
+    assert "routing_summary" not in response.text
+
+
+def test_file_database_persists_across_database_instances(
+    tmp_path,
+) -> None:
+    from backend.app.persistence.database import Database
+
+    path = tmp_path / "aibrain.db"
+    first = Database(f"sqlite:///{path}")
+    first.connect().execute(
+        "INSERT INTO users "
+        "(id, email, password_salt, password_hash, display_name, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            "persisted-user",
+            "persisted@example.com",
+            "salt",
+            "hash",
+            "Persisted",
+            "2026-01-01T00:00:00+00:00",
+        ),
+    )
+    first.connect().commit()
+    first.close()
+
+    second = Database(f"sqlite:///{path}")
+    row = second.connect().execute(
+        "SELECT email FROM users WHERE id = ?",
+        ("persisted-user",),
+    ).fetchone()
+    assert row["email"] == "persisted@example.com"
+    second.close()
+
+
+def test_database_transaction_rolls_back_on_error(tmp_path) -> None:
+    from backend.app.persistence.database import Database
+
+    database = Database(f"sqlite:///{tmp_path / 'rollback.db'}")
+    try:
+        with database.transaction():
+            database.connect().execute(
+                "INSERT INTO users "
+                "(id, email, password_salt, password_hash, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    "rollback-user",
+                    "rollback@example.com",
+                    "salt",
+                    "hash",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            raise RuntimeError("forced rollback")
+    except RuntimeError:
+        pass
+
+    row = database.connect().execute(
+        "SELECT 1 FROM users WHERE id = ?",
+        ("rollback-user",),
+    ).fetchone()
+    assert row is None
+    database.close()
+
+
+def test_tool_request_owner_and_replay_lifecycle(
+    client: TestClient,
+) -> None:
+    token_a = register_and_login(client, "tool-owner@example.com")
+    token_b = register_and_login(client, "tool-other@example.com")
+
+    executed = client.post(
+        "/api/v1/tools/execute",
+        headers=auth_header(token_a),
+        json={"tool_id": "echo", "arguments": {"text": "owned"}},
+    )
+    assert executed.status_code == 200
+
+    state = get_app_state()
+    row = state.database.connect().execute(
+        "SELECT id, user_id FROM tool_requests "
+        "WHERE status = 'completed' "
+        "ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+
+    cancelled = client.post(
+        f"/api/v1/tools/requests/{row['id']}/cancel",
+        headers=auth_header(token_b),
+    )
+    confirm = client.post(
+        f"/api/v1/tools/requests/{row['id']}/confirm",
+        headers=auth_header(token_b),
+    )
+    assert cancelled.status_code == 404
+    assert confirm.status_code == 404
+
+
+def test_tool_execution_request_cannot_be_replayed() -> None:
+    from backend.app.app_state import get_app_state
+    from backend.app.tools import (
+        ToolExecutionGateway,
+        ToolRegistry,
+        ToolContract,
+        ToolRisk,
+    )
+
+    state = get_app_state()
+    user_id = "tool-replay-test-user"
+    now = "2026-01-01T00:00:00+00:00"
+    state.database.connect().execute(
+        "INSERT OR IGNORE INTO users "
+        "(id, email, password_salt, password_hash, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (user_id, "tool-replay-test@example.com", "salt", "hash", now),
+    )
+    state.database.connect().commit()
+
+    registry = ToolRegistry()
+    registry.register(ToolContract(
+        tool_id="echo",
+        name="Echo",
+        description="Echo",
+        risk=ToolRisk.READ_ONLY,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "maxLength": 4096},
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        output_schema={"text": {"type": "string"}},
+    ))
+    gateway = ToolExecutionGateway(registry, state.database)
+
+    proposal = gateway.propose(
+        user_id,
+        tool_id="echo",
+        arguments={"text": "single execution"},
+    )
+    result = gateway.execute(proposal, user_id=user_id)
+
+    assert result["result"]["text"] == "single execution"
+
+    with pytest.raises(PermissionError):
+        gateway.execute(proposal, user_id=user_id)
+
+    persisted = gateway._tool_requests.get(user_id, proposal["id"])
+    assert persisted["status"] == "completed"
+    assert persisted["consumed_at"] is not None
+
+
+def test_tool_request_can_only_be_claimed_once_concurrently(
+    tmp_path,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from backend.app.persistence.database import Database
+    from backend.app.persistence.tool_requests import ToolRequestRepository
+
+    database_url = f"sqlite:///{tmp_path / 'concurrent-tool-claims.db'}"
+    database_a = Database(database_url)
+    database_b = Database(database_url)
+
+    try:
+        user_id = "tool-concurrent-claim-user"
+        now = "2026-01-01T00:00:00+00:00"
+
+        database_a.connect().execute(
+            "INSERT INTO users "
+            "(id, email, password_salt, password_hash, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, "tool-concurrent-claim@example.com", "salt", "hash", now),
+        )
+        database_a.connect().commit()
+
+        repository_a = ToolRequestRepository(database_a)
+        repository_b = ToolRequestRepository(database_b)
+
+        request = repository_a.create(
+            user_id,
+            tool_id="echo",
+            arguments={"text": "claim once"},
+            status="approved",
+            authorization_policy="read_only",
+        )
+
+        barrier = Barrier(2)
+
+        def attempt_claim(repository) -> str:
+            barrier.wait(timeout=5)
+            try:
+                claimed = repository.claim_for_execution(
+                    user_id,
+                    request["id"],
+                )
+                return claimed["status"]
+            except PermissionError:
+                return "rejected"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(attempt_claim, repository_a),
+                executor.submit(attempt_claim, repository_b),
+            ]
+            results = [future.result(timeout=10) for future in futures]
+
+        assert sorted(results) == ["executing", "rejected"]
+
+        persisted = repository_a.get(user_id, request["id"])
+        assert persisted["status"] == "executing"
+        assert persisted["consumed_at"] is not None
+    finally:
+        database_a.close()
+        database_b.close()
+
+
+
+def test_expired_tool_confirmation_is_rejected() -> None:
+    from backend.app.app_state import get_app_state
+    from backend.app.tools import ToolExecutionGateway, ToolRegistry, ToolContract, ToolRisk
+
+    state = get_app_state()
+    now = "2026-01-01T00:00:00+00:00"
+    state.database.connect().execute(
+        "INSERT OR IGNORE INTO users "
+        "(id, email, password_salt, password_hash, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("test-user", "tool-confirm@example.com", "salt", "hash", now),
+    )
+    state.database.connect().commit()
+    registry = ToolRegistry()
+    registry.register(ToolContract(
+        tool_id="echo",
+        name="Echo",
+        description="Echo",
+        risk=ToolRisk.READ_ONLY,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "maxLength": 4096},
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        output_schema={"text": {"type": "string"}},
+    ))
+    gateway = ToolExecutionGateway(
+        registry,
+        state.database,
+        confirmation_ttl_seconds=-1,
+    )
+
+    proposal = gateway.propose(
+        "test-user",
+        tool_id="echo",
+        arguments={"text": "hello"},
+    )
+    with pytest.raises(PermissionError, match="expired"):
+        gateway.execute(proposal, user_id="test-user")
+
+
+def test_revoked_and_invalid_session_tokens_are_rejected(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "session@example.com")
+    logout = client.post(
+        "/api/v1/auth/logout",
+        headers=auth_header(token),
+    )
+    assert logout.status_code == 200
+    replay = client.get(
+        "/api/v1/auth/me",
+        headers=auth_header(token),
+    )
+    assert replay.status_code == 401
+
+    invalid = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": "Bearer invalid-token"},
+    )
+    assert invalid.status_code == 401
+
+
+def test_logout_rejects_missing_or_empty_bearer_token(
+    client: TestClient,
+) -> None:
+    missing = client.post("/api/v1/auth/logout")
+    assert missing.status_code == 401
+
+    empty = client.post(
+        "/api/v1/auth/logout",
+        headers={"Authorization": "Bearer    "},
+    )
+    assert empty.status_code == 401
+
+
+def test_logout_is_idempotent_for_unknown_nonempty_token(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/v1/auth/logout",
+        headers={"Authorization": "Bearer unknown-token"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"status": "logged_out"}
+
+
+def test_expired_session_is_rejected(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "expired-session@example.com")
+    state = get_app_state()
+    token_hash = __import__("hashlib").sha256(
+        token.encode("utf-8")
+    ).hexdigest()
+    state.database.connect().execute(
+        "UPDATE sessions SET expires_at = ? "
+        "WHERE token_hash = ?",
+        ("2000-01-01T00:00:00+00:00", token_hash),
+    )
+    state.database.connect().commit()
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers=auth_header(token),
+    )
+    assert response.status_code == 401
+
+    remaining = state.database.connect().execute(
+        "SELECT COUNT(*) FROM sessions WHERE token_hash = ?",
+        (token_hash,),
+    ).fetchone()[0]
+    assert remaining == 1
+
+    assert state.identity.cleanup_sessions() >= 1
+
+    after_cleanup = state.database.connect().execute(
+        "SELECT COUNT(*) FROM sessions WHERE token_hash = ?",
+        (token_hash,),
+    ).fetchone()[0]
+    assert after_cleanup == 0
+
+
+def test_login_rate_limiter_blocks_repeated_failures() -> None:
+    from backend.app.auth.rate_limit import LoginRateLimiter
+
+    limiter = LoginRateLimiter(limit=2, window_seconds=60)
+    assert limiter.is_limited("user@example.com") is False
+    limiter.record_attempt("user@example.com")
+    limiter.record_attempt("user@example.com")
+    assert limiter.is_limited("user@example.com") is True
+
+
+def test_login_rate_limiter_bounds_tracked_identities() -> None:
+    from backend.app.auth.rate_limit import LoginRateLimiter
+
+    limiter = LoginRateLimiter(limit=2, window_seconds=60, max_entries=2)
+
+    limiter.record_attempt("first@example.com")
+    limiter.record_attempt("second@example.com")
+    limiter.record_attempt("third@example.com")
+
+    assert len(limiter._attempts) == 2
+    assert "first@example.com" not in limiter._attempts
+    assert "third@example.com" in limiter._attempts
+
+
+def test_login_rate_limiter_cleans_expired_entries(monkeypatch) -> None:
+    import backend.app.auth.rate_limit as rate_limit_module
+    from backend.app.auth.rate_limit import LoginRateLimiter
+
+    now = [100.0]
+    monkeypatch.setattr(
+        rate_limit_module.time,
+        "monotonic",
+        lambda: now[0],
+    )
+
+    limiter = LoginRateLimiter(
+        limit=2,
+        window_seconds=10,
+        max_entries=10,
+    )
+
+    limiter.record_attempt("expired@example.com")
+    now[0] = 111.0
+    limiter._last_cleanup = 100.0
+
+    assert limiter.is_limited("expired@example.com") is False
+    assert "expired@example.com" not in limiter._attempts
+
+
+def test_login_rate_limiter_reset_clears_attempts() -> None:
+    from backend.app.auth.rate_limit import LoginRateLimiter
+
+    limiter = LoginRateLimiter(limit=2, window_seconds=60)
+    limiter.record_attempt("user@example.com")
+    limiter.reset("user@example.com")
+
+    assert limiter.is_limited("user@example.com") is False
+    assert "user@example.com" not in limiter._attempts
+
+
+def test_concurrent_file_database_writes_and_reads(tmp_path) -> None:
+    import threading
+    from backend.app.persistence.database import Database
+
+    database = Database(f"sqlite:///{tmp_path / 'concurrent.db'}")
+    barrier = threading.Barrier(3)
+    errors = []
+
+    def writer(index: int) -> None:
+        try:
+            barrier.wait()
+            with database.transaction():
+                database.connect().execute(
+                    "INSERT INTO users "
+                    "(id, email, password_salt, password_hash, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        f"user-{index}",
+                        f"user-{index}@example.com",
+                        "salt",
+                        "hash",
+                        "2026-01-01T00:00:00+00:00",
+                    ),
+                )
+        except Exception as error:
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=writer, args=(index,))
+        for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    rows = database.connect().execute(
+        "SELECT COUNT(*) AS count FROM users"
+    ).fetchone()
+    assert rows["count"] == 2
+    database.close()
+
+
+def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
+    from backend.app.persistence.database import Database
+
+    path = tmp_path / "migrations.db"
+    first = Database(f"sqlite:///{path}")
+    first.migrate()
+    rows = first.connect().execute(
+        "SELECT COUNT(*) AS count FROM schema_migrations"
+    ).fetchone()
+    assert rows["count"] == 8
+    first.close()
+
+    second = Database(f"sqlite:///{path}")
+    rows = second.connect().execute(
+        "SELECT COUNT(*) AS count FROM schema_migrations"
+    ).fetchone()
+    assert rows["count"] == 8
+    second.close()
+
+
+def test_migration_failure_prevents_database_initialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from backend.app.persistence.database import Database
+
+    def fail_migration(self, connection, version, script):
+        raise RuntimeError("migration sentinel")
+
+    monkeypatch.setattr(Database, "_apply_migration", fail_migration)
+    with pytest.raises(RuntimeError, match="migration sentinel"):
+        Database(f"sqlite:///{tmp_path / 'migration-failure.db'}")
+
+
+def test_migration_rolls_back_partial_schema_changes(tmp_path) -> None:
+    import sqlite3
+
+    from backend.app.persistence.database import Database
+
+    database = Database(f"sqlite:///{tmp_path / 'migration-rollback.db'}")
+    connection = database.connect()
+
+    with pytest.raises(sqlite3.OperationalError):
+        database._apply_migration(
+            connection,
+            999,
+            """
+            CREATE TABLE migration_partial_test (id INTEGER PRIMARY KEY);
+            CREATE TABLE migration_partial_test (id INTEGER PRIMARY KEY);
+            """,
+        )
+
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'migration_partial_test'"
+    ).fetchone()
+    version = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = 999"
+    ).fetchone()
+
+    assert table is None
+    assert version is None
+    database.close()
+
+
+def test_transaction_releases_lock_when_begin_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from backend.app.persistence.database import Database
+
+    database = Database(f"sqlite:///{tmp_path / 'transaction-lock.db'}")
+    original_connect = database.connect
+    original_connection = original_connect()
+
+    class BeginFailureConnection:
+        def execute(self, statement):
+            if statement == "BEGIN":
+                raise RuntimeError("begin sentinel")
+            return original_connection.execute(statement)
+
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                database,
+                "connect",
+                lambda: BeginFailureConnection(),
+            )
+
+            with pytest.raises(RuntimeError, match="begin sentinel"):
+                with database.transaction():
+                    pass
+
+        # The failed BEGIN must not leave the database lock held.
+        assert database._lock.acquire(timeout=0.2)
+        database._lock.release()
+    finally:
+        database.close()

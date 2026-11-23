@@ -21,7 +21,10 @@ from backend.app.intelligence.core import (
     OrchestrationCore,
 )
 from backend.app.intelligence.context import RequestContext
-from backend.app.intelligence.trace import DecisionTraceBuilder
+from backend.app.intelligence.trace import (
+    DecisionTraceBuilder,
+    ProviderFailureCategory,
+)
 from backend.app.intelligence.schemas import (
     IntelligenceRequest,
     IntelligenceResponse,
@@ -35,6 +38,13 @@ from backend.app.providers.health import ProviderHealthMonitor
 from backend.app.providers.mock import MockAIProvider
 from backend.app.providers.registry import ProviderRegistry
 from backend.app.providers.router import ModelRouter
+from backend.app.providers.interface import AIProvider
+from backend.app.providers.errors import ProviderTimeoutError
+from backend.app.providers.schemas import ChatRequest, ChatResponse
+from backend.app.providers.routing import (
+    ProviderRoutingSummary,
+    SafeProviderFailureCategory,
+)
 
 
 class StubCentralIntelligenceCore(CentralIntelligenceCore):
@@ -556,3 +566,170 @@ async def test_response_metadata_preserves_approved_public_scalars() -> None:
         "model_id": "mock-chat-v1",
     }
     assert adapter.metadata == adapter.original_metadata
+
+
+class EndToEndTimeoutProvider(AIProvider):
+    @property
+    def id(self) -> str:
+        return "end-to-end-timeout"
+
+    @property
+    def name(self) -> str:
+        return "End-to-end timeout provider"
+
+    @property
+    def priority(self) -> int:
+        return 100
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return ("test-chat-v1",)
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return ("text_generation",)
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        await asyncio.sleep(1)
+        raise AssertionError("provider should time out")
+
+    async def health_check(self):
+        return await MockAIProvider().health_check()
+
+
+class EndToEndSuccessProvider(AIProvider):
+    @property
+    def id(self) -> str:
+        return "end-to-end-success"
+
+    @property
+    def name(self) -> str:
+        return "End-to-end success provider"
+
+    @property
+    def priority(self) -> int:
+        return 50
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return ("test-chat-v1",)
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return ("text_generation",)
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        return ChatResponse(
+            content="end-to-end fallback success",
+            provider_id=self.id,
+            model_id=self.models[0],
+            latency_ms=1,
+        )
+
+    async def health_check(self):
+        return await MockAIProvider().health_check()
+
+
+class RoutingSummaryAdapter(CapabilityAdapter):
+    async def execute(
+        self,
+        request: IntelligenceRequest,
+        context: RequestContext,
+    ) -> AdapterResult:
+        context.routing_summary = ProviderRoutingSummary(
+            provider_attempt_count=2,
+            retry_count=1,
+            fallback_attempted=True,
+            fallback_succeeded=True,
+            intermediate_failure_categories=(
+                SafeProviderFailureCategory.PROVIDER_TIMEOUT,
+            ),
+        )
+        return AdapterResult(
+            content="[mock provider] fallback succeeded",
+            provider_id="public-success-provider",
+            model_id="public-success-model",
+        )
+
+
+@pytest.mark.asyncio
+async def test_successful_fallback_trace_contains_only_safe_summary() -> None:
+    core = OrchestrationCore(
+        adapters={"text_generation": RoutingSummaryAdapter()}
+    )
+    response = await core.process(
+        IntelligenceRequest(
+            messages=[{
+                "role": "user",
+                "content": "provider-fallback-secret-sentinel",
+            }],
+            context_id="provider-context-secret-sentinel",
+        )
+    )
+
+    assert response.status == ResponseStatus.COMPLETED
+    trace = response.decision_trace
+    assert trace is not None
+    assert trace.fallback_attempted is True
+    assert trace.fallback_succeeded is True
+    assert trace.retry_count == 1
+    assert trace.provider_attempt_count == 2
+    assert trace.intermediate_failure_categories == (
+        ProviderFailureCategory.PROVIDER_TIMEOUT,
+    )
+    serialized = trace.model_dump_json()
+    assert "provider-fallback-secret-sentinel" not in serialized
+    assert "provider-context-secret-sentinel" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_real_provider_routing_fallback_trace_is_safe() -> None:
+    registry = ProviderRegistry()
+    registry.register(EndToEndTimeoutProvider())
+    registry.register(EndToEndSuccessProvider())
+    monitor = ProviderHealthMonitor()
+    fallback = FallbackExecutor(
+        health_monitor=monitor,
+        timeout_seconds=0.01,
+        max_attempts=1,
+    )
+    router = ModelRouter(registry, monitor, fallback, fallback_enabled=True)
+    core = OrchestrationCore(
+        adapters={"text_generation": ProviderRoutingAdapter(router)},
+        timeout_seconds=1,
+    )
+
+    response = await core.process(
+        IntelligenceRequest(
+            messages=[{
+                "role": "user",
+                "content": "REAL_FALLBACK_USER_SENTINEL",
+            }],
+            allow_fallback=True,
+        )
+    )
+
+    assert response.status == ResponseStatus.COMPLETED
+    assert response.content == "end-to-end fallback success"
+    trace = response.decision_trace
+    assert trace is not None
+    assert trace.fallback_attempted is True
+    assert trace.fallback_succeeded is True
+    assert trace.provider_attempt_count == 2
+    assert trace.retry_count == 1
+    assert trace.intermediate_failure_categories == (
+        ProviderFailureCategory.PROVIDER_TIMEOUT,
+    )
+    serialized = trace.model_dump_json()
+    assert "REAL_FALLBACK_USER_SENTINEL" not in serialized
+    assert "end-to-end-timeout" not in serialized
+    assert "end-to-end-success" not in serialized
+    assert "test-chat-v1" not in serialized

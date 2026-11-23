@@ -1,0 +1,68 @@
+# AIBrain Implementation Status
+
+This document distinguishes implemented foundations from external integrations that require additional credentials, hardware, or platform support.
+
+## Implemented
+
+- SQLite migrations and versioned persistence.
+- PBKDF2-SHA256 password hashes and bearer sessions.
+- User registration, login, logout, account deletion, and protected personal APIs.
+- Tenant-isolated memory repositories with create, read, update, delete, export, and retention fields.
+- Behavioral-learning observations and adaptation proposals with review status.
+- Provider timeout, fallback, health monitoring, and bounded health-check locking.
+- Safe tool contracts and a read-only echo tool.
+- Multimodal and streaming event Pydantic contracts.
+- Deterministic SSE-style intelligence response delivery.
+- A local-provider interface that is disabled until a real runtime is configured.
+- An advanced-AGLI processing engine interface that does not claim implementations.
+
+## Partial
+
+- Personal memory: durable API and repository foundations exist, but synchronization and retrieval ranking are not implemented.
+- Behavioral learning: observations and adaptation state exist, but outcome measurement and automated learning are not implemented.
+- AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
+- Tools: contracts and a read-only echo implementation exist, but confirmation storage, consequential tools, isolation, and verification are not implemented.
+- Agents: the interface exists, but lifecycle and planning orchestration are not implemented.
+- Android and desktop: no application projects are present; only backend contracts can support future clients.
+- Multimodal: typed media and event contracts exist, but image/document processing and real-time voice are not implemented.
+- Providers: the deterministic mock provider exists; no external provider credentials or local runtime are active.
+
+## External dependencies
+
+The following require user-supplied credentials or unavailable infrastructure:
+
+- Real external AI providers.
+- Local model runtimes and downloaded model artifacts.
+- Speech recognition and synthesis engines.
+- Production database credentials and managed deployments.
+- Android or desktop native runtimes.
+- Hardware voice features and platform permissions.
+- Live calling, VoIP, and third-party telephony integrations.
+
+## Safety boundaries
+
+- User access is enforced by bearer sessions on personal, memory, learning, and tool APIs.
+- Memory operations are filtered by the authenticated user ID.
+- Learning observations do not grant permissions or automatically apply adaptations.
+- Tool execution is limited to a read-only echo tool in the current implementation.
+- Provider and adapter exceptions are sanitized through existing public error mappings.
+- Decision traces contain counters and safe categories rather than raw provider or request data.
+
+## Persistence and security remediation
+
+- Account deletion removes memory, observations, adaptations, tool requests, and
+  other user-owned records transactionally, revokes sessions, and anonymizes audit
+  records.
+- Memory listing, retrieval, update, and export exclude expired records.
+- Personal memory, observation, adaptation, and tool payloads have serialized-size,
+  nesting, collection, JSON, and credential-like-value limits.
+- Tool requests persist their owner, status, deadline, and consumed state.
+- Read-only echo execution consumes its confirmation once and rejects replay.
+- SQLite uses thread-local connections, an RLock around transactions, foreign-key
+  enforcement, busy timeout, and WAL for file-backed databases.
+- In-memory SQLite remains available for isolated tests.
+- Login attempts have a configurable process-local rate limit.
+- Process-local rate limits and in-memory health/session state are not production
+  distributed protections.
+- SSE cancellation propagates `CancelledError`; no personal state is added to the
+  existing public SSE response contract.

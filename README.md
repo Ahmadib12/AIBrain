@@ -72,9 +72,14 @@ Provider behavior can be configured through environment variables:
 - `AIBRAIN_MOCK_PROVIDER_ENABLED` — enable or disable the mock provider
 - `AIBRAIN_PROVIDER_PRIORITIES` — comma-separated provider priority values, for example `mock:100`
 - `AIBRAIN_PROVIDER_TIMEOUT_SECONDS` — provider request timeout
+- `AIBRAIN_PROVIDER_HEALTH_CHECK_TIMEOUT_SECONDS` — provider health-check timeout
 - `AIBRAIN_PROVIDER_MAX_ATTEMPTS` — bounded attempts per provider
 - `AIBRAIN_FALLBACK_ENABLED` — enable or disable fallback routing
 - `AIBRAIN_MOCK_PROVIDER_SIMULATE_FAILURE` — make the mock provider fail predictably
+- `AIBRAIN_DATABASE_URL` — SQLite database URL, default `sqlite:///:memory:`
+- `AIBRAIN_SESSION_TTL_SECONDS` — bearer-session lifetime in seconds
+- `AIBRAIN_LOGIN_RATE_LIMIT_ATTEMPTS` — process-local login failure limit
+- `AIBRAIN_LOGIN_RATE_LIMIT_WINDOW_SECONDS` — process-local login limit window
 
 The mock provider is intentionally deterministic and does not call external services.
 
@@ -96,10 +101,20 @@ Registering a language does not claim that translation, speech recognition, or s
 - No language-detection model
 - No speech recognition or synthesis
 - No live-call or mobile functionality
-- No persistent database or memory system
-- No authentication or authorization
 - No production deployment configuration
+- No Android or desktop application project
+- No real local-model runtime
+- No real tool implementations with consequential side effects
+- No complete distributed synchronization system
 
-## Next milestone
+## Implemented foundations beyond the original milestones
 
-The next milestone should implement provider-independent AI routing or add a tested translation contract, without bypassing the AGLI capability-status model.
+- SQLite migrations and versioned persistence
+- PBKDF2 password storage and bearer sessions
+- Tenant-isolated personal-memory repositories and APIs
+- Explicit behavioral-learning observation and adaptation approval
+- Safe tool discovery and a read-only echo tool gateway
+- Local-provider and advanced-AGLI interfaces
+- Typed multimodal and stream-event contracts
+- SSE-style intelligence response endpoint
+- Bounded health-check timeout and per-provider health-check locking
