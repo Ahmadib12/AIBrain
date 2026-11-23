@@ -1,6 +1,7 @@
 from typing import Literal
 import base64
 import binascii
+import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -447,6 +448,11 @@ async def register_trusted_runner_key(
         raise HTTPException(
             status_code=400,
             detail={"code": "INVALID_RUNNER_KEY", "message": "Invalid trusted runner key"},
+        ) from None
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RUNNER_KEY_CONFLICT", "message": "Runner key identifier or public key is already registered"},
         ) from None
 
 
