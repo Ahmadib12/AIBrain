@@ -678,6 +678,78 @@ class Database:
                 END;
                 """
             ),
+            (
+                13,
+                """
+                CREATE TABLE external_adapter_evidence_packages (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
+                    capabilities_json TEXT NOT NULL,
+                    test_suite_version TEXT NOT NULL,
+                    sandbox_environment TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    manifest_sha256 TEXT NOT NULL
+                        CHECK (length(manifest_sha256) = 64),
+                    artifact_hashes_json TEXT NOT NULL,
+                    conformance_results_json TEXT NOT NULL,
+                    executed_at TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    provenance TEXT NOT NULL DEFAULT 'unattested'
+                        CHECK (provenance IN ('unattested', 'runner_attested', 'provider_signed')),
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE external_adapter_evidence_artifacts (
+                    id TEXT PRIMARY KEY,
+                    package_id TEXT NOT NULL,
+                    artifact_name TEXT NOT NULL,
+                    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+                    content BLOB NOT NULL,
+                    FOREIGN KEY(package_id)
+                        REFERENCES external_adapter_evidence_packages(id)
+                        ON DELETE CASCADE,
+                    UNIQUE(package_id, artifact_name)
+                );
+
+                CREATE INDEX idx_external_adapter_evidence_binding
+                    ON external_adapter_evidence_packages(
+                        provider_id, adapter_id, adapter_version,
+                        provider_scope, tool_id, tool_contract_fingerprint,
+                        expires_at
+                    );
+
+                CREATE TRIGGER prevent_external_adapter_evidence_update
+                BEFORE UPDATE ON external_adapter_evidence_packages
+                BEGIN
+                    SELECT RAISE(ABORT, 'verified evidence packages are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_evidence_delete
+                BEFORE DELETE ON external_adapter_evidence_packages
+                BEGIN
+                    SELECT RAISE(ABORT, 'verified evidence packages are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_evidence_artifact_update
+                BEFORE UPDATE ON external_adapter_evidence_artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'evidence artifacts are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_evidence_artifact_delete
+                BEFORE DELETE ON external_adapter_evidence_artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'evidence artifacts are immutable');
+                END;
+                """
+            ),
         )
 
         with self._lock:
