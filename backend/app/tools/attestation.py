@@ -134,6 +134,28 @@ def verify_ed25519_signature(
     return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
+def verify_package_attestation(
+    public_key: bytes, payload: dict, signature: str, *,
+    package: dict, runner_id: str,
+) -> str:
+    """Verify signature and every signed package/runner binding."""
+    expected = {
+        "schema": "aibrain-runner-attestation-v1",
+        "package_id": package["id"],
+        "manifest_sha256": package["manifest_sha256"],
+        "artifact_hashes": package["artifact_hashes"],
+        "runner_id": runner_id,
+        "provider_id": package["provider_id"],
+        "adapter_id": package["adapter_id"],
+        "adapter_version": package["adapter_version"],
+        "provider_scope": package["provider_scope"],
+        "sandbox_environment": package["sandbox_environment"],
+    }
+    if any(payload.get(name) != value for name, value in expected.items()):
+        raise PermissionError("Runner attestation package binding does not match")
+    return verify_ed25519_signature(public_key, payload, signature)
+
+
 def generate_test_keypair() -> tuple[bytes, Ed25519PrivateKey]:
     """Test utility only; production runner keys must be generated externally."""
     private_key = Ed25519PrivateKey.generate()
