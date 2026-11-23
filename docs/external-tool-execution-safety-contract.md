@@ -296,6 +296,29 @@ not independently established human identities. Production operation therefore
 still needs individual operator identity/SSO, stronger audit attribution,
 secret rotation, and a controlled key-registration ceremony.
 
+Trusted runner keys are scoped to exactly one provider ID, adapter ID and
+version, provider account scope, and tool ID. A key registered for one such
+binding cannot attest another provider or account; register separate keys for
+separate provider/tool scopes. This scope is enforced during payload creation,
+attestation ingestion, certification approval, active-certification lookup,
+and the final dispatch transaction.
+
+The isolated runner client is `scripts/submit_conformance_evidence.py`. It
+uploads an already-generated evidence manifest and its declared artifact
+bytes, obtains the canonical attestation payload, signs it locally using the
+runner's externally stored Ed25519 private key, and submits the signature.
+It deliberately does not generate test reports or claim to have run provider
+tests. The independently controlled runner job must execute the provider-
+specific conformance suite and construct the manifest before using the client.
+The signing key is supplied through `AIBRAIN_RUNNER_PRIVATE_KEY_B64` only in
+the runner's secret store and is never transmitted to AIBrain.
+
+The repository GitHub Actions workflow runs compilation and the complete
+project test suite on Python 3.11 and 3.14. It is generic project CI, not proof
+of a trusted runner environment and not a provider-specific conformance run.
+A real provider sandbox, isolated runner deployment, secret-store provisioning,
+and successful provider-specific test evidence remain release gates.
+
 A signature proves that the holder of a registered private key signed the
 bound statement. It does not independently prove that the sandbox environment
 was genuine, that the runner binary was uncompromised, or that tests actually
