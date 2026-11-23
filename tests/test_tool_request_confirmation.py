@@ -251,7 +251,7 @@ def test_stale_execution_recovery_marks_outcome_unknown_without_retry(tmp_path):
         assert attempt["error_code"] == "recovery_outcome_unknown"
         assert attempt["finished_at"]
 
-        with pytest.raises(PermissionError, match="not active"):
+        with pytest.raises(PermissionError, match="no longer active"):
             repository.complete_execution(
                 user_id,
                 request["id"],
