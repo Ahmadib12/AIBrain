@@ -36,6 +36,7 @@ class Settings(BaseSettings):
         default=None,
         min_length=32,
     )
+    security_operator_emails: str = ""
     login_rate_limit_attempts: int = Field(default=5, gt=0)
     login_rate_limit_window_seconds: int = Field(default=300, gt=0)
 
