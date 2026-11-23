@@ -12,6 +12,7 @@ from backend.app.tools.contracts import (
 from backend.app.tools.external import ExternalToolAction, ExternalToolAdapter
 from backend.app.tools.fake_provider import FakeExternalToolProvider, FakeProviderTimeout
 from backend.app.tools.runtime import ToolExecutionGateway
+from backend.app.tools.dispatcher import ExternalToolDispatcher
 
 __all__ = [
     "ExecutionIdempotencyMode",
@@ -28,4 +29,5 @@ __all__ = [
     "contract_fingerprint",
     "execution_action_digest",
     "ToolExecutionGateway",
+    "ExternalToolDispatcher",
 ]
