@@ -1,6 +1,6 @@
 # External Tool Execution Safety Contract
 
-**Status:** Design contract; not yet implemented as an external execution adapter.
+**Status:** Design contract; typed adapter boundary and test-only fake provider implemented. No production external adapter or dispatch integration is enabled.
 
 This document defines the minimum guarantees required before AIBrain may
 dispatch a state-changing action to an external service. It deliberately does
@@ -184,8 +184,16 @@ recovery worker marks stale claims outcome_unknown and never retries. The
 existing reconciliation API records owner attestation; it is not yet a
 provider-backed verification workflow.
 
-This design does not change those behaviors. Implementation should proceed in
-small steps: define typed adapter/capability/result contracts, add conformance
-tests with a fake provider, persist the immutable dispatch binding, implement
-provider lookup/reconciliation, and only then consider one narrowly scoped
+This design does not change those behaviors. The typed adapter protocol and
+immutable canonical action envelope now exist in `backend/app/tools/external.py`.
+A deterministic fake provider in `backend/app/tools/fake_provider.py` exercises
+provider-enforced idempotency, duplicate effects when idempotency is absent,
+pre-acceptance failure, timeout after acceptance, read-only lookup, and
+concurrent same-key submissions. Its conformance tests are in
+`tests/test_fake_external_tool_provider.py`. The fake is not registered with
+the application gateway and cannot perform real-world actions.
+
+Remaining steps are to persist the immutable dispatch binding, implement
+provider-backed lookup/reconciliation, gather sandbox evidence for an actual
+provider's guarantees, and only then consider one narrowly scoped
 state-changing adapter behind an explicit feature gate.
