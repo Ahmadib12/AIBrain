@@ -934,7 +934,7 @@ class ToolRequestRepository:
                         continue
                     attestation_payload = json.loads(attestation_row["payload_json"])
                     from backend.app.tools.attestation import (
-                        _parse_timestamp, verify_ed25519_signature,
+                        _parse_timestamp, verify_package_attestation,
                     )
                     if (
                         _parse_timestamp(attestation_payload["expires_at"], "expires_at")
@@ -945,9 +945,20 @@ class ToolRequestRepository:
                         <= datetime.now(timezone.utc)
                     ):
                         continue
-                    if verify_ed25519_signature(
+                    signed_package = {
+                        "id": package_id,
+                        "manifest_sha256": package_row["manifest_sha256"],
+                        "artifact_hashes": json.loads(package_row["artifact_hashes_json"]),
+                        "provider_id": package_row["provider_id"],
+                        "adapter_id": package_row["adapter_id"],
+                        "adapter_version": package_row["adapter_version"],
+                        "provider_scope": package_row["provider_scope"],
+                        "sandbox_environment": package_row["sandbox_environment"],
+                    }
+                    if verify_package_attestation(
                         bytes(attestation_row["public_key"]),
                         attestation_payload, attestation_row["signature"],
+                        package=signed_package, runner_id=attestation_row["runner_id"],
                     ) != attestation_row["payload_sha256"]:
                         continue
                     artifact_rows = connection.execute(
