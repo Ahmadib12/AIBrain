@@ -1,6 +1,4 @@
 import pytest
-from pydantic import SecretStr
-
 from backend.app.config import Settings
 
 
