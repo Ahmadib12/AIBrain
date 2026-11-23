@@ -532,15 +532,6 @@ class Database:
                     SELECT RAISE(ABORT, 'tool dispatch audit events are immutable');
                 END;
 
-                CREATE TRIGGER prevent_tool_dispatch_audit_delete
-                BEFORE DELETE ON tool_dispatch_audit_events
-                WHEN EXISTS (
-                    SELECT 1 FROM users WHERE id = OLD.user_id AND deleted_at IS NULL
-                )
-                BEGIN
-                    SELECT RAISE(ABORT, 'tool dispatch audit events are immutable');
-                END;
-
                 CREATE TRIGGER validate_tool_dispatch_audit_event
                 BEFORE INSERT ON tool_dispatch_audit_events
                 WHEN NOT EXISTS (
