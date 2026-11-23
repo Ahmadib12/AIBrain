@@ -48,6 +48,23 @@ class Settings(BaseSettings):
     webauthn_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ()
     webauthn_challenge_ttl_seconds: int = Field(default=300, gt=0)
 
+    @model_validator(mode="after")
+    def validate_privileged_tokens_are_separate(self):
+        configured = [
+            token.get_secret_value()
+            for token in (
+                self.provider_operator_token,
+                self.trusted_runner_ingest_token,
+                self.security_operator_token,
+            )
+            if token is not None
+        ]
+        if len(configured) != len(set(configured)):
+            raise ValueError(
+                "Provider, runner, and security operator tokens must be distinct"
+            )
+        return self
+
     @field_validator("webauthn_allowed_origins", mode="before")
     @classmethod
     def parse_webauthn_origins(cls, value):
