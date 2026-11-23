@@ -872,7 +872,7 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
 
     # Only a separately authenticated human operator can approve certification.
     runner_cannot_certify = client.post(
-        f"/api/v1/tools/runner/evidence/{package['package_id']}/certify",
+        f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
         headers={"X-AIBrain-Runner-Token": runner_token},
         json={
             "approved_by": "security-reviewer",
@@ -882,7 +882,7 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     assert runner_cannot_certify.status_code == 401
 
     certified = client.post(
-        f"/api/v1/tools/runner/evidence/{package['package_id']}/certify",
+        f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
         headers={"X-AIBrain-Operator-Token": operator_token},
         json={
             "approved_by": "security-reviewer",
