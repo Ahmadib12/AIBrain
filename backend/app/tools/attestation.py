@@ -6,6 +6,7 @@ runner signing happens in the isolated runner or an operator-controlled tool.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -119,15 +120,16 @@ def verify_ed25519_signature(
     if not isinstance(signature, str) or not signature or len(signature) > 256:
         raise ValueError("Attestation signature is invalid")
     try:
-        raw_signature = base64.urlsafe_b64decode(
-            signature + "=" * (-len(signature) % 4)
+        raw_signature = base64.b64decode(
+            signature + "=" * (-len(signature) % 4),
+            altchars=b"-_", validate=True,
         )
         if len(raw_signature) != 64:
             raise ValueError("Attestation signature length is invalid")
         Ed25519PublicKey.from_public_bytes(public_key).verify(
             raw_signature, canonical_json(payload)
         )
-    except (ValueError, InvalidSignature) as exc:
+    except (ValueError, binascii.Error, InvalidSignature) as exc:
         raise PermissionError("Runner attestation signature verification failed") from exc
     return hashlib.sha256(canonical_json(payload)).hexdigest()
 
