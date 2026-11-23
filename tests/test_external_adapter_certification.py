@@ -493,3 +493,31 @@ def test_key_rotation_accepts_new_key_without_rewriting_old_key(repository):
     assert repository.get_external_adapter_evidence_attestation(
         package["id"]
     )["key_id"] == "runner-key-new"
+
+
+
+def test_certification_cannot_outlive_runner_attestation(repository):
+    with pytest.raises(ValueError, match="runner attestation"):
+        certify(
+            repository,
+            expires_at=(datetime.now(timezone.utc) + timedelta(days=6)).isoformat(),
+        )
+
+
+def test_runner_key_and_attestation_records_are_immutable(repository):
+    certificate = certify(repository)
+    package_id = certificate["evidence_references"][0].split(":", 1)[1]
+    attestation = repository.get_external_adapter_evidence_attestation(package_id)
+    connection = repository.database.connect()
+    with pytest.raises(Exception):
+        connection.execute(
+            "UPDATE trusted_runner_keys SET runner_id = 'attacker' WHERE key_id = ?",
+            (attestation["key_id"],),
+        )
+    connection.rollback()
+    with pytest.raises(Exception):
+        connection.execute(
+            "UPDATE external_adapter_evidence_attestations SET signature = 'forged' WHERE package_id = ?",
+            (package_id,),
+        )
+    connection.rollback()
