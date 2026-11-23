@@ -519,7 +519,6 @@ class Database:
                     action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
                     details_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    UNIQUE(request_id, event_type),
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY(request_id) REFERENCES tool_requests(id) ON DELETE CASCADE
                 );
