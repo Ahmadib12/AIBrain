@@ -680,7 +680,7 @@ async def attest_external_adapter_evidence(
 async def certify_external_adapter_evidence(
     package_id: str,
     request: EvidenceCertificationApprovalRequest,
-    _operator: None = Depends(require_security_operator),
+    operator: dict = Depends(require_security_operator),
 ) -> dict:
     try:
         certificate = get_app_state().tool_requests.certify_external_adapter(
