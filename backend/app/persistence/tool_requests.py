@@ -754,6 +754,293 @@ class ToolRequestRepository:
                 recovered += 1
         return recovered
 
+    def begin_external_dispatch(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        expected_contract_fingerprint: str,
+        adapter_id: str,
+        adapter_version: str,
+        provider_id: str,
+        provider_scope: str,
+        capabilities: dict,
+    ) -> dict:
+        """Atomically revalidate a passkey authorization and freeze dispatch start."""
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT r.*, a.status AS attempt_status,
+                       a.idempotency_key, a.id AS attempt_id,
+                       z.id AS authorization_id, z.proposal_digest,
+                       z.contract_fingerprint AS authorized_fingerprint,
+                       z.credential_id, z.challenge_id,
+                       c.revoked_at, h.purpose, h.request_id AS challenge_request_id,
+                       h.consumed_at AS challenge_consumed_at,
+                       h.proposal_digest AS challenge_digest,
+                       h.contract_fingerprint AS challenge_fingerprint,
+                       u.deleted_at
+                FROM tool_requests AS r
+                JOIN tool_execution_attempts AS a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                LEFT JOIN tool_authorizations AS z
+                  ON z.request_id = r.id AND z.user_id = r.user_id
+                LEFT JOIN webauthn_credentials AS c
+                  ON c.id = z.credential_id AND c.user_id = z.user_id
+                LEFT JOIN webauthn_challenges AS h
+                  ON h.id = z.challenge_id AND h.user_id = z.user_id
+                JOIN users AS u ON u.id = r.user_id
+                WHERE r.id = ? AND r.user_id = ?
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("External tool execution not found")
+            if row["deleted_at"] is not None:
+                raise PermissionError("User account is not active")
+            if (
+                row["authorization_policy"] != "passkey"
+                or row["status"] != "executing"
+                or row["consumed_at"] is None
+                or row["attempt_status"] != "claimed"
+                or row["idempotency_key"] != request_id
+            ):
+                raise PermissionError("Execution is not eligible for external dispatch")
+            if (
+                row["authorization_id"] is None
+                or row["credential_id"] is None
+                or row["revoked_at"] is not None
+                or row["purpose"] != "tool_approval"
+                or row["challenge_request_id"] != request_id
+                or row["challenge_consumed_at"] is None
+            ):
+                raise PermissionError("Active passkey authorization is required")
+            if (
+                row["contract_fingerprint"] != expected_contract_fingerprint
+                or row["authorized_fingerprint"] != expected_contract_fingerprint
+                or row["challenge_fingerprint"] != expected_contract_fingerprint
+            ):
+                raise PermissionError("Authorized tool contract has changed")
+            arguments = json.loads(row["arguments_json"])
+            current_digest = _request_digest(
+                row["tool_id"], arguments, expected_contract_fingerprint
+            )
+            audit = json.loads(row["audit_json"] or "{}")
+            proposal = audit.get("proposal") if isinstance(audit, dict) else None
+            if (
+                not isinstance(proposal, dict)
+                or proposal.get("arguments_sha256") != current_digest
+                or row["proposal_digest"] != current_digest
+                or row["challenge_digest"] != current_digest
+            ):
+                raise PermissionError("Passkey authorization does not match action")
+            expiry = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+            if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
+                raise PermissionError("Tool authorization has expired")
+            binding = connection.execute(
+                """
+                SELECT * FROM tool_execution_bindings
+                WHERE request_id = ? AND user_id = ?
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if binding is None:
+                raise PermissionError("Persisted external dispatch binding is required")
+            if (
+                binding["tool_contract_fingerprint"] != expected_contract_fingerprint
+                or binding["adapter_id"] != adapter_id
+                or binding["adapter_version"] != adapter_version
+                or binding["provider_id"] != provider_id
+                or binding["provider_scope"] != provider_scope
+                or binding["capabilities_json"] != json.dumps(
+                    capabilities, ensure_ascii=False, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                )
+                or json.loads(binding["payload_json"]) != arguments
+            ):
+                raise PermissionError("Registered adapter does not match dispatch binding")
+            digest_input = {
+                "user_id": user_id,
+                "tool_id": row["tool_id"],
+                "contract_fingerprint": expected_contract_fingerprint,
+                "adapter_id": adapter_id,
+                "adapter_version": adapter_version,
+                "provider_id": provider_id,
+                "provider_scope": provider_scope,
+                "arguments": arguments,
+            }
+            digest = hashlib.sha256(json.dumps(
+                digest_input, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest()
+            if digest != binding["action_digest"]:
+                raise PermissionError("Dispatch action digest verification failed")
+            existing = connection.execute(
+                """
+                SELECT 1 FROM tool_dispatch_audit_events
+                WHERE request_id = ? AND event_type = 'dispatch_started'
+                """,
+                (request_id,),
+            ).fetchone()
+            if existing is not None:
+                raise PermissionError("External dispatch has already been initiated")
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_audit_events
+                    (id, user_id, request_id, event_type, action_digest,
+                     details_json, created_at)
+                VALUES (?, ?, ?, 'dispatch_started', ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), user_id, request_id, digest,
+                    json.dumps({
+                        "attempt_id": row["attempt_id"],
+                        "adapter_id": adapter_id,
+                        "adapter_version": adapter_version,
+                        "provider_id": provider_id,
+                        "provider_scope": provider_scope,
+                    }, sort_keys=True, separators=(",", ":")),
+                    now,
+                ),
+            )
+        return {
+            "request_id": request_id,
+            "idempotency_key": row["idempotency_key"],
+            "action_digest": digest,
+            "payload": arguments,
+        }
+
+    def record_external_dispatch_outcome(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        outcome: str,
+        action_digest: str,
+        result: dict | None = None,
+        error_code: str | None = None,
+        evidence_reference: str | None = None,
+    ) -> dict:
+        """Persist one definitive or unknown provider outcome without retrying."""
+        if outcome not in ("succeeded", "failed", "unknown"):
+            raise ValueError("External dispatch outcome is invalid")
+        if not isinstance(action_digest, str) or len(action_digest) != 64:
+            raise ValueError("Action digest is invalid")
+        if outcome == "succeeded":
+            if not isinstance(result, dict) or error_code is not None:
+                raise ValueError("Successful outcome requires a result only")
+            validate_personal_payload(result)
+        else:
+            if result is not None:
+                raise ValueError("Non-success outcome cannot contain a result")
+            if not isinstance(error_code, str) or not error_code or len(error_code) > 64:
+                raise ValueError("External dispatch error code is required")
+        now = _utc_now()
+        request_status = {
+            "succeeded": "completed",
+            "failed": "failed",
+            "unknown": "outcome_unknown",
+        }[outcome]
+        attempt_status = {
+            "succeeded": "succeeded",
+            "failed": "failed",
+            "unknown": "outcome_unknown",
+        }[outcome]
+        event_type = {
+            "succeeded": "dispatch_succeeded",
+            "failed": "dispatch_failed",
+            "unknown": "dispatch_unknown",
+        }[outcome]
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            started = connection.execute(
+                """
+                SELECT action_digest FROM tool_dispatch_audit_events
+                WHERE request_id = ? AND user_id = ?
+                  AND event_type = 'dispatch_started'
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if started is None or started["action_digest"] != action_digest:
+                raise PermissionError("No matching initiated dispatch exists")
+            prior = connection.execute(
+                """
+                SELECT 1 FROM tool_dispatch_audit_events
+                WHERE request_id = ? AND user_id = ?
+                  AND event_type IN (
+                    'dispatch_succeeded', 'dispatch_failed', 'dispatch_unknown'
+                  )
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if prior is not None:
+                raise PermissionError("Dispatch outcome has already been recorded")
+            request_update = connection.execute(
+                """
+                UPDATE tool_requests
+                SET status = ?, result_json = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'executing'
+                  AND consumed_at IS NOT NULL
+                """,
+                (
+                    request_status,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    now, request_id, user_id,
+                ),
+            )
+            if request_update.rowcount != 1:
+                raise PermissionError("Tool request is no longer dispatchable")
+            attempt_update = connection.execute(
+                """
+                UPDATE tool_execution_attempts
+                SET status = ?, updated_at = ?, finished_at = ?, error_code = ?
+                WHERE request_id = ? AND user_id = ? AND status = 'claimed'
+                """,
+                (attempt_status, now, now, error_code, request_id, user_id),
+            )
+            if attempt_update.rowcount != 1:
+                raise PermissionError("Tool execution attempt is no longer active")
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_audit_events
+                    (id, user_id, request_id, event_type, action_digest,
+                     details_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), user_id, request_id, event_type,
+                    action_digest,
+                    json.dumps({
+                        "error_code": error_code,
+                        "evidence_reference": evidence_reference,
+                    }, sort_keys=True, separators=(",", ":")),
+                    now,
+                ),
+            )
+        return self.get(user_id, request_id)
+
+    def get_dispatch_audit(self, user_id: str, request_id: str) -> list[dict]:
+        rows = self.database.connect().execute(
+            """
+            SELECT event_type, action_digest, details_json, created_at
+            FROM tool_dispatch_audit_events
+            WHERE user_id = ? AND request_id = ?
+            ORDER BY created_at, id
+            """,
+            (user_id, request_id),
+        ).fetchall()
+        return [
+            {
+                "event_type": row["event_type"],
+                "action_digest": row["action_digest"],
+                "details": json.loads(row["details_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def reconcile_execution_attempt(
         self,
         user_id: str,
