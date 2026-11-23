@@ -500,6 +500,49 @@ class Database:
 
                 """,
             ),
+            (
+                11,
+                """
+                CREATE TABLE tool_dispatch_audit_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (
+                        event_type IN (
+                            'dispatch_started',
+                            'dispatch_succeeded',
+                            'dispatch_failed',
+                            'dispatch_unknown',
+                            'outcome_lookup'
+                        )
+                    ),
+                    action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(request_id, event_type),
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_dispatch_audit_user
+                    ON tool_dispatch_audit_events(user_id, created_at);
+
+                CREATE TRIGGER prevent_tool_dispatch_audit_update
+                BEFORE UPDATE ON tool_dispatch_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'tool dispatch audit events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_tool_dispatch_audit_delete
+                BEFORE DELETE ON tool_dispatch_audit_events
+                WHEN EXISTS (
+                    SELECT 1 FROM users WHERE id = OLD.user_id AND deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'tool dispatch audit events are immutable');
+                END;
+                """
+            ),
         )
 
         with self._lock:
