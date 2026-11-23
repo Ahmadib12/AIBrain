@@ -756,6 +756,11 @@ class Database:
                 CREATE TABLE trusted_runner_keys (
                     key_id TEXT PRIMARY KEY,
                     runner_id TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
                     algorithm TEXT NOT NULL CHECK (algorithm = 'Ed25519'),
                     public_key BLOB NOT NULL CHECK (length(public_key) = 32),
                     valid_from TEXT NOT NULL,
