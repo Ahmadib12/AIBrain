@@ -51,14 +51,16 @@ class ExternalToolDispatcher:
         if not isinstance(adapter, ExternalToolAdapter):
             raise TypeError("A conforming external adapter is required")
         fingerprint = contract_fingerprint(contract)
+        proposed = self.repository.get(user_id, request_id)
+        if proposed["tool_id"] != contract.tool_id:
+            raise PermissionError("Tool contract does not match the authorized request")
+        if proposed["contract_fingerprint"] != fingerprint:
+            raise PermissionError("Tool contract changed after authorization")
         claimed = self.repository.claim_passkey_authorized_for_execution(
             user_id,
             request_id,
             expected_contract_fingerprint=fingerprint,
         )
-        if claimed["tool_id"] != contract.tool_id:
-            raise PermissionError("Tool contract does not match the authorized request")
-
         capabilities = adapter.capabilities
         snapshot = _capability_snapshot(adapter)
         payload = claimed["arguments"]
