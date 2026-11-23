@@ -122,3 +122,37 @@ Registering a language does not claim that translation, speech recognition, or s
 - Typed multimodal and stream-event contracts
 - SSE-style intelligence response endpoint
 - Bounded health-check timeout and per-provider health-check locking
+
+### Inspecting and reconciling uncertain tool executions
+
+Authenticated users can inspect their own persisted tool request and execution-attempt state:
+
+`GET /api/v1/tools/requests/{request_id}`
+
+If recovery has marked an attempt `outcome_unknown`, the owner may record a manually verified outcome:
+
+`POST /api/v1/tools/requests/{request_id}/reconcile`
+
+Successful reconciliation request:
+
+```json
+{
+  "outcome": "succeeded",
+  "note": "Checked the external service and confirmed completion.",
+  "result": {
+    "verified": true
+  }
+}
+```
+
+Failed reconciliation request:
+
+```json
+{
+  "outcome": "failed",
+  "note": "Checked the external service; the operation was not applied.",
+  "error_code": "external_not_applied"
+}
+```
+
+The `note` is required and limited to 1,000 characters. A successful outcome requires a result object and cannot include an error code. A failed outcome cannot include a result. Only the authenticated owner can inspect or reconcile the request. Reconciliation is an owner-recorded attestation, not independent verification by AIBrain: operators must check the external system before submitting it. Reconciliation updates the persisted request and attempt atomically; it does not retry or dispatch the tool. Duplicate or non-uncertain reconciliation attempts are rejected.
