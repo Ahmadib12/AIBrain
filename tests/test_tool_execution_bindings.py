@@ -59,6 +59,10 @@ def make_binding(repository, user_id, request, arguments, fingerprint, **overrid
         "provider_scope": "fake-account",
         "capabilities": {
             "idempotency_mode": "provider_enforced",
+            "key_scope": "provider-account-and-operation",
+            "idempotency_retention_seconds": 86400,
+            "rejects_payload_mismatch": True,
+            "concurrent_deduplication": True,
             "supports_outcome_lookup": True,
         },
     }
