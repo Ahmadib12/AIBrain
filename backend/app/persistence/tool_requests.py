@@ -319,6 +319,8 @@ class ToolRequestRepository:
         }
         if set(capabilities) - allowed_capability_fields:
             raise ValueError("Binding contains unsupported capability metadata")
+        if capabilities.get("idempotency_mode") not in ("none", "provider_enforced"):
+            raise ValueError("Binding idempotency mode is invalid")
         for name, value in capabilities.items():
             if name in {"rejects_payload_mismatch", "concurrent_deduplication", "supports_outcome_lookup"}:
                 if not isinstance(value, bool):
@@ -328,6 +330,19 @@ class ToolRequestRepository:
                     raise ValueError("Idempotency retention must be a positive integer")
             elif not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} capability must be a non-empty string")
+        if capabilities["idempotency_mode"] == "provider_enforced":
+            if (
+                not capabilities.get("key_scope")
+                or not capabilities.get("idempotency_retention_seconds")
+                or capabilities.get("rejects_payload_mismatch") is not True
+                or capabilities.get("concurrent_deduplication") is not True
+            ):
+                raise ValueError("Provider-enforced idempotency metadata is incomplete")
+        elif any(
+            capabilities.get(name) is True
+            for name in ("rejects_payload_mismatch", "concurrent_deduplication")
+        ) or capabilities.get("key_scope") is not None or capabilities.get("idempotency_retention_seconds") is not None:
+            raise ValueError("Non-idempotent capability metadata cannot claim deduplication")
 
         payload_json = json.dumps(
             payload, ensure_ascii=False, sort_keys=True,
