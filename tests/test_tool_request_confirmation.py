@@ -106,6 +106,178 @@ def test_request_cannot_be_approved_twice(tmp_path):
         database.shutdown()
 
 
+def create_approved_read_only_request(repository, user_id):
+    return repository.create(
+        user_id,
+        tool_id="test-read-only",
+        arguments={"value": "approved"},
+        status="approved",
+        authorization_policy="read_only",
+    )
+
+
+def test_execution_claim_creates_one_durable_attempt_atomically(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+
+        claimed = repository.claim_for_execution(user_id, request["id"])
+
+        assert claimed["status"] == "executing"
+        assert claimed["consumed_at"] is not None
+
+        attempt = repository.get_execution_attempt(user_id, request["id"])
+        assert attempt["request_id"] == request["id"]
+        assert attempt["user_id"] == user_id
+        assert attempt["idempotency_key"] == request["id"]
+        assert attempt["status"] == "claimed"
+        assert attempt["claimed_at"]
+        assert attempt["finished_at"] is None
+    finally:
+        database.shutdown()
+
+
+def test_failed_execution_claim_rolls_back_without_attempt_record(tmp_path):
+    import sqlite3
+
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        database.connect().execute(
+            """
+            CREATE TRIGGER reject_test_execution_attempt
+            BEFORE INSERT ON tool_execution_attempts
+            BEGIN
+                SELECT RAISE(ABORT, 'attempt insert rejected');
+            END
+            """
+        )
+        database.connect().commit()
+
+        with pytest.raises(sqlite3.IntegrityError, match="attempt insert rejected"):
+            repository.claim_for_execution(user_id, request["id"])
+
+        persisted = repository.get(user_id, request["id"])
+        assert persisted["status"] == "approved"
+        assert persisted["consumed_at"] is None
+        count = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_execution_attempts WHERE request_id = ?",
+            (request["id"],),
+        ).fetchone()[0]
+        assert count == 0
+    finally:
+        database.shutdown()
+
+
+def test_duplicate_execution_claim_does_not_create_another_attempt(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        repository.claim_for_execution(user_id, request["id"])
+
+        with pytest.raises(PermissionError, match="not available"):
+            repository.claim_for_execution(user_id, request["id"])
+
+        count = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_execution_attempts WHERE request_id = ?",
+            (request["id"],),
+        ).fetchone()[0]
+        assert count == 1
+    finally:
+        database.shutdown()
+
+
+def test_completion_updates_request_and_attempt_in_one_transaction(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        repository.claim_for_execution(user_id, request["id"])
+
+        completed = repository.complete_execution(
+            user_id,
+            request["id"],
+            result={"status": "completed", "value": "done"},
+        )
+
+        assert completed["status"] == "completed"
+        assert completed["result"]["value"] == "done"
+        attempt = repository.get_execution_attempt(user_id, request["id"])
+        assert attempt["status"] == "succeeded"
+        assert attempt["finished_at"]
+        assert attempt["error_code"] is None
+    finally:
+        database.shutdown()
+
+
+def test_failure_updates_request_and_attempt(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        repository.claim_for_execution(user_id, request["id"])
+
+        failed = repository.fail_execution(
+            user_id,
+            request["id"],
+            error_code="tool_unavailable",
+        )
+
+        assert failed["status"] == "failed"
+        attempt = repository.get_execution_attempt(user_id, request["id"])
+        assert attempt["status"] == "failed"
+        assert attempt["error_code"] == "tool_unavailable"
+        assert attempt["finished_at"]
+    finally:
+        database.shutdown()
+
+
+def test_stale_execution_recovery_marks_outcome_unknown_without_retry(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        request = create_approved_read_only_request(repository, user_id)
+        repository.claim_for_execution(user_id, request["id"])
+
+        cutoff = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+        recovered = repository.recover_stale_execution_attempts(
+            stale_before=cutoff
+        )
+
+        assert recovered == 1
+        persisted = repository.get(user_id, request["id"])
+        assert persisted["status"] == "outcome_unknown"
+        assert persisted["consumed_at"] is not None
+
+        attempt = repository.get_execution_attempt(user_id, request["id"])
+        assert attempt["status"] == "outcome_unknown"
+        assert attempt["error_code"] == "recovery_outcome_unknown"
+        assert attempt["finished_at"]
+
+        with pytest.raises(PermissionError, match="not active"):
+            repository.complete_execution(
+                user_id,
+                request["id"],
+                result={"status": "completed"},
+            )
+        with pytest.raises(PermissionError, match="not available"):
+            repository.claim_for_execution(user_id, request["id"])
+
+        assert repository.recover_stale_execution_attempts(
+            stale_before=cutoff
+        ) == 0
+    finally:
+        database.shutdown()
+
+
+def test_stale_execution_recovery_requires_timezone_aware_cutoff(tmp_path):
+    database, user_id, repository = create_repository(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="timezone"):
+            repository.recover_stale_execution_attempts(
+                stale_before="2026-11-23T12:00:00"
+            )
+    finally:
+        database.shutdown()
+
+
 def test_cancelled_request_cannot_be_approved(tmp_path):
     database, user_id, repository = create_repository(tmp_path)
     try:
