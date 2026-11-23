@@ -521,3 +521,25 @@ def test_runner_key_and_attestation_records_are_immutable(repository):
             (package_id,),
         )
     connection.rollback()
+
+
+
+def test_revoked_public_key_cannot_be_re_registered_under_new_id(repository):
+    public_key, _ = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    values = {
+        "runner_id": "runner-key-alias",
+        "public_key": public_key,
+        "valid_from": (now - timedelta(minutes=1)).isoformat(),
+        "valid_until": (now + timedelta(days=1)).isoformat(),
+        "registered_by": "security-admin",
+    }
+    repository.register_trusted_runner_key(key_id="original-key", **values)
+    repository.revoke_trusted_runner_key(
+        "original-key", revoked_by="security-admin",
+        reason="Compromised private key",
+    )
+    with pytest.raises(Exception):
+        repository.register_trusted_runner_key(
+            key_id="alias-key", **values
+        )
