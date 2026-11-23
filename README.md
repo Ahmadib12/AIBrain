@@ -149,7 +149,10 @@ application gateway. Tests are in
 `tests/test_fake_external_tool_provider.py`.
 
 Migration 10 adds owner-scoped immutable dispatch bindings; migration 11
-adds append-only dispatch audit events. `ExternalToolDispatcher` now provides
+adds append-only dispatch audit events; migration 12 adds immutable provider-adapter
+certifications and append-only revocations. External dispatch requires a matching,
+unexpired, non-revoked certification for the exact provider, adapter version,
+account scope, and capability snapshot. `ExternalToolDispatcher` now provides
 a guarded, provider-neutral execution boundary: it claims only passkey-authorized
 state-change requests, freezes the exact adapter/provider/capability snapshot,
 revalidates authorization and binding immediately before dispatch, and records
