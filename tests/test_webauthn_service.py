@@ -533,8 +533,9 @@ def test_valid_signed_assertion_authorizes_request_atomically(tmp_path):
     updated_challenge = repository.get_challenge(user_id, challenge_id)
     updated_credential = repository.get_credential(user_id, credential["id"])
 
-    assert updated_request["status"] == "executing"
-    assert updated_request["consumed_at"] is not None
+    # A valid assertion records authorization but does not claim execution.
+    assert updated_request["status"] == "approved"
+    assert updated_request["consumed_at"] is None
     assert updated_challenge["consumed_at"] is not None
     assert updated_credential["sign_count"] == 1
     assert updated_credential["last_used_at"] is not None
