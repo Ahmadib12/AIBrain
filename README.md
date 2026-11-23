@@ -252,10 +252,12 @@ now requires a valid, non-revoked runner attestation and cannot outlive it.
 Active certification lookup rechecks the signature and key status.
 
 AIBrain never stores runner private keys. The runner ingestion API uses
-`AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN`, while key registration, key revocation,
-certification approval, and certification revocation use the separate
-`AIBRAIN_PROVIDER_OPERATOR_TOKEN`. Both secrets must be at least 32 characters
-and must be provisioned independently through the deployment secret manager.
+`AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN`. Key registration, key revocation,
+certification approval, and certification revocation use the dedicated
+`AIBRAIN_SECURITY_OPERATOR_TOKEN`. Provider administration retains the
+separate `AIBRAIN_PROVIDER_OPERATOR_TOKEN`. All three credentials must be at
+least 32 characters and provisioned independently through the deployment
+secret manager.
 
 Runner API:
 - `POST /api/v1/tools/runner/evidence` — submit the manifest and base64 artifacts.
@@ -268,12 +270,15 @@ Operator API:
 - `POST /api/v1/tools/operator/evidence/{package_id}/certify` — approve certification separately.
 - `POST /api/v1/tools/operator/certifications/{certification_id}/revoke` — revoke certification.
 
-Runner endpoints require `X-AIBrain-Runner-Token`; operator endpoints require
-`X-AIBrain-Operator-Token`. The runner token cannot register or revoke keys or
-approve certifications. Private signing keys remain outside AIBrain. The
-operator credential is currently a shared bearer secret; production deployments
-still need individual operator identities, stronger audit attribution, secret
-rotation, and a controlled key-registration ceremony.
+Runner endpoints require `X-AIBrain-Runner-Token`; security operator endpoints
+require `X-AIBrain-Security-Operator-Token`. The existing
+`X-AIBrain-Operator-Token` remains limited to provider administration. Neither
+the runner token nor provider operator token can register signing keys, revoke
+them, or approve adapter certifications. Private signing keys remain outside
+AIBrain. The security operator credential is currently a shared bearer secret;
+production deployments still need individual operator identities, stronger
+audit attribution, secret rotation, and a controlled key-registration
+ceremony.
 
 A signature proves possession of a registered key, not that a sandbox was
 genuine or uncompromised. Hardware-backed remote attestation and deployment of
