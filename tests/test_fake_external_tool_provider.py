@@ -23,6 +23,7 @@ def make_action(*, key="request-1", payload=None):
         contract_fingerprint="a" * 64,
         adapter_id="fake-adapter",
         adapter_version="1",
+        provider_id="fake-provider",
         provider_scope="fake-account",
     )
     return ExternalToolAction.from_payload(
