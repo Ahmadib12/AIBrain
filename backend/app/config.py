@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     login_rate_limit_attempts: int = Field(default=5, gt=0)
     login_rate_limit_window_seconds: int = Field(default=300, gt=0)
 
+    tool_execution_recovery_interval_seconds: int = Field(default=60, gt=0)
+    tool_execution_stale_after_seconds: int = Field(default=300, gt=0)
+
     webauthn_enabled: bool = False
     webauthn_rp_id: str | None = None
     webauthn_rp_name: str = "AIBrain"
