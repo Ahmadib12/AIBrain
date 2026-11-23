@@ -1226,100 +1226,139 @@ class ToolRequestRepository:
 
         return self.get(user_id, request_id)
 
+    def verify_external_adapter_evidence(
+        self,
+        manifest: dict,
+        artifacts: dict[str, bytes],
+    ) -> dict:
+        """Verify and immutably persist evidence bytes before any human approval."""
+        from backend.app.tools.conformance import verify_evidence_manifest
+
+        verified = verify_evidence_manifest(manifest, artifacts)
+        package_id = str(uuid.uuid4())
+        normalized = verified["manifest"]
+        now = verified["verified_at"]
+        capabilities_json = json.dumps(
+            normalized["capabilities"], ensure_ascii=False,
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            connection.execute(
+                """
+                INSERT INTO external_adapter_evidence_packages (
+                    id, provider_id, adapter_id, adapter_version, provider_scope,
+                    tool_id, tool_contract_fingerprint, capabilities_json,
+                    test_suite_version, sandbox_environment, manifest_json,
+                    manifest_sha256, artifact_hashes_json,
+                    conformance_results_json, executed_at, verified_at,
+                    expires_at, provenance, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unattested', ?)
+                """,
+                (
+                    package_id, normalized["provider_id"], normalized["adapter_id"],
+                    normalized["adapter_version"], normalized["provider_scope"],
+                    normalized["tool_id"], normalized["tool_contract_fingerprint"],
+                    capabilities_json, normalized["test_suite_version"],
+                    normalized["sandbox_environment"],
+                    json.dumps(normalized, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":"), allow_nan=False),
+                    verified["manifest_sha256"],
+                    json.dumps(verified["artifact_sha256"], sort_keys=True,
+                               separators=(",", ":")),
+                    json.dumps(verified["conformance_results"], sort_keys=True,
+                               separators=(",", ":")),
+                    normalized["executed_at"], now, verified["expires_at"], now,
+                ),
+            )
+            for name, content in artifacts.items():
+                connection.execute(
+                    """
+                    INSERT INTO external_adapter_evidence_artifacts
+                        (id, package_id, artifact_name, sha256, content)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), package_id, name,
+                     verified["artifact_sha256"][name], content),
+                )
+        return self.get_external_adapter_evidence_package(package_id)
+
+    def get_external_adapter_evidence_package(self, package_id: str) -> dict:
+        row = self.database.connect().execute(
+            "SELECT * FROM external_adapter_evidence_packages WHERE id = ?",
+            (package_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Verified evidence package not found")
+        artifacts = self.database.connect().execute(
+            """
+            SELECT artifact_name, sha256, content
+            FROM external_adapter_evidence_artifacts
+            WHERE package_id = ? ORDER BY artifact_name
+            """,
+            (package_id,),
+        ).fetchall()
+        return {
+            "id": row["id"],
+            "provider_id": row["provider_id"],
+            "adapter_id": row["adapter_id"],
+            "adapter_version": row["adapter_version"],
+            "provider_scope": row["provider_scope"],
+            "tool_id": row["tool_id"],
+            "tool_contract_fingerprint": row["tool_contract_fingerprint"],
+            "capabilities": json.loads(row["capabilities_json"]),
+            "test_suite_version": row["test_suite_version"],
+            "sandbox_environment": row["sandbox_environment"],
+            "manifest": json.loads(row["manifest_json"]),
+            "manifest_sha256": row["manifest_sha256"],
+            "artifact_hashes": json.loads(row["artifact_hashes_json"]),
+            "conformance_results": json.loads(row["conformance_results_json"]),
+            "artifacts": {
+                item["artifact_name"]: {
+                    "sha256": item["sha256"], "content": bytes(item["content"])
+                } for item in artifacts
+            },
+            "executed_at": row["executed_at"],
+            "verified_at": row["verified_at"],
+            "expires_at": row["expires_at"],
+            "provenance": row["provenance"],
+        }
+
     def certify_external_adapter(
         self,
         *,
-        provider_id: str,
-        adapter_id: str,
-        adapter_version: str,
-        provider_scope: str,
-        tool_id: str,
-        tool_contract_fingerprint: str,
-        capabilities: dict,
-        test_suite_version: str,
-        conformance_results: dict[str, bool],
-        test_report_sha256: str,
-        evidence_references: list[str],
+        evidence_package_id: str,
         approved_by: str,
         expires_at: str,
     ) -> dict:
-        """Record an explicitly approved, evidence-backed adapter certification.
+        """Human approval of a previously verified, exact-scope evidence package."""
+        if not isinstance(approved_by, str) or not approved_by.strip():
+            raise ValueError("Approving operator must be identified")
+        package = self.get_external_adapter_evidence_package(evidence_package_id)
+        from backend.app.tools.conformance import verify_evidence_manifest
 
-        This is an operator/service-layer operation, not a public user endpoint.
-        The caller must authenticate and authorize the approver before invoking it.
-        """
-        identifiers = {
-            "provider_id": provider_id,
-            "adapter_id": adapter_id,
-            "adapter_version": adapter_version,
-            "provider_scope": provider_scope,
-            "tool_id": tool_id,
-            "test_suite_version": test_suite_version,
-            "approved_by": approved_by,
-        }
-        if any(not isinstance(value, str) or not value.strip()
-               for value in identifiers.values()):
-            raise ValueError("Certification identifiers must be non-empty strings")
+        reverified = verify_evidence_manifest(
+            package["manifest"],
+            {name: item["content"] for name, item in package["artifacts"].items()},
+        )
         if (
-            not isinstance(tool_contract_fingerprint, str)
-            or len(tool_contract_fingerprint) != 64
-            or any(char not in "0123456789abcdef" for char in tool_contract_fingerprint)
+            reverified["manifest_sha256"] != package["manifest_sha256"]
+            or reverified["artifact_sha256"] != package["artifact_hashes"]
+            or package["expires_at"] <= _utc_now()
         ):
-            raise ValueError("Tool contract fingerprint is invalid")
-        if not isinstance(capabilities, dict) or not capabilities:
-            raise ValueError("A complete capability snapshot is required")
-        required_checks = {
-            "stable_idempotency_key",
-            "payload_mismatch_rejected",
-            "concurrent_deduplication",
-            "timeout_after_acceptance_lookup",
-            "timeout_before_acceptance_proven",
-            "ambiguous_lookup_stays_unknown",
-            "lookup_never_dispatches",
-            "sanitized_provider_output",
-            "binding_change_rejected",
-            "no_provider_fallback",
-        }
-        if (
-            not isinstance(conformance_results, dict)
-            or set(conformance_results) != required_checks
-            or any(value is not True for value in conformance_results.values())
-        ):
-            raise ValueError("All required conformance checks must pass")
-        if (
-            not isinstance(test_report_sha256, str)
-            or len(test_report_sha256) != 64
-            or any(char not in "0123456789abcdef" for char in test_report_sha256)
-        ):
-            raise ValueError("Test report SHA-256 digest is invalid")
-        if (
-            not isinstance(evidence_references, list)
-            or not evidence_references
-            or any(
-                not isinstance(item, str) or not item.strip() or len(item) > 512
-                for item in evidence_references
-            )
-        ):
-            raise ValueError("At least one bounded evidence reference is required")
+            raise PermissionError("Evidence package integrity or freshness check failed")
         try:
             expiry = datetime.fromisoformat(expires_at)
         except (TypeError, ValueError) as exc:
             raise ValueError("Certification expiry must be an ISO timestamp") from exc
-        if expiry.tzinfo is None:
-            raise ValueError("Certification expiry must include a timezone")
         now = datetime.now(timezone.utc)
-        if expiry <= now:
-            raise ValueError("Certification expiry must be in the future")
+        if expiry.tzinfo is None or expiry <= now:
+            raise ValueError("Certification expiry must be timezone-aware and in the future")
+        if expiry > datetime.fromisoformat(package["expires_at"]):
+            raise ValueError("Certification cannot outlive its evidence package")
 
         certification_id = str(uuid.uuid4())
         now_text = now.isoformat()
-        capabilities_json = json.dumps(
-            capabilities, ensure_ascii=False, sort_keys=True,
-            separators=(",", ":"), allow_nan=False,
-        )
-        evidence_json = json.dumps(
-            evidence_references, ensure_ascii=False, separators=(",", ":"),
-        )
         with self.database.transaction(immediate=True):
             self.database.connect().execute(
                 """
@@ -1332,12 +1371,16 @@ class ToolRequestRepository:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    certification_id, provider_id, adapter_id, adapter_version,
-                    provider_scope, tool_id, tool_contract_fingerprint,
-                    capabilities_json, test_suite_version,
-                    json.dumps(conformance_results, sort_keys=True, separators=(",", ":")),
-                    test_report_sha256, evidence_json, now_text, expiry.isoformat(),
-                    approved_by, now_text,
+                    certification_id, package["provider_id"], package["adapter_id"],
+                    package["adapter_version"], package["provider_scope"],
+                    package["tool_id"], package["tool_contract_fingerprint"],
+                    json.dumps(package["capabilities"], sort_keys=True, separators=(",", ":")),
+                    package["test_suite_version"],
+                    json.dumps(package["conformance_results"], sort_keys=True, separators=(",", ":")),
+                    package["manifest_sha256"],
+                    json.dumps([f"evidence-package:{evidence_package_id}"]),
+                    package["verified_at"], expiry.isoformat(), approved_by.strip(),
+                    now_text,
                 ),
             )
         return self.get_external_adapter_certification(certification_id)
