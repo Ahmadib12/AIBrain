@@ -169,7 +169,11 @@ Read-only provider lookup is available only for unknown attempts, is audited,
 and does not silently reconcile the request. Manual reconciliation remains a
 separate owner-attestation workflow.
 
-The certification repository exposes an operator/service-layer approval method; it is not a public API. The caller must authenticate and authorize the approving operator before recording a certification. Certifications and revocations are immutable audit records. A certification proves that a particular evidence package was approved; it does not independently validate provider claims or replace live provider sandbox testing.
+The certification repository exposes an operator/service-layer approval method; it is not a public API. The caller must authenticate and authorize the approving operator before recording a certification. Migrations 12–13 store immutable certifications, revocations, verified manifests, and the exact artifact bytes. Certification issuance accepts only an existing verified evidence-package ID; it no longer accepts caller-supplied Boolean test results or a claimed report digest.
+
+The canonical manifest binds provider ID, adapter ID/version, provider scope, tool ID, tool-contract fingerprint, complete capability snapshot, conformance-suite version, sandbox environment, execution and expiry timestamps, exact required test IDs/statuses, and artifact SHA-256 digests. The verifier rejects unknown or missing fields/tests, failed tests, missing/extra/altered artifacts, unsafe artifact names, oversized packages, invalid/future/expired timestamps, and malformed capability snapshots. Certification approval is a separate operator decision and cannot outlive the evidence package. Active-certification lookup re-hashes the persisted artifact bytes and rechecks the manifest binding before returning a certification.
+
+Important trust boundary: SHA-256 proves that supplied bytes match the manifest's digest; it does not prove who created the manifest, that the named sandbox actually ran, or that a provider's claims are truthful. Evidence packages are explicitly marked `unattested`. A trusted runner attestation or provider signature, with key lifecycle and revocation, remains future work. A certification therefore records operator approval of integrity-checked evidence, not cryptographic proof of provider provenance.
 
 The dispatcher is deliberately not wired into the application gateway or API
 routes. No production provider is registered, and state-changing execution
