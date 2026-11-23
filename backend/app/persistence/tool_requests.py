@@ -638,12 +638,6 @@ class ToolRequestRepository:
                 or row["consumed_at"] is None
             ):
                 raise PermissionError("Tool execution is not awaiting reconciliation")
-            if (
-                row["request_status"] != "outcome_unknown"
-                or row["attempt_status"] != "outcome_unknown"
-                or row["consumed_at"] is None
-            ):
-                raise PermissionError("Tool execution is not awaiting reconciliation")
 
             audit = json.loads(row["audit_json"] or "{}")
             if not isinstance(audit, dict):
