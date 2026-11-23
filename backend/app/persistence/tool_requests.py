@@ -1988,7 +1988,7 @@ class ToolRequestRepository:
                         key[field] != package[field]
                         for field in (
                             "provider_id", "adapter_id", "adapter_version",
-                            "provider_scope", "tool_id",
+                            "provider_scope", "tool_id", "tool_contract_fingerprint",
                         )
                     )
                     or attestation["nonce"] != attestation["payload"].get("nonce")
@@ -2015,6 +2015,10 @@ class ToolRequestRepository:
                 or verified["manifest_sha256"] != package["manifest_sha256"]
                 or verified["artifact_sha256"] != package["artifact_hashes"]
                 or package["expires_at"] <= now
+                or _parse_timestamp(certification["expires_at"], "certification_expires_at")
+                   > _parse_timestamp(package["expires_at"], "package_expires_at")
+                or _parse_timestamp(certification["expires_at"], "certification_expires_at")
+                   > _parse_timestamp(attestation["payload"]["expires_at"], "attestation_expires_at")
                 or package["provider_id"] != provider_id
                 or package["adapter_id"] != adapter_id
                 or package["adapter_version"] != adapter_version
