@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
-from backend.app.auth.operator import require_provider_operator
+from backend.app.auth.operator import (
+    require_provider_operator,
+    require_trusted_runner_ingest,
+)
 from backend.app.tools import ToolContract, ToolExecutionGateway, ToolRegistry, ToolRisk
 from backend.app.app_state import get_app_state
 
@@ -51,6 +54,25 @@ class ToolProposalRequest(BaseModel):
     arguments: dict = Field(default_factory=dict, max_length=20)
 
 
+
+
+
+
+class EvidencePackageIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict
+    artifacts_base64: dict[str, str] = Field(min_length=1, max_length=64)
+
+
+class RunnerAttestationPayloadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str = Field(min_length=1, max_length=256)
+    runner_id: str = Field(min_length=1, max_length=256)
+    nonce: str = Field(min_length=32, max_length=128)
+    issued_at: str = Field(min_length=1, max_length=64)
+    expires_at: str = Field(min_length=1, max_length=64)
 
 
 class TrustedRunnerKeyRegistrationRequest(BaseModel):
@@ -418,6 +440,84 @@ async def cancel_tool(
 
 
 
+
+
+@router.post("/runner/evidence", status_code=201)
+async def ingest_runner_evidence(
+    request: EvidencePackageIngestRequest,
+    _runner: None = Depends(require_trusted_runner_ingest),
+) -> dict:
+    """Receive a bounded evidence package from the isolated runner."""
+    artifacts: dict[str, bytes] = {}
+    total_encoded = 0
+    try:
+        if len(request.artifacts_base64) > 64:
+            raise ValueError("Too many evidence artifacts")
+        for name, encoded in request.artifacts_base64.items():
+            if not isinstance(encoded, str) or len(encoded) > 2_800_000:
+                raise ValueError("Evidence artifact encoding exceeds limit")
+            total_encoded += len(encoded)
+            if total_encoded > 14_000_000:
+                raise ValueError("Evidence package encoding exceeds limit")
+            artifacts[name] = base64.b64decode(encoded, validate=True)
+        package = get_app_state().tool_requests.verify_external_adapter_evidence(
+            request.manifest, artifacts
+        )
+        return {
+            "package_id": package["id"],
+            "manifest_sha256": package["manifest_sha256"],
+            "artifact_hashes": package["artifact_hashes"],
+            "provider_id": package["provider_id"],
+            "adapter_id": package["adapter_id"],
+            "adapter_version": package["adapter_version"],
+            "provider_scope": package["provider_scope"],
+            "tool_id": package["tool_id"],
+            "tool_contract_fingerprint": package["tool_contract_fingerprint"],
+            "sandbox_environment": package["sandbox_environment"],
+            "verified_at": package["verified_at"],
+            "expires_at": package["expires_at"],
+            "provenance": package["provenance"],
+        }
+    except (ValueError, binascii.Error):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_RUNNER_EVIDENCE", "message": "Runner evidence package was rejected"},
+        ) from None
+
+
+@router.post("/runner/evidence/{package_id}/attestation-payload")
+async def get_runner_attestation_payload(
+    package_id: str,
+    request: RunnerAttestationPayloadRequest,
+    _runner: None = Depends(require_trusted_runner_ingest),
+) -> dict:
+    """Return the exact payload the isolated runner must sign locally."""
+    try:
+        return get_app_state().tool_requests.build_external_adapter_evidence_attestation_payload(
+            package_id,
+            key_id=request.key_id,
+            runner_id=request.runner_id,
+            nonce=request.nonce,
+            issued_at=request.issued_at,
+            expires_at=request.expires_at,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "EVIDENCE_OR_KEY_NOT_FOUND", "message": "Evidence package or trusted runner key not found"},
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RUNNER_ATTESTATION_UNAVAILABLE", "message": "Runner attestation cannot be issued for this package"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_RUNNER_ATTESTATION_REQUEST", "message": "Invalid runner attestation request"},
+        ) from None
+
+
 @router.post("/operator/trusted-runner-keys", status_code=201)
 async def register_trusted_runner_key(
     request: TrustedRunnerKeyRegistrationRequest,
@@ -488,7 +588,7 @@ async def revoke_trusted_runner_key(
 async def attest_external_adapter_evidence(
     package_id: str,
     request: RunnerEvidenceAttestationRequest,
-    _operator: None = Depends(require_provider_operator),
+    _runner: None = Depends(require_trusted_runner_ingest),
 ) -> dict:
     try:
         attestation = get_app_state().tool_requests.attest_external_adapter_evidence(
