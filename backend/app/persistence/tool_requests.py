@@ -996,6 +996,23 @@ class ToolRequestRepository:
             ).fetchone()
             if prior is not None:
                 raise PermissionError("Dispatch outcome has already been recorded")
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_audit_events
+                    (id, user_id, request_id, event_type, action_digest,
+                     details_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), user_id, request_id, event_type,
+                    action_digest,
+                    json.dumps({
+                        "error_code": error_code,
+                        "evidence_reference": evidence_reference,
+                    }, sort_keys=True, separators=(",", ":")),
+                    now,
+                ),
+            )
             request_update = connection.execute(
                 """
                 UPDATE tool_requests
@@ -1021,23 +1038,6 @@ class ToolRequestRepository:
             )
             if attempt_update.rowcount != 1:
                 raise PermissionError("Tool execution attempt is no longer active")
-            connection.execute(
-                """
-                INSERT INTO tool_dispatch_audit_events
-                    (id, user_id, request_id, event_type, action_digest,
-                     details_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(uuid.uuid4()), user_id, request_id, event_type,
-                    action_digest,
-                    json.dumps({
-                        "error_code": error_code,
-                        "evidence_reference": evidence_reference,
-                    }, sort_keys=True, separators=(",", ":")),
-                    now,
-                ),
-            )
         return self.get(user_id, request_id)
 
     def record_external_outcome_lookup(
