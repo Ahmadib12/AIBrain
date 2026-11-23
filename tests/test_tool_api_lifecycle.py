@@ -650,6 +650,11 @@ def test_runner_key_management_requires_security_operator_token_and_never_expose
     body = {
         "key_id": "api-runner-key",
         "runner_id": "api-runner",
+        "provider_id": "api-provider",
+        "adapter_id": "api-adapter",
+        "adapter_version": "1.0.0",
+        "provider_scope": "api-sandbox-account",
+        "tool_id": "api-test-tool",
         "public_key_base64": base64.b64encode(public_key).decode("ascii"),
         "valid_from": (now - timedelta(minutes=1)).isoformat(),
         "valid_until": (now + timedelta(days=2)).isoformat(),
@@ -689,7 +694,7 @@ def test_runner_key_management_requires_security_operator_token_and_never_expose
 
     duplicate = client.post(
         "/api/v1/tools/operator/trusted-runner-keys",
-        headers={"X-AIBrain-Operator-Token": operator_token},
+        headers={"X-AIBrain-Security-Operator-Token": security_token},
         json=body,
     )
     assert duplicate.status_code == 409
@@ -697,7 +702,7 @@ def test_runner_key_management_requires_security_operator_token_and_never_expose
 
     revoked = client.post(
         "/api/v1/tools/operator/trusted-runner-keys/api-runner-key/revoke",
-        headers={"X-AIBrain-Operator-Token": operator_token},
+        headers={"X-AIBrain-Security-Operator-Token": security_token},
         json={
             "revoked_by": "security-operator",
             "reason": "Test key rotation",
