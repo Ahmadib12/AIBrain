@@ -54,6 +54,23 @@ class RepositoryStub:
         self.binding = None
         self.status = "claimed"
 
+    def get_active_external_adapter_certification(
+        self, *, provider_id, adapter_id, adapter_version, provider_scope,
+        capabilities,
+    ):
+        return {
+            "id": "sandbox-certification-1",
+            "provider_id": provider_id,
+            "adapter_id": adapter_id,
+            "adapter_version": adapter_version,
+            "provider_scope": provider_scope,
+            "capabilities": capabilities,
+            "test_suite_version": "conformance-v1",
+            "test_report_sha256": "a" * 64,
+            "evidence_references": ["sandbox://evidence/report-1"],
+            "approved_by": "test-operator",
+        }
+
     def get(self, user_id, request_id):
         return {
             "tool_id": "send-message",
