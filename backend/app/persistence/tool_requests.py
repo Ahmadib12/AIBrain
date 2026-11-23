@@ -317,8 +317,10 @@ class ToolRequestRepository:
             "concurrent_deduplication",
             "supports_outcome_lookup",
         }
-        if set(capabilities) - allowed_capability_fields:
-            raise ValueError("Binding contains unsupported capability metadata")
+        if set(capabilities) != allowed_capability_fields:
+            raise ValueError(
+                "Binding capability metadata must contain the complete supported snapshot"
+            )
         if capabilities.get("idempotency_mode") not in ("none", "provider_enforced"):
             raise ValueError("Binding idempotency mode is invalid")
         for name, value in capabilities.items():
@@ -402,6 +404,7 @@ class ToolRequestRepository:
                 "contract_fingerprint": tool_contract_fingerprint,
                 "adapter_id": adapter_id,
                 "adapter_version": adapter_version,
+                "provider_id": provider_id,
                 "provider_scope": provider_scope,
                 "arguments": persisted_arguments,
             }
