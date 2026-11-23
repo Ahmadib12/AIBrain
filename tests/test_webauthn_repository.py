@@ -1149,13 +1149,17 @@ def test_passkey_execution_claim_rolls_back_request_if_attempt_insert_fails(
 
 
 def test_passkey_execution_claim_rejects_deleted_user(tmp_path):
+    from datetime import datetime, timezone
+
     fixture = create_tool_approval_fixture(tmp_path)
     _authorize_tool_request_fixture(fixture)
 
-    fixture["database"].connect().execute(
+    connection = fixture["database"].connect()
+    connection.execute(
         "UPDATE users SET deleted_at = ? WHERE id = ?",
         (datetime.now(timezone.utc).isoformat(), fixture["user_id"]),
     )
+    connection.commit()
 
     with pytest.raises(PermissionError, match="account is not active"):
         fixture["requests"].claim_passkey_authorized_for_execution(
@@ -1180,7 +1184,8 @@ def test_passkey_execution_claim_rejects_tampered_challenge_binding(tmp_path):
     fixture = create_tool_approval_fixture(tmp_path)
     _authorize_tool_request_fixture(fixture)
 
-    fixture["database"].connect().execute(
+    connection = fixture["database"].connect()
+    connection.execute(
         """
         UPDATE webauthn_challenges
         SET proposal_digest = ?
@@ -1188,6 +1193,7 @@ def test_passkey_execution_claim_rejects_tampered_challenge_binding(tmp_path):
         """,
         ("f" * 64, fixture["challenge"]["id"]),
     )
+    connection.commit()
 
     with pytest.raises(PermissionError, match="authorization does not match"):
         fixture["requests"].claim_passkey_authorized_for_execution(
