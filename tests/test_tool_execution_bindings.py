@@ -49,6 +49,7 @@ def make_binding(repository, user_id, request, arguments, fingerprint, **overrid
             contract_fingerprint=fingerprint,
             adapter_id="fake-adapter",
             adapter_version="1",
+            provider_id="fake-provider",
             provider_scope="fake-account",
         ),
         "payload": arguments,
@@ -125,6 +126,7 @@ def test_persists_owner_scoped_immutable_dispatch_binding(tmp_path):
         {"idempotency_key": "different-request"},
         {"tool_contract_fingerprint": "c" * 64},
         {"adapter_id": "different-adapter"},
+        {"provider_id": "different-provider"},
         {"action_digest": "d" * 64},
     ],
 )
@@ -251,5 +253,29 @@ def test_binding_payload_and_capabilities_are_stored_as_canonical_json(tmp_path)
             arguments, sort_keys=True, separators=(",", ":")
         )
         assert json.loads(row["capabilities_json"]) == binding["capabilities"]
+    finally:
+        database.close()
+
+
+def test_binding_rejects_incomplete_capability_snapshot(tmp_path):
+    database, repository, user_id, request, arguments, fingerprint = (
+        setup_claimed_request(tmp_path)
+    )
+    try:
+        with pytest.raises(ValueError, match="complete supported snapshot"):
+            make_binding(
+                repository,
+                user_id,
+                request,
+                arguments,
+                fingerprint,
+                capabilities={
+                    "idempotency_mode": "none",
+                    "supports_outcome_lookup": True,
+                },
+            )
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_execution_bindings"
+        ).fetchone()[0] == 0
     finally:
         database.close()
