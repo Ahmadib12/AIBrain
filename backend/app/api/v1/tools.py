@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,6 +45,15 @@ class ToolProposalRequest(BaseModel):
 
     tool_id: str = Field(min_length=1, max_length=100)
     arguments: dict = Field(default_factory=dict, max_length=20)
+
+
+class ToolExecutionReconciliationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["succeeded", "failed"]
+    note: str = Field(min_length=1, max_length=1000)
+    result: dict | None = None
+    error_code: str | None = Field(default=None, max_length=64)
 
 
 @router.get("")
@@ -238,6 +249,58 @@ async def verify_passkey_approval(
             detail={
                 "code": "INVALID_PASSKEY_APPROVAL",
                 "message": "Invalid passkey approval request",
+            },
+        ) from None
+
+
+@router.post("/requests/{request_id}/reconcile")
+async def reconcile_tool_execution(
+    request_id: str,
+    request: ToolExecutionReconciliationRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Record the authenticated owner's manual resolution of an uncertain attempt.
+
+    This endpoint records the owner's attestation; it does not verify the
+    external system's state and never retries or dispatches the tool.
+    """
+    try:
+        reconciled = get_app_state().tool_requests.reconcile_execution_attempt(
+            user["id"],
+            request_id,
+            outcome=request.outcome,
+            note=request.note,
+            result=request.result,
+            error_code=request.error_code,
+        )
+        return {
+            "id": reconciled["id"],
+            "tool_id": reconciled["tool_id"],
+            "status": reconciled["status"],
+            "result": reconciled["result"],
+        }
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "TOOL_REQUEST_NOT_FOUND",
+                "message": "Tool request not found",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECONCILIATION_NOT_AVAILABLE",
+                "message": "Tool execution is not awaiting reconciliation",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_RECONCILIATION",
+                "message": "Invalid tool execution reconciliation",
             },
         ) from None
 
