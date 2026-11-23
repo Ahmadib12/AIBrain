@@ -270,9 +270,9 @@ evidence upload, attestation-payload requests, and signed attestation submission
 `AIBRAIN_SECURITY_OPERATOR_TOKEN` authenticates public-key registration,
 key revocation, certification approval, and certification revocation.
 `AIBRAIN_PROVIDER_OPERATOR_TOKEN` remains limited to provider administration.
-All three tokens must be at least 32 characters and are compared in constant
-time. The runner and provider credentials cannot perform security operator
-actions.
+All three tokens must be at least 32 characters, have distinct values (the
+settings validator rejects reuse), and are compared in constant time. The
+runner and provider credentials cannot perform security operator actions.
 
 Runner API routes:
 - `POST /api/v1/tools/runner/evidence`
