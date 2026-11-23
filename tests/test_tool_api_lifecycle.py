@@ -735,6 +735,7 @@ def test_runner_key_management_fails_closed_when_operator_auth_unconfigured(
             "adapter_version": "1.0",
             "provider_scope": "sandbox",
             "tool_id": "tool",
+            "tool_contract_fingerprint": "f" * 64,
             "public_key_base64": "A" * 44,
             "valid_from": datetime.now(timezone.utc).isoformat(),
             "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
