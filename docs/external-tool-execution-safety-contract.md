@@ -140,6 +140,23 @@ responses.
 If persistence of the provider outcome fails, the attempt remains uncertain.
 Recovery must use lookup where supported; it must not assume the action failed.
 
+### Current persistence implementation
+
+Migration 10 creates `tool_execution_bindings`, a one-to-one, owner-scoped
+snapshot linked to a claimed execution attempt. The repository accepts a
+binding only while the request is `executing` and its attempt is `claimed`.
+It checks that the idempotency key is the request ID, that the supplied
+canonical payload exactly matches the persisted request arguments, that the
+tool contract fingerprint matches, and that the action digest recomputes from
+the persisted owner/tool/arguments plus adapter and provider scope. Provider
+capability metadata is allowlisted and validated before storage. A database
+trigger prevents updates to a persisted binding.
+
+The binding is not yet connected to a dispatcher or to passkey-authorized
+claims. It is a persistence primitive and test target only. Account deletion
+continues to cascade through owner-scoped records. The conformance tests are
+in `tests/test_tool_execution_bindings.py`.
+
 ## 7. Reconciliation rules
 
 Reconciliation should prefer authoritative provider lookup over manual
