@@ -721,3 +721,173 @@ def test_runner_key_management_fails_closed_when_operator_auth_unconfigured(
     )
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "OPERATOR_AUTH_NOT_CONFIGURED"
+
+
+
+def test_runner_ingestion_and_operator_approval_are_separate_privileges(
+    client: TestClient, monkeypatch
+) -> None:
+    import base64
+    import hashlib
+    from backend.app.auth import operator as operator_module
+    from backend.app.config import Settings
+    from backend.app.tools.attestation import (
+        build_attestation_payload, generate_test_keypair,
+        sign_attestation_for_runner,
+    )
+    from backend.app.tools.conformance import REQUIRED_CHECKS
+
+    operator_token = "operator-secret-" + "a" * 32
+    runner_token = "runner-ingest-secret-" + "b" * 32
+    monkeypatch.setattr(
+        operator_module, "get_settings",
+        lambda: Settings(
+            provider_operator_token=operator_token,
+            trusted_runner_ingest_token=runner_token,
+        ),
+    )
+    now = datetime.now(timezone.utc)
+    public_key, private_key = generate_test_keypair()
+
+    # Runner credentials cannot register or revoke signing keys.
+    runner_cannot_register = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Runner-Token": runner_token},
+        json={
+            "key_id": "e2e-runner-key",
+            "runner_id": "e2e-runner",
+            "public_key_base64": base64.b64encode(public_key).decode("ascii"),
+            "valid_from": (now - timedelta(minutes=1)).isoformat(),
+            "valid_until": (now + timedelta(days=2)).isoformat(),
+            "registered_by": "security-operator",
+        },
+    )
+    assert runner_cannot_register.status_code == 401
+
+    # Only the operator credential can install the runner's public key.
+    registered = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Operator-Token": operator_token},
+        json={
+            "key_id": "e2e-runner-key",
+            "runner_id": "e2e-runner",
+            "public_key_base64": base64.b64encode(public_key).decode("ascii"),
+            "valid_from": (now - timedelta(minutes=1)).isoformat(),
+            "valid_until": (now + timedelta(days=2)).isoformat(),
+            "registered_by": "security-operator",
+        },
+    )
+    assert registered.status_code == 201
+
+    report = b"trusted runner integration test report"
+    artifacts = {"sandbox-report.bin": report}
+    manifest = {
+        "schema_version": "aibrain-conformance-evidence-v1",
+        "provider_id": "api-provider",
+        "adapter_id": "api-adapter",
+        "adapter_version": "1.0.0",
+        "provider_scope": "sandbox-account",
+        "tool_id": "api-test-tool",
+        "tool_contract_fingerprint": "c" * 64,
+        "capabilities": {
+            "idempotency_mode": "provider_enforced",
+            "key_scope": "provider-account-and-operation",
+            "idempotency_retention_seconds": 3600,
+            "rejects_payload_mismatch": True,
+            "concurrent_deduplication": True,
+            "supports_outcome_lookup": True,
+        },
+        "test_suite_version": "conformance-v1",
+        "sandbox_environment": "isolated-ci-sandbox",
+        "executed_at": (now - timedelta(minutes=1)).isoformat(),
+        "expires_at": (now + timedelta(days=2)).isoformat(),
+        "tests": {
+            name: {"status": "passed", "artifact": "sandbox-report.bin"}
+            for name in REQUIRED_CHECKS
+        },
+        "artifacts": {
+            "sandbox-report.bin": hashlib.sha256(report).hexdigest()
+        },
+    }
+
+    # Operator credentials cannot ingest/sign on behalf of the runner.
+    operator_cannot_ingest = client.post(
+        "/api/v1/tools/runner/evidence",
+        headers={"X-AIBrain-Operator-Token": operator_token},
+        json={
+            "manifest": manifest,
+            "artifacts_base64": {
+                "sandbox-report.bin": base64.b64encode(report).decode("ascii")
+            },
+        },
+    )
+    assert operator_cannot_ingest.status_code == 401
+
+    upload = client.post(
+        "/api/v1/tools/runner/evidence",
+        headers={"X-AIBrain-Runner-Token": runner_token},
+        json={
+            "manifest": manifest,
+            "artifacts_base64": {
+                "sandbox-report.bin": base64.b64encode(report).decode("ascii")
+            },
+        },
+    )
+    assert upload.status_code == 201
+    package = upload.json()
+    assert package["provenance"] == "unattested"
+
+    issued_at = datetime.now(timezone.utc).isoformat()
+    attestation_expires = (datetime.now(timezone.utc) + timedelta(hours=12)).isoformat()
+    nonce = "nonce_" + __import__("uuid").uuid4().hex
+    payload_response = client.post(
+        f"/api/v1/tools/runner/evidence/{package['package_id']}/attestation-payload",
+        headers={"X-AIBrain-Runner-Token": runner_token},
+        json={
+            "key_id": "e2e-runner-key",
+            "runner_id": "e2e-runner",
+            "nonce": nonce,
+            "issued_at": issued_at,
+            "expires_at": attestation_expires,
+        },
+    )
+    assert payload_response.status_code == 200
+    payload = payload_response.json()
+    signature = sign_attestation_for_runner(private_key, payload)
+
+    attestation = client.post(
+        f"/api/v1/tools/operator/evidence/{package['package_id']}/attest",
+        headers={"X-AIBrain-Runner-Token": runner_token},
+        json={
+            "key_id": "e2e-runner-key",
+            "runner_id": "e2e-runner",
+            "nonce": nonce,
+            "issued_at": issued_at,
+            "expires_at": attestation_expires,
+            "signature": signature,
+        },
+    )
+    assert attestation.status_code == 200
+    assert attestation.json()["runner_id"] == "e2e-runner"
+
+    # Only a separately authenticated human operator can approve certification.
+    runner_cannot_certify = client.post(
+        f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
+        headers={"X-AIBrain-Runner-Token": runner_token},
+        json={
+            "approved_by": "security-reviewer",
+            "expires_at": (now + timedelta(hours=6)).isoformat(),
+        },
+    )
+    assert runner_cannot_certify.status_code == 401
+
+    certified = client.post(
+        f"/api/v1/tools/operator/evidence/{package['package_id']}/certify",
+        headers={"X-AIBrain-Operator-Token": operator_token},
+        json={
+            "approved_by": "security-reviewer",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
+        },
+    )
+    assert certified.status_code == 201
+    assert certified.json()["approved_by"] == "security-reviewer"
