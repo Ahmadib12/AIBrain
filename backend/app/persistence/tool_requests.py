@@ -1672,11 +1672,20 @@ class ToolRequestRepository:
             raise PermissionError("Trusted runner attestation is required for certification") from exc
         if attestation["key_revoked"]:
             raise PermissionError("Evidence signer key has been revoked")
-        attestation_expiry = datetime.fromisoformat(
-            attestation["payload"]["expires_at"].replace("Z", "+00:00")
+        from backend.app.tools.attestation import (
+            _parse_timestamp, verify_package_attestation,
         )
-        if attestation_expiry.tzinfo is None or attestation_expiry <= datetime.now(timezone.utc):
-            raise PermissionError("Runner attestation has expired")
+        key = self.get_trusted_runner_key(attestation["key_id"])
+        attestation_expiry = _parse_timestamp(
+            attestation["payload"]["expires_at"], "expires_at"
+        )
+        now = datetime.now(timezone.utc)
+        if (
+            attestation_expiry <= now
+            or _parse_timestamp(key["valid_from"], "valid_from") > now
+            or _parse_timestamp(key["valid_until"], "valid_until") <= now
+        ):
+            raise PermissionError("Runner attestation or signing key has expired")
         from backend.app.tools.conformance import verify_evidence_manifest
 
         reverified = verify_evidence_manifest(
@@ -1689,6 +1698,12 @@ class ToolRequestRepository:
             or package["expires_at"] <= _utc_now()
         ):
             raise PermissionError("Evidence package integrity or freshness check failed")
+        if verify_package_attestation(
+            key["public_key"], attestation["payload"],
+            attestation["signature"], package=package,
+            runner_id=attestation["runner_id"],
+        ) != attestation["payload_sha256"]:
+            raise PermissionError("Runner attestation signature or binding is invalid")
         try:
             expiry = datetime.fromisoformat(expires_at)
         except (TypeError, ValueError) as exc:
