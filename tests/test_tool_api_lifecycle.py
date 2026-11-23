@@ -669,6 +669,30 @@ def test_runner_key_management_requires_individual_security_operator_account(
     assert denied_non_operator.status_code == 403
     assert denied_non_operator.json()["error"]["code"] == "SECURITY_OPERATOR_FORBIDDEN"
 
+    state = get_app_state()
+    state.database.connect().execute(
+        """
+        CREATE TRIGGER reject_security_audit_for_test
+        BEFORE INSERT ON security_operator_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'forced audit failure');
+        END
+        """
+    )
+    failed_audit = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers=auth_header(token),
+        json=body,
+    )
+    assert failed_audit.status_code == 409
+    assert state.database.connect().execute(
+        "SELECT 1 FROM trusted_runner_keys WHERE key_id = ?",
+        ("api-runner-key",),
+    ).fetchone() is None
+    state.database.connect().execute(
+        "DROP TRIGGER reject_security_audit_for_test"
+    )
+
     created = client.post(
         "/api/v1/tools/operator/trusted-runner-keys",
         headers=auth_header(token),
