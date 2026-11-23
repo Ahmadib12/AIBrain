@@ -156,3 +156,17 @@ Failed reconciliation request:
 ```
 
 The `note` is required and limited to 1,000 characters. A successful outcome requires a result object and cannot include an error code. A failed outcome cannot include a result. Only the authenticated owner can inspect or reconcile the request. Reconciliation is an owner-recorded attestation, not independent verification by AIBrain: operators must check the external system before submitting it. Reconciliation updates the persisted request and attempt atomically; it does not retry or dispatch the tool. Duplicate or non-uncertain reconciliation attempts are rejected.
+
+Concurrency and transaction-integrity coverage for this lifecycle is in
+`tests/test_tool_execution_concurrency.py`. It exercises competing reconciliation
+requests, concurrent recovery workers using separate SQLite database connections,
+a recovery/reconciliation race, and rollback when an attempt update fails. Run it
+with:
+
+```bash
+pytest -q tests/test_tool_execution_concurrency.py
+```
+
+The tests verify that request and attempt state remain aligned and that only one
+reconciliation can transition an uncertain attempt. Recovery remains conservative:
+it records uncertainty and never retries an external operation.
