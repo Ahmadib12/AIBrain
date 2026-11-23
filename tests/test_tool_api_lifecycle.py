@@ -729,6 +729,11 @@ def test_runner_key_management_fails_closed_when_operator_auth_unconfigured(
         json={
             "key_id": "no-auth-key",
             "runner_id": "runner",
+            "provider_id": "provider",
+            "adapter_id": "adapter",
+            "adapter_version": "1.0",
+            "provider_scope": "sandbox",
+            "tool_id": "tool",
             "public_key_base64": "A" * 44,
             "valid_from": datetime.now(timezone.utc).isoformat(),
             "valid_until": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
@@ -787,7 +792,26 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     )
     assert runner_cannot_register.status_code == 401
 
-    # Only the operator credential can install the runner's public key.
+    provider_cannot_register = client.post(
+        "/api/v1/tools/operator/trusted-runner-keys",
+        headers={"X-AIBrain-Operator-Token": provider_token},
+        json={
+            "key_id": "e2e-runner-key",
+            "runner_id": "e2e-runner",
+            "provider_id": "api-provider",
+            "adapter_id": "api-adapter",
+            "adapter_version": "1.0.0",
+            "provider_scope": "sandbox-account",
+            "tool_id": "api-test-tool",
+            "public_key_base64": base64.b64encode(public_key).decode("ascii"),
+            "valid_from": (now - timedelta(minutes=1)).isoformat(),
+            "valid_until": (now + timedelta(days=2)).isoformat(),
+            "registered_by": "security-operator",
+        },
+    )
+    assert provider_cannot_register.status_code == 401
+
+    # Only the dedicated security operator credential can install the key.
     registered = client.post(
         "/api/v1/tools/operator/trusted-runner-keys",
         headers={"X-AIBrain-Security-Operator-Token": security_token},
