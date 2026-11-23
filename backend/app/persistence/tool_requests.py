@@ -571,6 +571,123 @@ class ToolRequestRepository:
                 recovered += 1
         return recovered
 
+    def reconcile_execution_attempt(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        outcome: str,
+        note: str,
+        result: dict | None = None,
+        error_code: str = "reconciled_failure",
+    ) -> dict:
+        """Record an owner's manual resolution of an uncertain execution.
+
+        This method never dispatches or retries the tool. The caller must have
+        independently determined the external outcome before recording it.
+        """
+        if outcome not in ("succeeded", "failed"):
+            raise ValueError("Reconciliation outcome must be succeeded or failed")
+        if not isinstance(note, str) or not note.strip() or len(note) > 1000:
+            raise ValueError("Reconciliation note must be 1 to 1000 characters")
+
+        if outcome == "succeeded":
+            if not isinstance(result, dict) or error_code is not None:
+                raise ValueError(
+                    "Successful reconciliation requires a result and no error code"
+                )
+            validate_personal_payload(result)
+            result_json = json.dumps(result, ensure_ascii=False)
+            final_status = "completed"
+            final_error_code = None
+        else:
+            if result is not None:
+                raise ValueError("Failed reconciliation cannot include a result")
+            if (
+                not isinstance(error_code, str)
+                or not error_code
+                or len(error_code) > 64
+                or not error_code.replace("_", "").isalnum()
+            ):
+                raise ValueError("Tool execution error code is invalid")
+            result_json = None
+            final_status = "failed"
+            final_error_code = error_code
+
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT r.status AS request_status, r.consumed_at, r.audit_json,
+                       a.status AS attempt_status
+                FROM tool_requests AS r
+                JOIN tool_execution_attempts AS a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                WHERE r.id = ? AND r.user_id = ?
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("Tool request or execution attempt not found")
+            if (
+                row["request_status"] != "outcome_unknown"
+                or row["attempt_status"] != "outcome_unknown"
+                or row["consumed_at"] is None
+            ):
+                raise PermissionError("Tool execution is not awaiting reconciliation")
+
+            audit = json.loads(row["audit_json"] or "{}")
+            if not isinstance(audit, dict):
+                raise ValueError("Tool request audit data is invalid")
+            if "execution_reconciliation" in audit:
+                raise PermissionError("Tool execution has already been reconciled")
+
+            audit["execution_reconciliation"] = {
+                "outcome": outcome,
+                "reconciled_by": user_id,
+                "reconciled_at": now,
+                "note": note.strip(),
+            }
+            request_update = connection.execute(
+                """
+                UPDATE tool_requests
+                SET status = ?, result_json = ?, updated_at = ?, audit_json = ?
+                WHERE id = ? AND user_id = ? AND status = 'outcome_unknown'
+                  AND consumed_at IS NOT NULL
+                """,
+                (
+                    final_status,
+                    result_json,
+                    now,
+                    json.dumps(audit, ensure_ascii=False),
+                    request_id,
+                    user_id,
+                ),
+            )
+            if request_update.rowcount != 1:
+                raise PermissionError("Tool execution is no longer awaiting reconciliation")
+
+            attempt_update = connection.execute(
+                """
+                UPDATE tool_execution_attempts
+                SET status = ?, updated_at = ?, finished_at = ?, error_code = ?
+                WHERE request_id = ? AND user_id = ? AND status = 'outcome_unknown'
+                """,
+                (
+                    outcome,
+                    now,
+                    now,
+                    final_error_code,
+                    request_id,
+                    user_id,
+                ),
+            )
+            if attempt_update.rowcount != 1:
+                raise PermissionError("Tool execution attempt is no longer awaiting reconciliation")
+
+        return self.get(user_id, request_id)
+
     def cancel_pending(self, user_id: str, request_id: str) -> dict:
         """Cancel a pending or approved request before execution is claimed."""
         now = _utc_now()
