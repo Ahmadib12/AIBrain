@@ -97,8 +97,13 @@ class ExternalToolExecutionCapabilities:
         if not isinstance(self.idempotency_mode, ExecutionIdempotencyMode):
             raise ValueError("Unsupported idempotency mode")
 
-        if not isinstance(self.supports_outcome_lookup, bool):
-            raise ValueError("supports_outcome_lookup must be a boolean")
+        for field_name in (
+            "rejects_payload_mismatch",
+            "concurrent_deduplication",
+            "supports_outcome_lookup",
+        ):
+            if not isinstance(getattr(self, field_name), bool):
+                raise ValueError(f"{field_name} must be a boolean")
 
         if self.idempotency_mode == ExecutionIdempotencyMode.NONE:
             if (
