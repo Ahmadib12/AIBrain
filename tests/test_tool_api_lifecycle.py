@@ -133,3 +133,177 @@ def test_immediate_execution_rejects_state_change_before_persistence(
         (user_id, contract.tool_id),
     ).fetchone()[0]
     assert count == 0
+
+
+
+def test_passkey_options_endpoint_is_authenticated_and_request_scoped(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    state = get_app_state()
+    owner_token = register_and_login(client, "passkey-options-owner@example.com")
+    other_token = register_and_login(client, "passkey-options-other@example.com")
+    owner_id = state.identity.resolve_token(owner_token)["id"]
+
+    request = state.tool_requests.create(
+        owner_id,
+        tool_id="state-change-api-test",
+        arguments={"value": "sensitive action"},
+        status="pending",
+        expires_at=(
+            __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ) + __import__("datetime").timedelta(minutes=5)
+        ).isoformat(),
+        contract_fingerprint="a" * 64,
+        authorization_policy="passkey",
+    )
+
+    response = client.post(
+        f"/api/v1/tools/requests/{request['id']}/passkey/options",
+        headers=auth_header(other_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TOOL_REQUEST_NOT_FOUND"
+
+
+def test_passkey_options_endpoint_returns_service_options_without_exposing_records(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "passkey-options-api@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+    captured = {}
+
+    def create_options(*, user_id: str, request_id: str) -> dict:
+        captured["user_id"] = user_id
+        captured["request_id"] = request_id
+        return {
+            "challenge_record_id": "challenge-record",
+            "options": {"challenge": "browser-challenge"},
+        }
+
+    monkeypatch.setattr(
+        state.webauthn_service,
+        "create_tool_approval_options",
+        create_options,
+    )
+
+    response = client.post(
+        "/api/v1/tools/requests/request-123/passkey/options",
+        headers=auth_header(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "challenge_record_id": "challenge-record",
+        "options": {"challenge": "browser-challenge"},
+    }
+    assert captured == {
+        "user_id": user_id,
+        "request_id": "request-123",
+    }
+
+
+def test_passkey_verify_endpoint_returns_only_approved_request_metadata(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "passkey-verify-api@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+    captured = {}
+
+    def verify_approval(
+        *,
+        user_id: str,
+        request_id: str,
+        challenge_record_id: str,
+        credential_record_id: str,
+        assertion: dict,
+    ) -> dict:
+        captured.update({
+            "user_id": user_id,
+            "request_id": request_id,
+            "challenge_record_id": challenge_record_id,
+            "credential_record_id": credential_record_id,
+            "assertion": assertion,
+        })
+        return {
+            "id": request_id,
+            "tool_id": "state-change-api-test",
+            "arguments": {"value": "approved"},
+            "status": "approved",
+            "expires_at": "2030-01-01T00:00:00+00:00",
+            "consumed_at": None,
+            "confirmation_id": "internal-confirmation",
+            "contract_fingerprint": "a" * 64,
+            "authorization_policy": "passkey",
+        }
+
+    monkeypatch.setattr(
+        state.webauthn_service,
+        "verify_tool_approval",
+        verify_approval,
+    )
+
+    response = client.post(
+        "/api/v1/tools/requests/request-456/passkey/verify",
+        headers=auth_header(token),
+        json={
+            "challenge_record_id": "challenge-456",
+            "credential_record_id": "credential-456",
+            "assertion": {"response": {"signature": "browser-data"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "request-456",
+        "tool_id": "state-change-api-test",
+        "arguments": {"value": "approved"},
+        "status": "approved",
+        "expires_at": "2030-01-01T00:00:00+00:00",
+    }
+    assert captured == {
+        "user_id": user_id,
+        "request_id": "request-456",
+        "challenge_record_id": "challenge-456",
+        "credential_record_id": "credential-456",
+        "assertion": {"response": {"signature": "browser-data"}},
+    }
+
+
+def test_passkey_verify_endpoint_hides_assertion_verification_details(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "passkey-verify-rejected@example.com")
+
+    def reject_assertion(**kwargs):
+        raise PermissionError("Detailed cryptographic failure")
+
+    monkeypatch.setattr(
+        state.webauthn_service,
+        "verify_tool_approval",
+        reject_assertion,
+    )
+
+    response = client.post(
+        "/api/v1/tools/requests/request-789/passkey/verify",
+        headers=auth_header(token),
+        json={
+            "challenge_record_id": "challenge-789",
+            "credential_record_id": "credential-789",
+            "assertion": {},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == {
+        "code": "PASSKEY_APPROVAL_REJECTED",
+        "message": "Passkey approval could not be verified",
+    }
