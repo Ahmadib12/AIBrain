@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -151,9 +153,7 @@ def test_passkey_options_endpoint_is_authenticated_and_request_scoped(
         arguments={"value": "sensitive action"},
         status="pending",
         expires_at=(
-            __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ) + __import__("datetime").timedelta(minutes=5)
+            datetime.now(timezone.utc) + timedelta(minutes=5)
         ).isoformat(),
         contract_fingerprint="a" * 64,
         authorization_policy="passkey",
