@@ -977,8 +977,10 @@ class ToolRequestRepository:
                     )
                     if (
                         certification_row["test_report_sha256"] != package_row["manifest_sha256"]
-                        or certification_row["expires_at"] > package_row["expires_at"]
-                        or certification_row["expires_at"] > attestation_payload["expires_at"]
+                        or _parse_timestamp(certification_row["expires_at"], "certification_expires_at")
+                           > _parse_timestamp(package_row["expires_at"], "package_expires_at")
+                        or _parse_timestamp(certification_row["expires_at"], "certification_expires_at")
+                           > _parse_timestamp(attestation_payload["expires_at"], "attestation_expires_at")
                         or evidence_check["manifest_sha256"] != package_row["manifest_sha256"]
                         or evidence_check["artifact_sha256"]
                            != json.loads(package_row["artifact_hashes_json"])
