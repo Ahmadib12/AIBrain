@@ -152,7 +152,6 @@ class EvidenceCertificationApprovalRequest(BaseModel):
 class CertificationRevocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    revoked_by: str = Field(min_length=1, max_length=256)
     reason: str = Field(min_length=1, max_length=1000)
 
 
