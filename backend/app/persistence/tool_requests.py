@@ -1233,8 +1233,11 @@ class ToolRequestRepository:
         adapter_id: str,
         adapter_version: str,
         provider_scope: str,
+        tool_id: str,
+        tool_contract_fingerprint: str,
         capabilities: dict,
         test_suite_version: str,
+        conformance_results: dict[str, bool],
         test_report_sha256: str,
         evidence_references: list[str],
         approved_by: str,
@@ -1250,14 +1253,39 @@ class ToolRequestRepository:
             "adapter_id": adapter_id,
             "adapter_version": adapter_version,
             "provider_scope": provider_scope,
+            "tool_id": tool_id,
             "test_suite_version": test_suite_version,
             "approved_by": approved_by,
         }
         if any(not isinstance(value, str) or not value.strip()
                for value in identifiers.values()):
             raise ValueError("Certification identifiers must be non-empty strings")
+        if (
+            not isinstance(tool_contract_fingerprint, str)
+            or len(tool_contract_fingerprint) != 64
+            or any(char not in "0123456789abcdef" for char in tool_contract_fingerprint)
+        ):
+            raise ValueError("Tool contract fingerprint is invalid")
         if not isinstance(capabilities, dict) or not capabilities:
             raise ValueError("A complete capability snapshot is required")
+        required_checks = {
+            "stable_idempotency_key",
+            "payload_mismatch_rejected",
+            "concurrent_deduplication",
+            "timeout_after_acceptance_lookup",
+            "timeout_before_acceptance_proven",
+            "ambiguous_lookup_stays_unknown",
+            "lookup_never_dispatches",
+            "sanitized_provider_output",
+            "binding_change_rejected",
+            "no_provider_fallback",
+        }
+        if (
+            not isinstance(conformance_results, dict)
+            or set(conformance_results) != required_checks
+            or any(value is not True for value in conformance_results.values())
+        ):
+            raise ValueError("All required conformance checks must pass")
         if (
             not isinstance(test_report_sha256, str)
             or len(test_report_sha256) != 64
@@ -1297,14 +1325,17 @@ class ToolRequestRepository:
                 """
                 INSERT INTO external_adapter_certifications (
                     id, provider_id, adapter_id, adapter_version, provider_scope,
-                    capabilities_json, test_suite_version, test_report_sha256,
-                    evidence_references_json, verified_at, expires_at,
-                    approved_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tool_id, tool_contract_fingerprint, capabilities_json,
+                    test_suite_version, conformance_results_json,
+                    test_report_sha256, evidence_references_json, verified_at,
+                    expires_at, approved_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     certification_id, provider_id, adapter_id, adapter_version,
-                    provider_scope, capabilities_json, test_suite_version,
+                    provider_scope, tool_id, tool_contract_fingerprint,
+                    capabilities_json, test_suite_version,
+                    json.dumps(conformance_results, sort_keys=True, separators=(",", ":")),
                     test_report_sha256, evidence_json, now_text, expiry.isoformat(),
                     approved_by, now_text,
                 ),
@@ -1324,8 +1355,11 @@ class ToolRequestRepository:
             "adapter_id": row["adapter_id"],
             "adapter_version": row["adapter_version"],
             "provider_scope": row["provider_scope"],
+            "tool_id": row["tool_id"],
+            "tool_contract_fingerprint": row["tool_contract_fingerprint"],
             "capabilities": json.loads(row["capabilities_json"]),
             "test_suite_version": row["test_suite_version"],
+            "conformance_results": json.loads(row["conformance_results_json"]),
             "test_report_sha256": row["test_report_sha256"],
             "evidence_references": json.loads(row["evidence_references_json"]),
             "verified_at": row["verified_at"],
@@ -1341,6 +1375,8 @@ class ToolRequestRepository:
         adapter_id: str,
         adapter_version: str,
         provider_scope: str,
+        tool_id: str,
+        tool_contract_fingerprint: str,
         capabilities: dict,
     ) -> dict | None:
         now = datetime.now(timezone.utc).isoformat()
@@ -1350,6 +1386,7 @@ class ToolRequestRepository:
             FROM external_adapter_certifications AS c
             WHERE c.provider_id = ? AND c.adapter_id = ?
               AND c.adapter_version = ? AND c.provider_scope = ?
+              AND c.tool_id = ? AND c.tool_contract_fingerprint = ?
               AND c.expires_at > ?
               AND NOT EXISTS (
                 SELECT 1 FROM external_adapter_certification_revocations AS r
@@ -1357,7 +1394,10 @@ class ToolRequestRepository:
               )
             ORDER BY c.created_at DESC, c.id DESC
             """,
-            (provider_id, adapter_id, adapter_version, provider_scope, now),
+            (
+                provider_id, adapter_id, adapter_version, provider_scope,
+                tool_id, tool_contract_fingerprint, now,
+            ),
         ).fetchall()
         expected = json.dumps(
             capabilities, ensure_ascii=False, sort_keys=True,
