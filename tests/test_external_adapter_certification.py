@@ -223,6 +223,12 @@ def test_matching_approved_certification_is_active(repository):
     )
     assert certificate["test_report_sha256"] == package["manifest_sha256"]
     assert package["provenance"] == "runner_attested"
+    with pytest.raises(PermissionError, match="already been certified"):
+        repository.certify_external_adapter(
+            evidence_package_id=package["id"],
+            approved_by="second-reviewer",
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=6)).isoformat(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -364,6 +370,35 @@ def test_attestation_signature_binds_manifest_and_scope(repository):
             package["id"], key_id=key_id, runner_id="runner-a",
             nonce=payload["nonce"], issued_at=payload["issued_at"],
             expires_at=payload["expires_at"], signature=signature,
+        )
+
+
+def test_runner_signing_key_cannot_attest_outside_registered_provider_scope(repository):
+    manifest, artifacts = evidence()
+    first_package = repository.verify_external_adapter_evidence(manifest, artifacts)
+    other_manifest = json.loads(json.dumps(manifest))
+    other_manifest["provider_id"] = "provider-y"
+    other_package = repository.verify_external_adapter_evidence(other_manifest, artifacts)
+
+    public_key, _ = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    repository.register_trusted_runner_key(
+        key_id="provider-scoped-key",
+        runner_id="provider-x-runner",
+        **runner_scope(first_package),
+        public_key=public_key,
+        valid_from=(now - timedelta(minutes=1)).isoformat(),
+        valid_until=(now + timedelta(days=1)).isoformat(),
+        registered_by="security-admin",
+    )
+    with pytest.raises(PermissionError, match="outside the trusted runner key scope"):
+        repository.build_external_adapter_evidence_attestation_payload(
+            other_package["id"],
+            key_id="provider-scoped-key",
+            runner_id="provider-x-runner",
+            nonce="nonce_" + "p" * 32,
+            issued_at=now.isoformat(),
+            expires_at=(now + timedelta(hours=1)).isoformat(),
         )
 
 
