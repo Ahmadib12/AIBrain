@@ -326,8 +326,15 @@ class ToolRequestRepository:
                 if not isinstance(value, bool):
                     raise ValueError(f"{name} capability must be a boolean")
             elif name == "idempotency_retention_seconds":
+                if value is None and capabilities["idempotency_mode"] == "none":
+                    continue
                 if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                     raise ValueError("Idempotency retention must be a positive integer")
+            elif name == "key_scope":
+                if value is None and capabilities["idempotency_mode"] == "none":
+                    continue
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError("key_scope capability must be a non-empty string")
             elif not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} capability must be a non-empty string")
         if capabilities["idempotency_mode"] == "provider_enforced":
