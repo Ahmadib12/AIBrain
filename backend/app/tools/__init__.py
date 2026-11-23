@@ -7,6 +7,7 @@ from backend.app.tools.contracts import (
     ToolRegistry,
     ToolRisk,
     contract_fingerprint,
+    execution_action_digest,
 )
 from backend.app.tools.runtime import ToolExecutionGateway
 
@@ -19,5 +20,6 @@ __all__ = [
     "ToolRegistry",
     "ToolRisk",
     "contract_fingerprint",
+    "execution_action_digest",
     "ToolExecutionGateway",
 ]
