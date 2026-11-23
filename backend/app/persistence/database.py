@@ -750,6 +750,62 @@ class Database:
                 END;
                 """
             ),
+            (
+                14,
+                """
+                CREATE TABLE trusted_runner_keys (
+                    key_id TEXT PRIMARY KEY,
+                    runner_id TEXT NOT NULL,
+                    algorithm TEXT NOT NULL CHECK (algorithm = 'Ed25519'),
+                    public_key BLOB NOT NULL CHECK (length(public_key) = 32),
+                    valid_from TEXT NOT NULL,
+                    valid_until TEXT NOT NULL,
+                    revoked_at TEXT,
+                    registered_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX idx_trusted_runner_keys_runner
+                    ON trusted_runner_keys(runner_id, valid_until);
+
+                CREATE TABLE external_adapter_evidence_attestations (
+                    id TEXT PRIMARY KEY,
+                    package_id TEXT NOT NULL UNIQUE,
+                    key_id TEXT NOT NULL,
+                    runner_id TEXT NOT NULL,
+                    nonce TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+                    signature TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    FOREIGN KEY(package_id)
+                        REFERENCES external_adapter_evidence_packages(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(key_id) REFERENCES trusted_runner_keys(key_id)
+                );
+
+                CREATE INDEX idx_evidence_attestation_key
+                    ON external_adapter_evidence_attestations(key_id);
+
+                CREATE TRIGGER prevent_trusted_runner_key_delete
+                BEFORE DELETE ON trusted_runner_keys
+                BEGIN
+                    SELECT RAISE(ABORT, 'trusted runner keys cannot be deleted');
+                END;
+
+                CREATE TRIGGER prevent_evidence_attestation_update
+                BEFORE UPDATE ON external_adapter_evidence_attestations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner attestations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_evidence_attestation_delete
+                BEFORE DELETE ON external_adapter_evidence_attestations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner attestations are immutable');
+                END;
+                """
+            ),
         )
 
         with self._lock:
