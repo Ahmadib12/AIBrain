@@ -125,7 +125,17 @@ Registering a language does not claim that translation, speech recognition, or s
 
 ### External tool execution safety contract
 
-The design requirements for external state-changing tool adapters, provider idempotency, uncertain outcomes, authorization binding, reconciliation, and adapter conformance are documented in [External Tool Execution Safety Contract](docs/external-tool-execution-safety-contract.md). This is a design contract only; it does not enable external or state-changing execution.
+The design requirements for external state-changing tool adapters, provider
+idempotency, uncertain outcomes, authorization binding, reconciliation, and
+adapter conformance are documented in [External Tool Execution Safety Contract](docs/external-tool-execution-safety-contract.md).
+
+Provider-neutral typed declarations are available in
+`backend/app/tools/contracts.py`: adapter capability metadata, normalized
+external outcomes, and a canonical action digest bound to the user, tool
+arguments, tool contract fingerprint, adapter version, and provider scope.
+These are contracts only; they do not dispatch external actions or enable
+state-changing execution. Unit tests are in
+`tests/test_external_tool_execution_contracts.py`.
 
 ### Inspecting and reconciling uncertain tool executions
 
