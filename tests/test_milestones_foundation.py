@@ -498,7 +498,6 @@ def test_deleted_user_cannot_create_sessions_or_personal_records(
     user_id = user["id"]
 
     state.identity.delete_user(user_id)
-
     # Simulate requests that passed authentication before account deletion.
     with pytest.raises(sqlite3.IntegrityError):
         state.memory.create(
@@ -997,8 +996,7 @@ def test_revoked_and_invalid_session_tokens_are_rejected(
 def test_logout_rejects_missing_or_empty_bearer_token(
     client: TestClient,
 ) -> None:
-    missing = client.post("/api/v1/auth/logout")
-    assert missing.status_code == 401
+    missing = client.post("/api/v1/auth/logout")    assert missing.status_code == 401
 
     empty = client.post(
         "/api/v1/auth/logout",
@@ -1175,7 +1173,7 @@ def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     rows = second.connect().execute(
         "SELECT COUNT(*) AS count FROM schema_migrations"
     ).fetchone()
-    assert rows["count"] == 9
+    assert rows["count"] == 10
     second.close()
 
 
