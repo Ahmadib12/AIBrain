@@ -1,8 +1,9 @@
 import hmac
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from backend.app.config import get_settings
+from backend.app.api.v1.auth import get_current_user
 
 
 def require_provider_operator(
@@ -76,31 +77,22 @@ def require_trusted_runner_ingest(
 
 
 def require_security_operator(
-    token: str | None = Header(
-        default=None,
-        alias="X-AIBrain-Security-Operator-Token",
-    ),
-) -> None:
-    """Authenticate privileged trust-root, certification and revocation actions."""
-    configured_token = get_settings().security_operator_token
-    if configured_token is None:
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Authorize an individually authenticated account on the security-operator allowlist."""
+    configured = get_settings().security_operator_emails
+    allowed = {
+        item.strip().lower()
+        for item in configured.split(",")
+        if item.strip()
+    }
+    email = user.get("email")
+    if not isinstance(email, str) or email.strip().lower() not in allowed:
         raise HTTPException(
-            status_code=503,
+            status_code=403,
             detail={
-                "code": "SECURITY_OPERATOR_AUTH_NOT_CONFIGURED",
-                "message": "Security operator access is not configured",
+                "code": "SECURITY_OPERATOR_FORBIDDEN",
+                "message": "This authenticated account is not a security operator",
             },
         )
-    expected = configured_token.get_secret_value()
-    supplied = token or ""
-    if not hmac.compare_digest(
-        supplied.encode("utf-8"),
-        expected.encode("utf-8"),
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "code": "SECURITY_OPERATOR_UNAUTHORIZED",
-                "message": "A valid security operator token is required",
-            },
-        )
+    return user
