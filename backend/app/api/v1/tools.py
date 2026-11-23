@@ -253,6 +253,54 @@ async def verify_passkey_approval(
         ) from None
 
 
+@router.get("/requests/{request_id}")
+async def get_tool_request(
+    request_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Return this owner's request and its execution-attempt state, if any."""
+    state = get_app_state()
+    try:
+        request = state.tool_requests.get(user["id"], request_id)
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "TOOL_REQUEST_NOT_FOUND",
+                "message": "Tool request not found",
+            },
+        ) from None
+
+    try:
+        attempt = state.tool_requests.get_execution_attempt(
+            user["id"],
+            request_id,
+        )
+    except LookupError:
+        attempt = None
+
+    return {
+        "id": request["id"],
+        "tool_id": request["tool_id"],
+        "arguments": request["arguments"],
+        "status": request["status"],
+        "result": request["result"],
+        "consumed_at": request["consumed_at"],
+        "created_at": request["created_at"],
+        "updated_at": request["updated_at"],
+        "execution_attempt": (
+            {
+                "status": attempt["status"],
+                "claimed_at": attempt["claimed_at"],
+                "finished_at": attempt["finished_at"],
+                "error_code": attempt["error_code"],
+            }
+            if attempt is not None
+            else None
+        ),
+    }
+
+
 @router.post("/requests/{request_id}/reconcile")
 async def reconcile_tool_execution(
     request_id: str,
