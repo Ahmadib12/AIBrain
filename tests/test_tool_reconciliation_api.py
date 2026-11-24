@@ -360,29 +360,29 @@ def test_owner_can_page_redacted_execution_history(
             [
                 (
                     "history-started",
-                user_id,
-                request["id"],
-                "dispatch_started",
-                "a" * 64,
-                (
-                    '{"attempt_id":"attempt-1","adapter_id":"adapter-a",'
-                    '"adapter_version":"1.0","provider_id":"provider-a",'
-                    '"provider_scope":"scope-a","runner_key_id":"private-key",'
-                    '"evidence_package_id":"private-package",'
-                    '"tool_contract_fingerprint":"private-fingerprint"}'
-                ),
+                    user_id,
+                    request["id"],
+                    "dispatch_started",
+                    "a" * 64,
+                    (
+                        '{"attempt_id":"attempt-1","adapter_id":"adapter-a",'
+                        '"adapter_version":"1.0","provider_id":"provider-a",'
+                        '"provider_scope":"scope-a","runner_key_id":"private-key",'
+                        '"evidence_package_id":"private-package",'
+                        '"tool_contract_fingerprint":"private-fingerprint"}'
+                    ),
                     "2026-11-24T10:00:00+00:00",
                 ),
                 (
                     "history-failed",
-                user_id,
-                request["id"],
-                "dispatch_failed",
-                "a" * 64,
-                (
-                    '{"error_code":"provider_timeout",'
-                    '"evidence_reference":"private-provider-reference"}'
-                ),
+                    user_id,
+                    request["id"],
+                    "dispatch_failed",
+                    "a" * 64,
+                    (
+                        '{"error_code":"provider_timeout",'
+                        '"evidence_reference":"private-provider-reference"}'
+                    ),
                     "2026-11-24T10:00:01+00:00",
                 ),
             ],
