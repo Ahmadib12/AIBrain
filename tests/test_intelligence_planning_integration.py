@@ -129,7 +129,7 @@ async def test_core_passes_prior_turns_to_context_aware_planning() -> None:
     assert response.status.value == "completed"
     assert response.planning is not None
     assert response.planning["intent"]["kind"] == "transform"
-    assert response.planning["intent"]["context_used"] is True
+    assert response.planning["intent"]["context_available"] is True
     assert response.planning["assessment"]["requires_clarification"] is False
     assert response.planning["assessment"]["execution_permitted"] is False
     assert adapter.calls == 1
