@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+import time
 from pathlib import Path
 
 import pytest
@@ -156,16 +157,18 @@ def test_invalid_capability_claims_rejected_before_execution(tmp_path):
 
 @pytest.mark.skipif(os.name != "posix", reason="Process-group cleanup requires POSIX")
 def test_runner_kills_descendants_after_command_parent_exits(tmp_path):
-    pid_file = tmp_path / "child.pid"
+    marker = tmp_path / "descendant-survived"
+    child_code = (
+        "import time,pathlib; time.sleep(0.5); "
+        f"pathlib.Path({str(marker)!r}).write_text('alive')"
+    )
     child_script = (
-        "import subprocess,sys,pathlib; "
-        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
-        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))"
+        "import subprocess,sys; "
+        f"subprocess.Popen([sys.executable,'-c',{child_code!r}])"
     )
     commands = commands_for()
     commands[sorted(REQUIRED_CHECKS)[0]] = [sys.executable, "-c", child_script]
     result = run_suite(binding=BINDING, commands=commands, output_dir=tmp_path / "out")
     assert result["status"] == "passed"
-    child_pid = int(pid_file.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    time.sleep(0.7)
+    assert not marker.exists()
