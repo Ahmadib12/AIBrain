@@ -54,7 +54,7 @@ def generate_keypair(private_path: Path, public_path: Path, passphrase: str) -> 
     try:
         os.chmod(private_path, 0o600)
         with public_path.open("x", encoding="ascii") as stream:
-            stream.write(public_b64 + "\\n")
+            stream.write(public_b64 + "\n")
         os.chmod(public_path, 0o644)
     except Exception:
         private_path.unlink(missing_ok=True)
