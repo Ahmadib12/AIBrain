@@ -1,4 +1,5 @@
 import base64
+import copy
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -36,7 +37,7 @@ def signed_envelope():
         "suite_id": "provider-a-contract-suite",
         "suite_version": "v1",
         "authority_key_id": "authority-1",
-        "binding": BINDING,
+        "binding": copy.deepcopy(BINDING),
         "commands": {name: ["/usr/bin/python3", "-m", "suite.tests", name]
                      for name in REQUIRED_CHECKS},
     }
@@ -83,7 +84,7 @@ def test_modified_command_is_rejected():
 def test_modified_provider_binding_is_rejected():
     envelope, public = signed_envelope()
     envelope["payload"]["binding"]["provider_id"] = "provider-b"
-    with pytest.raises(PermissionError, match="binding does not match"):
+    with pytest.raises(PermissionError, match="signature verification failed"):
         verify(envelope, public)
 
 
@@ -143,5 +144,5 @@ def test_oversized_signed_command_arguments_are_rejected():
         private.sign(canonical_json(envelope["payload"]))
     ).decode("ascii").rstrip("=")
     public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    with pytest.raises(ValueError, match="Invalid command"):
+    with pytest.raises(ValueError, match="Invalid signed command"):
         verify(envelope, public)
