@@ -230,6 +230,20 @@ class IdentityRepository:
                 (now, user_id),
             )
 
+            # Remove integration audit and consent state after owner tombstoning.
+            connection.execute(
+                "DELETE FROM integration_connection_events WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
+                "DELETE FROM integration_connection_grants WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
+                "DELETE FROM integration_connections WHERE user_id = ?",
+                (user_id,),
+            )
+
             # Remove dependent authorization records before their parents.
             for table in (
                 "tool_authorizations",
