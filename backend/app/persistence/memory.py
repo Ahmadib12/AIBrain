@@ -348,23 +348,6 @@ class MemoryRepository:
         ).fetchall()
         return tuple(self._to_dict(row) for row in rows)
 
-    def _list_for_consent(
-        self,
-        user_id: str,
-        consent_id: str,
-    ) -> tuple[dict, ...]:
-        """Return only records created under a currently active consent."""
-        self._purge_expired_for_user(user_id)
-        rows = self.database.connect().execute(
-            """
-            SELECT * FROM memory_items
-            WHERE user_id = ? AND consent_id = ? AND status = 'active'
-            ORDER BY updated_at DESC
-            """,
-            (user_id, consent_id),
-        ).fetchall()
-        return tuple(self._to_dict(row) for row in rows)
-
     def retrieve(
         self,
         user_id: str,
