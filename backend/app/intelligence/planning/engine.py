@@ -268,6 +268,7 @@ class PlanningEngine:
         *,
         available_capabilities: Iterable[str] = (),
         requires_authorization: bool = False,
+        requires_clarification: bool = False,
     ) -> PlanAssessment:
         # Re-validate even instances constructed by trusted in-process callers.
         TaskPlanContract.model_validate(plan.model_dump())
@@ -286,8 +287,7 @@ class PlanningEngine:
             plan_valid=True,
             missing_capabilities=missing,
             requires_authorization=requires_authorization,
-            requires_clarification=plan.tasks[0].kind == PlanTaskKind.REQUEST_INPUT
-            and plan.tasks[0].task_id == "clarify-context",
+            requires_clarification=requires_clarification,
             # Planning is deliberately never an authorization decision.
             execution_permitted=False,
         )
