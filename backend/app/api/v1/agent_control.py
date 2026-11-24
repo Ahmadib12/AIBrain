@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
 from backend.app.app_state import get_app_state
+from backend.app.persistence.agent_control import CAPABILITIES, CAPABILITY_CATALOG_VERSION
 
 
 router = APIRouter(tags=["agent-control"])
@@ -187,6 +188,29 @@ async def list_agent_control_events(
         return get_app_state().agent_control.list_events(user["id"], agent_id, limit)
     except LookupError:
         _error(404, "AGENT_NOT_FOUND", "Agent not found")
+
+
+
+@router.get("/agent-capabilities/catalog")
+async def get_agent_capability_catalog(user: dict = Depends(get_current_user)):
+    return {
+        "version": CAPABILITY_CATALOG_VERSION,
+        "capabilities": sorted(CAPABILITIES),
+        "execution_enabled": False,
+    }
+
+
+@router.get("/agent-tasks/{task_id}/events")
+async def list_agent_task_events(
+    task_id: str, limit: int = Query(default=100, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    try:
+        return get_app_state().agent_control.list_task_events(
+            user["id"], task_id, limit
+        )
+    except LookupError:
+        _error(404, "TASK_NOT_FOUND", "Task not found")
 
 
 @router.post("/agent-tasks/reconcile-expired")
