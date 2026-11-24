@@ -950,6 +950,79 @@ class Database:
                 END;
                 """
             ),
+            (
+                17,
+                """
+                CREATE TABLE tool_dispatch_lookup_authorizations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    certification_id TEXT NOT NULL,
+                    action_digest TEXT NOT NULL
+                        CHECK (length(action_digest) = 64),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(certification_id)
+                        REFERENCES external_adapter_certifications(id)
+                );
+
+                CREATE INDEX idx_tool_dispatch_lookup_authorizations_request
+                    ON tool_dispatch_lookup_authorizations(
+                        user_id, request_id, created_at
+                    );
+
+                CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_update
+                BEFORE UPDATE ON tool_dispatch_lookup_authorizations
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch lookup authorizations are immutable'
+                    );
+                END;
+
+                CREATE TRIGGER validate_tool_dispatch_lookup_authorization
+                BEFORE INSERT ON tool_dispatch_lookup_authorizations
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN tool_execution_bindings AS b
+                      ON b.request_id = r.id AND b.user_id = r.user_id
+                    JOIN tool_dispatch_audit_events AS s
+                      ON s.request_id = r.id AND s.user_id = r.user_id
+                     AND s.event_type = 'dispatch_started'
+                    JOIN external_adapter_certifications AS c
+                      ON c.id = NEW.certification_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND r.status = 'outcome_unknown'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'outcome_unknown'
+                      AND b.idempotency_key = r.id
+                      AND b.action_digest = NEW.action_digest
+                      AND s.action_digest = NEW.action_digest
+                      AND c.expires_at > NEW.created_at
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM external_adapter_certification_revocations AS cr
+                        WHERE cr.certification_id = c.id
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'lookup authorization violates execution lifecycle'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
