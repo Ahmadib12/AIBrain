@@ -1040,6 +1040,36 @@ class Database:
                 END;
                 """
             ),
+            (
+                19,
+                """
+                CREATE TRIGGER prevent_tool_dispatch_audit_delete
+                BEFORE DELETE ON tool_dispatch_audit_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch audit events may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER prevent_tool_dispatch_recovery_delete
+                BEFORE DELETE ON tool_dispatch_recovery_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch recovery events may only be deleted during account erasure'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
