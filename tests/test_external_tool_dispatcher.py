@@ -505,6 +505,166 @@ def test_unknown_provider_outcome_is_audited_and_not_retried(tmp_path):
         database.close()
 
 
+def test_recovery_marks_bound_dispatch_failed_before_provider_boundary(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        stale_before = (
+            datetime.now(timezone.utc) + timedelta(minutes=1)
+        ).isoformat()
+        assert repository.recover_stale_execution_attempts(
+            stale_before=stale_before
+        ) == 1
+
+        request = repository.get(user_id, request_id)
+        attempt = repository.get_execution_attempt(user_id, request_id)
+        assert request["status"] == "failed"
+        assert attempt["status"] == "failed"
+        assert attempt["error_code"] == "recovery_dispatch_not_started"
+        assert attempt["finished_at"] is not None
+
+        recovery_events = database.connect().execute(
+            """
+            SELECT event_type, action_digest, details_json
+            FROM tool_dispatch_recovery_events
+            WHERE user_id = ? AND request_id = ?
+            """,
+            (user_id, request_id),
+        ).fetchall()
+        assert len(recovery_events) == 1
+        assert recovery_events[0]["event_type"] == "dispatch_not_started"
+        assert len(recovery_events[0]["action_digest"]) == 64
+        details = json.loads(recovery_events[0]["details_json"])
+        assert details["reason"] == "stale_claim_before_provider_dispatch"
+
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        with pytest.raises(PermissionError, match="unknown outcomes"):
+            dispatcher.lookup(user_id, request_id)
+        assert provider.dispatch_count == 0
+        assert provider.lookup_count == 0
+    finally:
+        database.close()
+
+
+def test_recovery_keeps_started_external_dispatch_unknown_and_lookupable(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        frozen = repository.begin_external_dispatch(
+            user_id,
+            request_id,
+            expected_contract_fingerprint=fingerprint,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_id=provider.capabilities.provider_id,
+            provider_scope=provider.capabilities.provider_scope,
+            capabilities=snapshot,
+        )
+        stale_before = (
+            datetime.now(timezone.utc) + timedelta(minutes=1)
+        ).isoformat()
+        assert repository.recover_stale_execution_attempts(
+            stale_before=stale_before
+        ) == 1
+
+        assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
+        attempt = repository.get_execution_attempt(user_id, request_id)
+        assert attempt["status"] == "outcome_unknown"
+        assert attempt["error_code"] == "recovery_outcome_unknown"
+        assert repository.get_dispatch_audit(user_id, request_id)[0][
+            "event_type"
+        ] == "dispatch_started"
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_recovery_events "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
+
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        outcome = dispatcher.lookup(user_id, request_id)
+        assert isinstance(outcome, ExternalToolExecutionOutcome)
+        assert provider.dispatch_count == 0
+        assert provider.lookup_count == 1
+        assert [event["event_type"] for event in repository.get_dispatch_audit(
+            user_id, request_id
+        )] == ["dispatch_started", "outcome_lookup"]
+    finally:
+        database.close()
+
+
+def test_recovery_racing_dispatch_start_is_serialized(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    second_database = Database(database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    barrier = Barrier(2)
+    stale_before = (
+        datetime.now(timezone.utc) + timedelta(minutes=1)
+    ).isoformat()
+
+    def start_dispatch():
+        barrier.wait(timeout=10)
+        try:
+            repository.begin_external_dispatch(
+                user_id,
+                request_id,
+                expected_contract_fingerprint=fingerprint,
+                adapter_id=provider.capabilities.adapter_id,
+                adapter_version=provider.capabilities.adapter_version,
+                provider_id=provider.capabilities.provider_id,
+                provider_scope=provider.capabilities.provider_scope,
+                capabilities=snapshot,
+            )
+            return "started"
+        except PermissionError:
+            return "rejected"
+
+    def recover():
+        barrier.wait(timeout=10)
+        return second_repository.recover_stale_execution_attempts(
+            stale_before=stale_before
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            start_future = executor.submit(start_dispatch)
+            recovery_future = executor.submit(recover)
+            start_result = start_future.result(timeout=20)
+            recovered = recovery_future.result(timeout=20)
+
+        assert recovered == 1
+        request = repository.get(user_id, request_id)
+        attempt = repository.get_execution_attempt(user_id, request_id)
+        if start_result == "started":
+            assert request["status"] == "outcome_unknown"
+            assert attempt["status"] == "outcome_unknown"
+            assert repository.get_dispatch_audit(user_id, request_id)[0][
+                "event_type"
+            ] == "dispatch_started"
+            assert database.connect().execute(
+                "SELECT COUNT(*) FROM tool_dispatch_recovery_events "
+                "WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()[0] == 0
+        else:
+            assert request["status"] == "failed"
+            assert attempt["status"] == "failed"
+            assert repository.get_dispatch_audit(user_id, request_id) == []
+            assert database.connect().execute(
+                "SELECT COUNT(*) FROM tool_dispatch_recovery_events "
+                "WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()[0] == 1
+        # This test only calls the durable start gate; it never invokes execute.
+        assert provider.dispatch_count == 0
+    finally:
+        second_database.close()
+        database.close()
+
+
 def test_final_dispatch_gate_rejects_revoked_passkey(tmp_path):
     (
         database, repository, user_id, request_id, fingerprint, provider, snapshot
