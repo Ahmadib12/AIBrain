@@ -268,6 +268,22 @@ class ExternalToolDispatcher:
                 "Outcome lookup requires an active, matching trusted certification"
             )
 
+        # Linearize lookup authorization against certification/key revocation.
+        # The provider call is deliberately outside the transaction: a later
+        # revocation cannot retroactively cancel an already-authorized lookup.
+        authorization = self.repository.begin_external_outcome_lookup(
+            user_id,
+            request_id,
+            certification_id=certification["id"],
+            provider_id=capabilities.provider_id,
+            adapter_id=capabilities.adapter_id,
+            adapter_version=capabilities.adapter_version,
+            provider_scope=capabilities.provider_scope,
+            tool_id=request["tool_id"],
+            tool_contract_fingerprint=binding["tool_contract_fingerprint"],
+            capabilities=snapshot,
+            action_digest=binding["action_digest"],
+        )
         outcome = adapter.lookup(binding["idempotency_key"])
         if not isinstance(outcome, ExternalToolExecutionOutcome):
             raise TypeError("Adapter returned an invalid lookup outcome")
@@ -277,6 +293,7 @@ class ExternalToolDispatcher:
             action_digest=binding["action_digest"],
             outcome=outcome.status.value,
             evidence_reference=outcome.evidence_reference or outcome.operation_reference,
+            lookup_authorization_id=authorization["id"],
         )
         # Even a positive lookup is evidence for a separate reconciliation
         # decision; it does not silently rewrite the request's terminal state.
