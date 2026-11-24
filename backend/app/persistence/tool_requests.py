@@ -70,8 +70,27 @@ def _request_digest(
 
 
 class ToolRequestRepository:
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self, database: Database, *,
+        conformance_suite_trust: dict | None = None,
+    ) -> None:
         self.database = database
+        self.conformance_suite_trust = conformance_suite_trust
+
+    def _verify_conformance_suite_package(self, package: dict) -> None:
+        trust = self.conformance_suite_trust
+        if trust is None:
+            return
+        from backend.app.tools.conformance import verify_signed_suite_artifact
+
+        verify_signed_suite_artifact(
+            package["manifest"],
+            {name: item["content"] for name, item in package["artifacts"].items()},
+            authority_public_key=trust["public_key"],
+            authority_key_id=trust["authority_key_id"],
+            expected_suite_id=trust["expected_suite_id"],
+            expected_suite_version=trust["expected_suite_version"],
+        )
 
     def create(
         self,
@@ -1426,6 +1445,16 @@ class ToolRequestRepository:
         from backend.app.tools.conformance import verify_evidence_manifest
 
         verified = verify_evidence_manifest(manifest, artifacts)
+        if self.conformance_suite_trust is not None:
+            from backend.app.tools.conformance import verify_signed_suite_artifact
+            trust = self.conformance_suite_trust
+            verify_signed_suite_artifact(
+                manifest, artifacts,
+                authority_public_key=trust["public_key"],
+                authority_key_id=trust["authority_key_id"],
+                expected_suite_id=trust["expected_suite_id"],
+                expected_suite_version=trust["expected_suite_version"],
+            )
         package_id = str(uuid.uuid4())
         normalized = verified["manifest"]
         now = verified["verified_at"]
@@ -1665,6 +1694,7 @@ class ToolRequestRepository:
             _parse_timestamp, build_attestation_payload,
         )
         package = self.get_external_adapter_evidence_package(package_id)
+        self._verify_conformance_suite_package(package)
         key = self.get_trusted_runner_key(key_id)
         now = datetime.now(timezone.utc)
         if key["revocation"] is not None:
@@ -1827,6 +1857,7 @@ class ToolRequestRepository:
         if not isinstance(approved_by, str) or not approved_by.strip():
             raise ValueError("Approving operator must be identified")
         package = self.get_external_adapter_evidence_package(evidence_package_id)
+        self._verify_conformance_suite_package(package)
         try:
             attestation = self.get_external_adapter_evidence_attestation(evidence_package_id)
         except LookupError as exc:
@@ -2025,6 +2056,7 @@ class ToolRequestRepository:
             try:
                 package_id = certification["evidence_references"][0].split(":", 1)[1]
                 package = self.get_external_adapter_evidence_package(package_id)
+                self._verify_conformance_suite_package(package)
                 attestation = self.get_external_adapter_evidence_attestation(package_id)
                 from backend.app.tools.attestation import (
                     verify_package_attestation,
