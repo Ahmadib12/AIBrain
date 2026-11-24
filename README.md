@@ -190,8 +190,23 @@ python -m scripts.conformance_runner \\
 Before deployment, prepare a reviewed payload containing `schema`,
 `suite_id`, `suite_version`, `authority_key_id`, the exact `binding`
 object, and a `commands` object with one argv array for each required check.
-On a separate offline authority machine, provision
-`AIBRAIN_SUITE_AUTHORITY_PRIVATE_KEY_B64` and sign the payload:
+Generate the suite-authority key pair in a separate, controlled environment
+(not in the repository or API runtime):
+
+```bash
+python -m scripts.generate_conformance_suite_authority
+```
+
+The generator writes an encrypted PKCS#8 Ed25519 private key under
+`~/.config/aibrain/keys/` with mode `0600`, and a public-key file with mode
+`0644`. It prompts for a passphrase of at least 16 characters, refuses to
+overwrite existing files, and prints only the public key (base64) and its
+SHA-256 fingerprint. Back up the encrypted private key and passphrase
+separately. Do not put either in Git, the API environment, or runner
+environment.
+
+Sign the reviewed payload locally; the signer prompts for the key passphrase
+and reads the private key file directly:
 
 ```bash
 python -m scripts.sign_conformance_suite \
@@ -199,10 +214,9 @@ python -m scripts.sign_conformance_suite \
   --output signed-conformance-suite.json
 ```
 
-The offline signing utility writes only the signed envelope. The private key
-must never be copied to the runner, AIBrain API server, repository, or CI
-environment. Provision the corresponding raw 32-byte Ed25519 public key as
-base64 and the authority key ID to the isolated runner deployment.
+The signed envelope contains the signature, not the private key. Provision
+the corresponding raw 32-byte Ed25519 public key as base64 and the authority
+key ID to the isolated runner and AIBrain API deployment configuration.
 
 The AIBrain API server must independently receive the same four deployment
 pins through `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64`,
