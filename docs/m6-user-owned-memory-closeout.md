@@ -11,9 +11,10 @@ check pass in the Codespaces environment.
 - Versioned SQLite migration 21 adds a consent ledger and binds memory rows to
   the consent under which they were created.
 - Memory remains account-owned and uses the existing owner-scoped repository.
-- Existing pre-M6 memory records have a null consent binding. They are not
-  retrievable or editable under the new consent model and are never silently
-  adopted by a later consent grant.
+- Existing pre-M6 memory records have a null consent binding. They remain visible
+  to their authenticated owner for review, export, and deletion, but are not
+  available to assistant retrieval or editing under the new consent model and
+  are never silently adopted by a later consent grant.
 
 ### M6.2 — Explicit consent and access control
 - Memory consent is opt-in and recorded with a policy version, grant timestamp,
@@ -23,7 +24,9 @@ check pass in the Codespaces environment.
 - Database triggers independently reject memory writes without a matching
   active consent and active owner account.
 - Revoked consent cannot be reactivated. A new grant creates a new consent
-  identity and does not restore the prior consent's memories.
+  identity and does not make earlier records available to assistant retrieval.
+- Revocation blocks subsequent assistant retrieval, while the owner can still
+  list, inspect, export, and delete their own stored records.
 - Intelligence requests use `use_memory=false` by default. Setting it to true
   requires an authenticated user and active memory consent.
 
@@ -57,8 +60,10 @@ check pass in the Codespaces environment.
   implementation never lengthens an existing expiry when a policy is relaxed.
 - Expired records are purged lazily during access and by a background worker
   whose default interval is 3600 seconds.
-- Revocation immediately blocks subsequent retrieval. Optional
-  `purge_existing=true` erases records tied to the revoked consent.
+- Revocation immediately blocks subsequent assistant retrieval. Owner listing,
+  inspection, export, and deletion remain available after revocation.
+- Optional `purge_existing=true` erases every memory record owned by the user,
+  including records created under earlier revoked consents and legacy records.
 - Per-record deletion and clear-all remain available after consent revocation.
 - Account deletion removes memory records and consent history in the existing
   account-erasure transaction.
