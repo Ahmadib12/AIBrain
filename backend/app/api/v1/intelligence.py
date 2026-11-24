@@ -1,11 +1,14 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from backend.app.concurrency import require_ai_capacity
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.app.api.v1.dependencies import get_intelligence_core
+from backend.app.api.v1.auth import get_optional_current_user
+from backend.app.app_state import get_app_state
+from backend.app.intelligence.memory_context import MemoryContextAssembler
 from backend.app.intelligence.core import (
     CentralIntelligenceCore,
     OrchestrationCore,
@@ -23,6 +26,79 @@ from backend.app.intelligence.trace import (
 
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
+
+
+
+
+def _requested_memory_context(request: IntelligenceRequest, user: dict | None) -> str | None:
+    if not request.use_memory:
+        return None
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "Sign in to use your saved memory",
+            },
+        )
+    latest_user_message = next(
+        (
+            message.content
+            for message in reversed(request.messages)
+            if message.role.value == "user"
+        ),
+        None,
+    )
+    if latest_user_message is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "MEMORY_QUERY_REQUIRED",
+                "message": "A user message is required for memory retrieval",
+            },
+        )
+    try:
+        result = MemoryContextAssembler().assemble(
+            get_app_state().memory,
+            user_id=user["id"],
+            query=latest_user_message,
+            limit=5,
+        )
+        return result.to_provider_context()
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MEMORY_CONSENT_REQUIRED",
+                "message": "Active memory consent is required to use saved memory",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_MEMORY_QUERY",
+                "message": "The request cannot be used for memory retrieval",
+            },
+        ) from None
+
+
+async def _run_core(
+    core: CentralIntelligenceCore,
+    request: IntelligenceRequest,
+    memory_context: str | None,
+) -> IntelligenceResponse:
+    if memory_context is None:
+        return await core.process(request)
+    if not isinstance(core, OrchestrationCore):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MEMORY_CONTEXT_UNAVAILABLE",
+                "message": "This intelligence core does not support approved memory context",
+            },
+        )
+    return await core.process(request, memory_context=memory_context)
 
 
 def _response_status_code(response: IntelligenceResponse) -> int:
@@ -62,9 +138,11 @@ async def process_intelligence(
     request: IntelligenceRequest,
     core: CentralIntelligenceCore = Depends(get_intelligence_core),
     _capacity: None = Depends(require_ai_capacity, scope='request'),
+    user: dict | None = Depends(get_optional_current_user),
 ) -> IntelligenceResponse | JSONResponse:
+    memory_context = _requested_memory_context(request, user)
     try:
-        response = await core.process(request)
+        response = await _run_core(core, request, memory_context)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -109,10 +187,13 @@ async def process_intelligence_stream(
     request: IntelligenceRequest,
     core: CentralIntelligenceCore = Depends(get_intelligence_core),
     _capacity: None = Depends(require_ai_capacity, scope='request'),
+    user: dict | None = Depends(get_optional_current_user),
 ):
+    memory_context = _requested_memory_context(request, user)
+
     async def event_stream():
         try:
-            response = await core.process(request)
+            response = await _run_core(core, request, memory_context)
         except asyncio.CancelledError:
             raise
         except Exception:
