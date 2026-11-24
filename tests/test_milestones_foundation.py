@@ -44,6 +44,15 @@ def auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def grant_memory_consent(client: TestClient, token: str) -> None:
+    response = client.post(
+        "/api/v1/personal/memory/consent",
+        headers=auth_header(token),
+        json={"retention_days": 365},
+    )
+    assert response.status_code == 200
+
+
 
 
 def test_unknown_login_email_performs_dummy_password_hash() -> None:
@@ -192,6 +201,7 @@ def test_successful_login_resets_failed_attempts(
 def test_memory_isolated_by_user(client: TestClient) -> None:
     token_a = register_and_login(client, "memory-a@example.com")
     token_b = register_and_login(client, "memory-b@example.com")
+    grant_memory_consent(client, token_a)
 
     created = client.post(
         "/api/v1/personal/memory",
@@ -223,6 +233,7 @@ def test_memory_isolated_by_user(client: TestClient) -> None:
 
 def test_memory_update_delete_and_user_isolation(client: TestClient) -> None:
     token = register_and_login(client, "memory-update@example.com")
+    grant_memory_consent(client, token)
     created = client.post(
         "/api/v1/personal/memory",
         headers=auth_header(token),
@@ -373,6 +384,7 @@ def test_streaming_intelligence_endpoint_is_available(client: TestClient) -> Non
 
 def test_account_deletion_removes_personal_records(client: TestClient) -> None:
     token = register_and_login(client, "delete-all@example.com")
+    grant_memory_consent(client, token)
 
     memory = client.post(
         "/api/v1/personal/memory",
@@ -472,6 +484,7 @@ def test_account_deletion_removes_personal_records(client: TestClient) -> None:
     user_id = user_row["id"]
     for table in (
         "memory_items",
+        "memory_consents",
         "observations",
         "adaptations",
         "tool_authorizations",
@@ -577,6 +590,7 @@ def test_cross_user_memory_read_update_delete_is_rejected(
 ) -> None:
     token_a = register_and_login(client, "owner@example.com")
     token_b = register_and_login(client, "other@example.com")
+    grant_memory_consent(client, token_a)
     created = client.post(
         "/api/v1/personal/memory",
         headers=auth_header(token_a),
@@ -607,6 +621,7 @@ def test_expired_memory_is_not_listed_retrieved_updated_or_exported(
     client: TestClient,
 ) -> None:
     token = register_and_login(client, "expired@example.com")
+    grant_memory_consent(client, token)
     created = client.post(
         "/api/v1/personal/memory",
         headers=auth_header(token),
