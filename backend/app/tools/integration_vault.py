@@ -84,8 +84,26 @@ class IntegrationSecretVault:
         return secret_ref
 
     def load(
-        self, user_id: str, connection_id: str, integration_id: str
+        self, user_id: str, connection_id: str, integration_id: str,
+        required_scopes: tuple[str, ...],
     ) -> dict[str, Any]:
+        if (
+            not isinstance(required_scopes, tuple) or not required_scopes
+            or any(not isinstance(scope, str) or not scope for scope in required_scopes)
+            or len(set(required_scopes)) != len(required_scopes)
+        ):
+            raise PermissionError("Exact owner-granted scopes are required to open credentials")
+        now = datetime.now(timezone.utc).isoformat()
+        for scope in required_scopes:
+            grant = self.database.connect().execute(
+                """SELECT 1 FROM integration_connection_grants
+                   WHERE user_id=? AND connection_id=? AND scope=?
+                     AND status='active' AND revoked_at IS NULL
+                     AND (expires_at IS NULL OR expires_at>?)""",
+                (user_id, connection_id, scope, now),
+            ).fetchone()
+            if grant is None:
+                raise PermissionError("Required owner-granted scope is not active")
         row = self.database.connect().execute(
             """SELECT s.secret_ref,s.nonce,s.ciphertext
                FROM integration_secrets s
