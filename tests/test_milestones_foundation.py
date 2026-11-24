@@ -286,6 +286,25 @@ def test_memory_consent_revocation_locks_old_records_and_new_consent_does_not_re
     assert search_after_regrant.status_code == 200
     assert search_after_regrant.json()["matches"] == []
 
+    # Explicitly editing/reaffirming this one record adopts it to the new consent.
+    reaffirmed = client.patch(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+        json={
+            "key": "language",
+            "memory_type": "preference",
+            "value": "English",
+            "confidence": 1.0,
+        },
+    )
+    assert reaffirmed.status_code == 200
+    search_after_reaffirmation = client.post(
+        "/api/v1/personal/memory/search",
+        headers=auth_header(token),
+        json={"query": "language"},
+    )
+    assert len(search_after_reaffirmation.json()["matches"]) == 1
+
     deleted = client.delete(
         f"/api/v1/personal/memory/{memory_id}",
         headers=auth_header(token),
