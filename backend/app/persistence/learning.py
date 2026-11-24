@@ -307,7 +307,7 @@ class BehavioralLearningRepository:
                 connection,
                 user_id=user_id,
                 adaptation_id=adaptation_id,
-                event_type="approved",
+                event_type="evaluated",
                 details={"evaluation_id": evaluation_id, "evaluation_outcome": outcome},
                 created_at=now,
             )
@@ -341,6 +341,12 @@ class BehavioralLearningRepository:
         user_id: str,
         adaptation_id: str,
     ) -> tuple[dict, ...]:
+        owner = self.database.connect().execute(
+            "SELECT 1 FROM adaptations WHERE id = ? AND user_id = ?",
+            (adaptation_id, user_id),
+        ).fetchone()
+        if owner is None:
+            raise LookupError("Adaptation not found")
         rows = self.database.connect().execute(
             """
             SELECT id FROM learning_evaluations
