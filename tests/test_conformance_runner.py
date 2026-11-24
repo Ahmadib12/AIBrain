@@ -215,6 +215,8 @@ def test_unsigned_suite_is_rejected(tmp_path):
             suite_envelope={"payload": {"binding": BINDING}, "signature": ""},
             authority_public_key=b"x" * 32,
             authority_key_id="suite-authority-1",
+            expected_suite_id="provider-x-safety-suite",
+            expected_suite_version="suite-1",
             output_dir=tmp_path / "out",
         )
 
@@ -229,6 +231,8 @@ def test_command_substitution_invalidates_suite_signature(tmp_path):
             suite_envelope=envelope,
             authority_public_key=public,
             authority_key_id="suite-authority-1",
+            expected_suite_id="provider-x-safety-suite",
+            expected_suite_version="suite-1",
             output_dir=tmp_path / "out",
         )
 
