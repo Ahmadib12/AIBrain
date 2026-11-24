@@ -27,7 +27,7 @@ class MemoryRetentionWorker:
     async def _run(self) -> None:
         while True:
             try:
-                self.repository.purge_expired()
+                await asyncio.to_thread(self.repository.purge_expired)
             except asyncio.CancelledError:
                 raise
             except Exception:
