@@ -365,12 +365,87 @@ class AgentExecutionRepository:
             raise PermissionError("Required agent capability is no longer granted")
         return task
 
-    def authorize_run(self, user_id: str, run_id: str) -> dict:
+    def _validate_integration_bindings(
+        self, user_id: str, run: dict, integrations, connections,
+    ) -> int:
+        """Revalidate every durable integration binding against live authority."""
+        actions = json.loads(run["actions_json"])
+        expected = [
+            (index, action) for index, action in enumerate(actions)
+            if isinstance(action, dict) and "integration_binding" in action
+        ]
+        rows = self.database.connect().execute(
+            """SELECT b.step_id,b.connection_id,b.integration_id,b.manifest_version,
+                      b.tool_id,b.contract_fingerprint,b.required_scopes_json,
+                      s.ordinal,s.tool_id AS step_tool_id,
+                      s.contract_fingerprint AS step_fingerprint,s.arguments_json
+               FROM agent_run_integration_bindings b
+               JOIN agent_run_steps s ON s.id=b.step_id AND s.user_id=b.user_id
+               WHERE b.user_id=? AND b.run_id=? ORDER BY s.ordinal""",
+            (user_id, run["id"]),
+        ).fetchall()
+        if not expected and not rows:
+            return 0
+        if integrations is None or connections is None:
+            raise PermissionError("Integration authority services are required")
+        if len(rows) != len(expected):
+            raise PermissionError("Integration run binding set is incomplete")
+        by_ordinal = {ordinal: action for ordinal, action in expected}
+        if len(by_ordinal) != len(expected):
+            raise PermissionError("Integration run contains duplicate or invalid actions")
+        for row in rows:
+            binding = dict(row)
+            action = by_ordinal.get(binding["ordinal"])
+            if action is None:
+                raise PermissionError("Integration step has no matching plan action")
+            snapshot = action.get("integration_binding")
+            if not isinstance(snapshot, dict):
+                raise PermissionError("Integration plan binding is invalid")
+            scopes = json.loads(binding["required_scopes_json"])
+            if (
+                action.get("tool_id") != binding["tool_id"]
+                or binding["step_tool_id"] != binding["tool_id"]
+                or binding["step_fingerprint"] != binding["contract_fingerprint"]
+                or action.get("contract_fingerprint") != binding["contract_fingerprint"]
+                or snapshot.get("connection_id") != binding["connection_id"]
+                or snapshot.get("integration_id") != binding["integration_id"]
+                or snapshot.get("manifest_version") != binding["manifest_version"]
+                or snapshot.get("required_scopes") != scopes
+            ):
+                raise PermissionError("Persisted integration binding does not match the run plan")
+            resolved = integrations.resolve_tool(binding["tool_id"])
+            manifest = integrations.get(binding["integration_id"])
+            if resolved is None or manifest is None:
+                raise PermissionError("Bound integration is no longer registered")
+            integration_id, tool = resolved
+            current_fingerprint = contract_fingerprint(tool.contract)
+            if (
+                integration_id != binding["integration_id"]
+                or manifest.version != binding["manifest_version"]
+                or tool.contract.risk is not ToolRisk.READ_ONLY
+                or current_fingerprint != binding["contract_fingerprint"]
+                or tuple(tool.required_scopes) != tuple(scopes)
+            ):
+                raise PermissionError("Integration manifest or contract changed after binding")
+            validate_tool_arguments(
+                tool.contract.input_schema, json.loads(binding["arguments_json"])
+            )
+            if not connections.has_active_grants(
+                user_id, binding["connection_id"], binding["integration_id"],
+                tuple(scopes),
+            ):
+                raise PermissionError("Integration connection or required scopes are no longer active")
+        return len(rows)
+
+    def authorize_run(
+        self, user_id: str, run_id: str, integrations=None, connections=None,
+    ) -> dict:
         with self.database.transaction(immediate=True):
             run = self._raw_run(user_id, run_id)
             if run["status"] != "proposed":
                 raise ValueError("Only proposed runs can be authorized")
             self._authorize_or_execute_check(user_id, run)
+            self._validate_integration_bindings(user_id, run, integrations, connections)
             if datetime.fromisoformat(run["expires_at"]) <= _now():
                 raise PermissionError("Run authorization has expired")
             now = _stamp()
@@ -400,6 +475,10 @@ class AgentExecutionRepository:
             run = self._raw_run(user_id, run_id)
             if run["status"] != "authorized":
                 raise ValueError("Run requires explicit owner authorization")
+            if self._validate_integration_bindings(user_id, run, None, None):
+                raise PermissionError(
+                    "Integration runs require the dedicated asynchronous orchestrator"
+                )
             self._authorize_or_execute_check(user_id, run)
             if datetime.fromisoformat(run["expires_at"]) <= _now():
                 raise PermissionError("Run has expired")
