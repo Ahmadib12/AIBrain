@@ -322,34 +322,46 @@ class MemoryRepository:
         return self._to_dict(row)
 
     def get(self, user_id: str, memory_id: str) -> dict:
+        """Return an owner's saved record even when consent has been revoked."""
         self._purge_expired_for_user(user_id)
-        consent = self._active_consent(user_id)
-        if consent is None:
-            raise LookupError("Memory not found")
         row = self.database.connect().execute(
             """
-            SELECT m.* FROM memory_items AS m
-            WHERE m.id = ? AND m.user_id = ? AND m.consent_id = ?
-              AND m.status = 'active'
+            SELECT * FROM memory_items
+            WHERE id = ? AND user_id = ? AND status = 'active'
             """,
-            (memory_id, user_id, consent["id"]),
+            (memory_id, user_id),
         ).fetchone()
         if row is None:
             raise LookupError("Memory not found")
         return self._to_dict(row)
 
     def list(self, user_id: str) -> tuple[dict, ...]:
+        """List owner-held records; consent only gates assistant retrieval."""
         self._purge_expired_for_user(user_id)
-        consent = self._active_consent(user_id)
-        if consent is None:
-            return ()
         rows = self.database.connect().execute(
             """
-            SELECT m.* FROM memory_items AS m
-            WHERE m.user_id = ? AND m.consent_id = ? AND m.status = 'active'
-            ORDER BY m.updated_at DESC
+            SELECT * FROM memory_items
+            WHERE user_id = ? AND status = 'active'
+            ORDER BY updated_at DESC
             """,
-            (user_id, consent["id"]),
+            (user_id,),
+        ).fetchall()
+        return tuple(self._to_dict(row) for row in rows)
+
+    def _list_for_consent(
+        self,
+        user_id: str,
+        consent_id: str,
+    ) -> tuple[dict, ...]:
+        """Return only records created under a currently active consent."""
+        self._purge_expired_for_user(user_id)
+        rows = self.database.connect().execute(
+            """
+            SELECT * FROM memory_items
+            WHERE user_id = ? AND consent_id = ? AND status = 'active'
+            ORDER BY updated_at DESC
+            """,
+            (user_id, consent_id),
         ).fetchall()
         return tuple(self._to_dict(row) for row in rows)
 
@@ -365,11 +377,14 @@ class MemoryRepository:
         validate_personal_payload(query)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
             raise ValueError("Memory result limit must be between 1 and 10")
+        consent = self._active_consent(user_id)
+        if consent is None:
+            return ()
         query_terms = set(_TOKEN_PATTERN.findall(query.casefold()))
         if not query_terms:
             return ()
         ranked: list[tuple[float, str, dict[str, Any]]] = []
-        for memory in self.list(user_id):
+        for memory in self._list_for_consent(user_id, consent["id"]):
             searchable = " ".join((
                 memory["memory_type"],
                 memory["key"],
