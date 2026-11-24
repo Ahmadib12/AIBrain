@@ -157,6 +157,21 @@ def test_learning_adaptation_expires_and_is_audited(client):
 def test_learning_evaluations_require_approved_adaptation(client):
     token = _register(client, "m7-pending-eval@example.com")
     adaptation_id = _proposal(client, token)
+    rejected_by_api = client.post(
+        f"/api/v1/personal/learning/adaptations/{adaptation_id}/evaluations",
+        headers=_headers(token),
+        json={
+            "outcome": "improved",
+            "metric": "latency",
+            "baseline_value": 10.0,
+            "observed_value": 8.0,
+            "confidence": 0.8,
+            "evidence": {"source": "manual"},
+        },
+    )
+    assert rejected_by_api.status_code == 400
+    assert rejected_by_api.json()["detail"]["code"] == "INVALID_LEARNING_EVALUATION"
+
     state = get_app_state()
     user = state.identity.resolve_token(token)
 
