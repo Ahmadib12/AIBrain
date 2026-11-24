@@ -34,12 +34,14 @@ class ProviderReadinessGate:
             raise PermissionError("Production provider registration requires readiness evidence")
         if (
             evidence.integration_id != integration_id
+            or not isinstance(evidence.verifier_id, str)
             or not evidence.verifier_id.strip()
             or evidence.transport_id != cls.REQUIRED_TRANSPORT_ID
             or evidence.conformance_suite_version != cls.REQUIRED_SUITE_VERSION
+            or not isinstance(evidence.verified_scopes, tuple)
             or not evidence.verified_scopes
-            or len(set(evidence.verified_scopes)) != len(evidence.verified_scopes)
             or any(not isinstance(scope, str) or not scope.strip() for scope in evidence.verified_scopes)
+            or len(set(evidence.verified_scopes)) != len(evidence.verified_scopes)
             or evidence.provider_verification_passed is not True
             or evidence.transport_conformance_passed is not True
         ):
