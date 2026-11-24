@@ -251,7 +251,9 @@ def test_signed_suite_digest_and_commands_are_recorded(tmp_path):
     output = tmp_path / "out"
     result = run_suite(
         suite_envelope=envelope, authority_public_key=public,
-        authority_key_id="suite-authority-1", output_dir=output,
+        authority_key_id="suite-authority-1",
+        expected_suite_id="provider-x-safety-suite",
+        expected_suite_version="suite-1", output_dir=output,
     )
     report = json.loads((output / result["report"]).read_text())
     expected = hashlib.sha256(canonical_json(envelope["payload"])).hexdigest()
