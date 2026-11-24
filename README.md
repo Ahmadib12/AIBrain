@@ -247,6 +247,8 @@ python -m scripts.run_and_attest_conformance \
 Required orchestration environment variables:
 `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64`,
 `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`,
+`AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID`,
+`AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION`,
 `AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN`, and
 `AIBRAIN_RUNNER_PRIVATE_KEY_B64`. The signing key must correspond to a
 registered, non-revoked public key scoped to the exact provider, adapter,
