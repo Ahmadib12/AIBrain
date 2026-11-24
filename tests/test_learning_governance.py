@@ -116,7 +116,7 @@ def test_learning_adaptation_terminal_decisions_cannot_be_reversed(client):
         json={"status": "approved"},
     )
     assert reapproved.status_code == 409
-    assert reapproved.json()["detail"]["code"] == "INVALID_ADAPTATION_TRANSITION"
+    assert reapproved.json()["error"]["code"] == "INVALID_ADAPTATION_TRANSITION"
 
     state = get_app_state()
     with pytest.raises(sqlite3.IntegrityError):
@@ -202,7 +202,7 @@ def test_learning_evaluations_require_approved_adaptation(client):
         },
     )
     assert rejected_by_api.status_code == 400
-    assert rejected_by_api.json()["detail"]["code"] == "INVALID_LEARNING_EVALUATION"
+    assert rejected_by_api.json()["error"]["code"] == "INVALID_LEARNING_EVALUATION"
 
     state = get_app_state()
     user = state.identity.resolve_token(token)
