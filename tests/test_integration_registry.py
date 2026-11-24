@@ -68,7 +68,7 @@ def test_registry_rejects_duplicate_integration_ids_and_allows_distinct_namespac
         name="Other",
         description="Duplicate tool namespace test",
         version="1",
-        tools=(IntegrationTool(_contract("other.search"), ()),),
+        tools=(IntegrationTool(_contract("other.search"), ("other.search",)),),
     )
     registry.register(other)
     # Valid manifests must namespace tool IDs by integration ID, so a
@@ -101,6 +101,8 @@ def test_manifest_rejects_state_changing_and_unscoped_tool_ids():
 
 
 def test_manifest_rejects_invalid_and_duplicate_scopes():
+    with pytest.raises(ValueError):
+        IntegrationTool(_contract(), ())
     with pytest.raises(ValueError):
         IntegrationTool(_contract(), ("web.search", "web.search"))
     with pytest.raises(ValueError):
