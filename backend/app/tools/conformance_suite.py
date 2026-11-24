@@ -21,6 +21,8 @@ def verify_signed_suite(
     envelope: dict[str, Any],
     authority_public_key: bytes,
     expected_authority_key_id: str,
+    expected_suite_id: str,
+    expected_suite_version: str,
     expected_binding: dict[str, Any],
 ) -> dict[str, Any]:
     """Verify authority signature, exact suite schema, binding and command map."""
@@ -45,6 +47,8 @@ def verify_signed_suite(
             raise ValueError(f"Invalid signed suite field: {field}")
     if payload["authority_key_id"] != expected_authority_key_id:
         raise PermissionError("Suite was not signed by the pinned authority key")
+    if payload["suite_id"] != expected_suite_id or payload["suite_version"] != expected_suite_version:
+        raise PermissionError("Conformance suite identity or version is not deployment-approved")
     if payload["suite_version"] != expected_binding.get("test_suite_version"):
         raise PermissionError("Signed suite version does not match evidence binding")
     if payload["binding"] != expected_binding:
