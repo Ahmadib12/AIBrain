@@ -1566,6 +1566,149 @@ class Database:
                 END;
                 """
             ),
+            (
+                24,
+                """
+                DROP TRIGGER IF EXISTS prevent_agent_event_update;
+                DROP TRIGGER IF EXISTS prevent_agent_event_delete;
+                DROP TRIGGER IF EXISTS validate_agent_event_insert;
+                DROP INDEX IF EXISTS idx_agent_events_owner_agent;
+
+                ALTER TABLE agent_events RENAME TO agent_events_v23;
+
+                CREATE TABLE agent_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (
+                        event_type IN (
+                            'registered', 'activated', 'suspended',
+                            'resumed', 'terminated'
+                        )
+                    ),
+                    details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+                );
+
+                INSERT INTO agent_events (
+                    id, user_id, agent_id, actor_user_id,
+                    event_type, details_json, created_at
+                )
+                SELECT
+                    id, user_id, agent_id, actor_user_id,
+                    event_type, details_json, created_at
+                FROM agent_events_v23;
+
+                DROP TABLE agent_events_v23;
+
+                CREATE INDEX idx_agent_events_owner_agent
+                    ON agent_events(user_id, agent_id, created_at, id);
+
+                CREATE TRIGGER prevent_agent_event_update
+                BEFORE UPDATE ON agent_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_agent_event_delete
+                BEFORE DELETE ON agent_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'agent events may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER validate_agent_event_insert
+                BEFORE INSERT ON agent_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM agents AS a
+                    JOIN users AS u ON u.id = a.user_id
+                    WHERE a.id = NEW.agent_id
+                      AND a.user_id = NEW.user_id
+                      AND NEW.actor_user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND (
+                        (
+                          NEW.event_type = 'registered'
+                          AND a.status = 'draft'
+                          AND json_extract(NEW.details_json, '$.initial_status') = 'draft'
+                          AND NOT EXISTS (
+                            SELECT 1 FROM agent_events AS prior
+                            WHERE prior.agent_id = a.id
+                          )
+                        )
+                        OR
+                        (
+                          NEW.event_type = 'activated'
+                          AND a.status = 'draft'
+                          AND json_extract(NEW.details_json, '$.from_status') = 'draft'
+                          AND json_extract(NEW.details_json, '$.to_status') = 'active'
+                        )
+                        OR
+                        (
+                          NEW.event_type = 'suspended'
+                          AND a.status = 'active'
+                          AND json_extract(NEW.details_json, '$.from_status') = 'active'
+                          AND json_extract(NEW.details_json, '$.to_status') = 'suspended'
+                        )
+                        OR
+                        (
+                          NEW.event_type = 'resumed'
+                          AND a.status = 'suspended'
+                          AND json_extract(NEW.details_json, '$.from_status') = 'suspended'
+                          AND json_extract(NEW.details_json, '$.to_status') = 'active'
+                        )
+                        OR
+                        (
+                          NEW.event_type = 'terminated'
+                          AND a.status IN ('draft', 'active', 'suspended')
+                          AND json_extract(NEW.details_json, '$.from_status') = a.status
+                          AND json_extract(NEW.details_json, '$.to_status') = 'terminated'
+                        )
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent event owner or transition mismatch');
+                END;
+
+                CREATE TRIGGER validate_agent_status_transition
+                BEFORE UPDATE OF status ON agents
+                WHEN OLD.status <> NEW.status
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_events AS e
+                    WHERE e.agent_id = OLD.id
+                      AND e.user_id = OLD.user_id
+                      AND json_extract(e.details_json, '$.from_status') = OLD.status
+                      AND json_extract(e.details_json, '$.to_status') = NEW.status
+                      AND (
+                        (e.event_type = 'activated' AND OLD.status = 'draft' AND NEW.status = 'active')
+                        OR (e.event_type = 'suspended' AND OLD.status = 'active' AND NEW.status = 'suspended')
+                        OR (e.event_type = 'resumed' AND OLD.status = 'suspended' AND NEW.status = 'active')
+                        OR (e.event_type = 'terminated' AND OLD.status IN ('draft', 'active', 'suspended') AND NEW.status = 'terminated')
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent status change requires a matching lifecycle event');
+                END;
+
+                CREATE TRIGGER prevent_agent_termination_reversal
+                BEFORE UPDATE OF status ON agents
+                WHEN OLD.status = 'terminated' AND NEW.status <> 'terminated'
+                BEGIN
+                    SELECT RAISE(ABORT, 'terminated agents cannot be reactivated');
+                END;
+                """
+            ),
         )
 
         with self._lock:
