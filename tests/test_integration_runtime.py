@@ -197,3 +197,46 @@ def test_runtime_enforces_serialized_output_bound(runtime_state):
         asyncio.run(runtime.execute(
             owner_id, connection["id"], "catalog.search", {"query": "hello"}
         ))
+
+
+class RevokingReadAdapter:
+    def __init__(self, connections, owner_id, connection_id):
+        self.connections = connections
+        self.owner_id = owner_id
+        self.connection_id = connection_id
+
+    async def execute(self, *, user_id, connection_id, tool_id, arguments):
+        self.connections.revoke(self.owner_id, self.connection_id)
+        return {"items": ["must-not-be-returned"]}
+
+
+def test_runtime_discards_result_if_connection_is_revoked_in_flight(runtime_state):
+    database, owner_id, connection, connections, manifests, adapters = runtime_state
+    _activate_test_connection(database, connection)
+    adapters.register(
+        "catalog",
+        RevokingReadAdapter(connections, owner_id, connection["id"]),
+    )
+    runtime = ReadOnlyIntegrationRuntime(
+        manifests=manifests, adapters=adapters, connections=connections
+    )
+    with pytest.raises(PermissionError, match="authority changed during execution"):
+        asyncio.run(runtime.execute(
+            owner_id, connection["id"], "catalog.search", {"query": "hello"}
+        ))
+
+
+def test_runtime_rejects_camel_case_credential_output(runtime_state):
+    database, owner_id, connection, connections, manifests, adapters = runtime_state
+    _activate_test_connection(database, connection)
+    adapters.register(
+        "catalog",
+        FakeReadAdapter({"items": ["one"], "accessToken": "sensitive"}),
+    )
+    runtime = ReadOnlyIntegrationRuntime(
+        manifests=manifests, adapters=adapters, connections=connections
+    )
+    with pytest.raises(ValueError, match="credential-like"):
+        asyncio.run(runtime.execute(
+            owner_id, connection["id"], "catalog.search", {"query": "hello"}
+        ))
