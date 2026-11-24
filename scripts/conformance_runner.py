@@ -158,6 +158,8 @@ def run_suite(
     suite_envelope: dict,
     authority_public_key: bytes,
     authority_key_id: str,
+    expected_suite_id: str,
+    expected_suite_version: str,
     output_dir: Path,
     timeout_seconds: int = 60,
     memory_mb: int = 512,
@@ -176,6 +178,8 @@ def run_suite(
         envelope=suite_envelope,
         authority_public_key=authority_public_key,
         expected_authority_key_id=authority_key_id,
+        expected_suite_id=expected_suite_id,
+        expected_suite_version=expected_suite_version,
         expected_binding=binding,
     )
     commands = _validate_commands(verified_suite["commands"])
@@ -347,8 +351,10 @@ def main() -> int:
     try:
         public_key_b64 = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "")
         authority_key_id = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID", "")
-        if not public_key_b64 or not authority_key_id:
-            raise ValueError("Pinned suite-authority public key and key ID must be provisioned")
+        expected_suite_id = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID", "")
+        expected_suite_version = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION", "")
+        if not all((public_key_b64, authority_key_id, expected_suite_id, expected_suite_version)):
+            raise ValueError("Pinned suite authority and approved suite identity/version must be provisioned")
         try:
             public_key = base64.b64decode(public_key_b64, validate=True)
         except (ValueError, base64.binascii.Error) as exc:
@@ -357,6 +363,8 @@ def main() -> int:
             suite_envelope=_load_json(args.suite),
             authority_public_key=public_key,
             authority_key_id=authority_key_id,
+            expected_suite_id=expected_suite_id,
+            expected_suite_version=expected_suite_version,
             output_dir=args.output_dir,
             timeout_seconds=args.timeout_seconds,
             memory_mb=args.memory_mb,
