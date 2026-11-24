@@ -1637,6 +1637,98 @@ class ToolRequestRepository:
             })
         return history
 
+    def get_execution_history_for_operator(
+        self,
+        operator: dict,
+        request_id: str,
+        *,
+        reason: str,
+        limit: int,
+        offset: int = 0,
+    ) -> dict:
+        """Read a bounded execution history and audit the operator access atomically."""
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason.strip()) < 8
+            or len(reason) > 500
+        ):
+            raise ValueError("Investigation reason must be 8 to 500 characters")
+        if (
+            isinstance(limit, bool) or not isinstance(limit, int)
+            or not 1 <= limit <= 51
+        ):
+            raise ValueError("Execution history limit must be between 1 and 51")
+        if (
+            isinstance(offset, bool) or not isinstance(offset, int)
+            or not 0 <= offset <= 100_000
+        ):
+            raise ValueError("Execution history offset is out of range")
+
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            request = connection.execute(
+                """
+                SELECT
+                    r.user_id, r.tool_id, r.status, r.created_at,
+                    r.consumed_at,
+                    a.status AS attempt_status,
+                    a.claimed_at,
+                    a.finished_at,
+                    a.error_code AS attempt_error_code
+                FROM tool_requests AS r
+                LEFT JOIN tool_execution_attempts AS a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                WHERE r.id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+            if request is None:
+                raise LookupError("Tool request not found")
+
+            events = self.get_execution_history(
+                request["user_id"],
+                request_id,
+                limit=limit,
+                offset=offset,
+            )
+            _insert_security_operator_audit(
+                connection,
+                operator,
+                action="tool_execution_history.view",
+                target_type="tool_request",
+                target_id=request_id,
+                details={
+                    "reason": reason.strip(),
+                    "request_owner_id": request["user_id"],
+                    "tool_id": request["tool_id"],
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
+
+            return {
+                "request": {
+                    "request_id": request_id,
+                    "owner_user_id": request["user_id"],
+                    "tool_id": request["tool_id"],
+                    "status": request["status"],
+                    "created_at": request["created_at"],
+                    "consumed_at": request["consumed_at"],
+                    "execution_attempt": (
+                        {
+                            "status": request["attempt_status"],
+                            "claimed_at": request["claimed_at"],
+                            "finished_at": request["finished_at"],
+                            "error_code": request["attempt_error_code"],
+                        }
+                        if request["attempt_status"] is not None
+                        else None
+                    ),
+                },
+                "events": events,
+            }
+
     def reconcile_execution_attempt(
         self,
         user_id: str,
