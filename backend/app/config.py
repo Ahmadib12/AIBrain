@@ -33,6 +33,10 @@ class Settings(BaseSettings):
         min_length=32,
     )
     security_operator_emails: str = ""
+    conformance_suite_authority_public_key_b64: str | None = None
+    conformance_suite_authority_key_id: str | None = None
+    conformance_suite_expected_id: str | None = None
+    conformance_suite_expected_version: str | None = None
     login_rate_limit_attempts: int = Field(default=5, gt=0)
     login_rate_limit_window_seconds: int = Field(default=300, gt=0)
 
@@ -59,6 +63,33 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Provider operator and runner ingestion tokens must be distinct"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_conformance_suite_authority(self):
+        values = (
+            self.conformance_suite_authority_public_key_b64,
+            self.conformance_suite_authority_key_id,
+            self.conformance_suite_expected_id,
+            self.conformance_suite_expected_version,
+        )
+        if any(value is not None for value in values):
+            if any(not isinstance(value, str) or not value.strip() for value in values):
+                raise ValueError("All conformance suite authority pins must be configured together")
+            import base64
+            import binascii
+            try:
+                public_key = base64.b64decode(
+                    self.conformance_suite_authority_public_key_b64,
+                    validate=True,
+                )
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("Conformance suite authority public key must be valid base64") from exc
+            if len(public_key) != 32:
+                raise ValueError("Conformance suite authority public key must decode to 32 bytes")
+            for value in values[1:]:
+                if len(value) > 256:
+                    raise ValueError("Conformance suite authority pins must be at most 256 characters")
         return self
 
     @field_validator("webauthn_allowed_origins", mode="before")
