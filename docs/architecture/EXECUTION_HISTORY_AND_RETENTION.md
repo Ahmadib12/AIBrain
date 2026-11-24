@@ -68,7 +68,7 @@ If the provider lookup raises or returns an invalid response, the authorization 
 
 Manual reconciliation is a user decision made after independently determining the uncertain external outcome. It does not call the provider and never retries the action.
 
-The current implementation records the decision in `tool_requests.audit_json` under `execution_reconciliation`, while updating the request and attempt to their reconciled terminal states. Reconciliation is persisted in the dedicated `tool_execution_reconciliation_events` ledger. The request result and request/attempt states are updated in the same immediate transaction. The note and final outcome are not stored only in mutable request JSON.
+Reconciliation is persisted in the dedicated `tool_execution_reconciliation_events` ledger. The request result and request/attempt states are updated in the same immediate transaction. The note and final outcome are not stored only in mutable request JSON. Migration 20 backfills valid legacy `audit_json.execution_reconciliation` values into this ledger and removes the migrated JSON field.
 
 ## 3. Lifecycle and ordering
 
