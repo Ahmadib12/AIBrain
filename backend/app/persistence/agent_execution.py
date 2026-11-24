@@ -282,6 +282,7 @@ class AgentExecutionRepository:
 
         failed = False
         for step in self.list_steps(user_id, run_id):
+            proposal = None
             try:
                 # This transaction is the step authorization linearization point.
                 # A later grant revocation cannot retroactively cancel a step
@@ -333,6 +334,11 @@ class AgentExecutionRepository:
                     )
             except Exception as exc:
                 failed = True
+                if proposal is not None:
+                    try:
+                        gateway.cancel(user_id, proposal["id"])
+                    except (LookupError, PermissionError):
+                        pass
                 code = (
                     "authorization_or_contract_rejected"
                     if isinstance(exc, (PermissionError, LookupError, ValueError))
