@@ -2,7 +2,7 @@
 
 Status: Implemented baseline; operational policy and external tamper-evidence remain future work
 Scope: External tool dispatch, stale execution recovery, provider outcome lookup, and account erasure
-Applies to: SQLite persistence migrations 11, 16, 17, 18, and 19
+Applies to: SQLite persistence migrations 11, 16, 17, 18, 19, and 20
 
 ## 1. Purpose
 
@@ -14,7 +14,7 @@ AIBrain keeps separate records for external dispatch, recovery decisions, and au
 - **Execution state:** What is the current state of the request and execution attempt?
 - **Manual reconciliation:** What outcome did the user record after independently resolving an uncertain operation?
 
-The first three are separate immutable ledgers while an account is active. Request and attempt rows remain the operational state, not substitutes for the ledgers.
+The four audit ledgers are separate immutable records while an account is active. Request and attempt rows remain the operational state, not substitutes for the ledgers.
 
 ## 2. Source records and meaning
 
@@ -68,7 +68,7 @@ If the provider lookup raises or returns an invalid response, the authorization 
 
 Manual reconciliation is a user decision made after independently determining the uncertain external outcome. It does not call the provider and never retries the action.
 
-The current implementation records the decision in `tool_requests.audit_json` under `execution_reconciliation`, while updating the request and attempt to their reconciled terminal states. This is operational metadata on the request row, **not yet a dedicated immutable reconciliation ledger**. It must not be described as equivalent to the three ledgers above. A future migration should normalize it into a separately constrained event table before automated operational reporting depends on it.
+The current implementation records the decision in `tool_requests.audit_json` under `execution_reconciliation`, while updating the request and attempt to their reconciled terminal states. Reconciliation is persisted in the dedicated `tool_execution_reconciliation_events` ledger. The request result and request/attempt states are updated in the same immediate transaction. The note and final outcome are not stored only in mutable request JSON.
 
 ## 3. Lifecycle and ordering
 
@@ -98,15 +98,16 @@ A positive lookup is evidence for a separate reconciliation decision. It does no
 
 ## 4. Unified repository read model
 
-`ToolRequestRepository.get_execution_history(user_id, request_id)` is an owner-scoped read model over the three source ledgers. It returns a chronological list with:
+`ToolRequestRepository.get_execution_history(user_id, request_id)` is an owner-scoped read model over the four source ledgers. It returns a chronological list with:
 
 - `id`, `record_type`, and `event_type`;
+- reconciliation outcome, note, and error code for a reconciliation event;
 - `action_digest`;
 - parsed `details`;
 - `created_at`;
 - `certification_id` for lookup-authorization records.
 
-The record types remain explicit: `dispatch_audit`, `dispatch_recovery`, and `lookup_authorization`. The method does not mutate or rewrite source records. It returns history only for a request owned by the supplied user and raises not-found for another owner.
+The record types remain explicit: `dispatch_audit`, `dispatch_recovery`, `lookup_authorization`, and `execution_reconciliation`. The method does not mutate or rewrite source records. It returns history only for a request owned by the supplied user and raises not-found for another owner.
 
 Rows are ordered by timestamp, then record type and ID as deterministic tie-breakers. Timestamps are application-generated UTC ISO strings; equal timestamps do not establish causal order. Where transaction races matter, the database transaction/commit boundary—not lexical ordering of timestamps or UUIDs—defines which authorization or revocation won.
 
@@ -116,7 +117,7 @@ This is an internal repository method. There is not yet a user-facing or operato
 
 While the account is active:
 
-- dispatch, recovery, and lookup-authorization rows reject updates through SQLite triggers;
+- dispatch, recovery, lookup-authorization, and reconciliation rows reject updates through SQLite triggers;
 - direct deletion of those rows is rejected;
 - deleting the parent tool request cannot bypass the row-level delete guard through foreign-key cascading;
 - the repositories write lifecycle events and associated state transitions atomically.
@@ -142,7 +143,7 @@ Account erasure removes the user's request-scoped execution history. This reposi
 
 ## 7. Retention and operational investigation
 
-There is currently no time-based cleanup job for these three execution ledgers. While an account remains active, their rows are retained; deletion is tied to account erasure. Do not introduce a generic TTL cleanup that deletes individual rows without an approved retention policy and an integrity-preserving archive/export design.
+There is currently no time-based cleanup job for these four execution ledgers. While an account remains active, their rows are retained; deletion is tied to account erasure. Do not introduce a generic TTL cleanup that deletes individual rows without an approved retention policy and an integrity-preserving archive/export design.
 
 For a specific request, an investigation should correlate:
 
@@ -150,14 +151,14 @@ For a specific request, an investigation should correlate:
 2. the immutable execution binding and action digest;
 3. the dispatch/recovery/lookup records returned by `get_execution_history()`;
 4. the current certification and evidence/attestation references where still retained;
-5. any manual reconciliation metadata on `tool_requests.audit_json`;
+5. the immutable reconciliation event and its note/outcome;
 6. provider-side evidence through a separately authorized provider interface.
 
 An `outcome_unknown` state must remain uncertain until evidence supports reconciliation. Do not dispatch again merely because a response was lost or a lookup found no record. Do not reinterpret `dispatch_not_started` as provider failure; it means the provider boundary was not crossed by that execution attempt.
 
 ## 8. Known gaps and follow-up requirements
 
-1. **Immutable reconciliation history:** add a dedicated reconciliation-event table and include it in the unified history model.
+1. **Immutable reconciliation history:** implemented in migration 20 and included in the unified history model. Legacy `audit_json.execution_reconciliation` values are backfilled and removed from the mutable request JSON during migration.
 2. **Access surface:** design an authenticated, owner-scoped API and operator-only investigation surface with redaction, authorization, pagination, and export limits.
 3. **External tamper evidence:** evaluate signed checkpoints or an external append-only audit sink for production deployments where database-operator tampering is in scope.
 4. **Backup and provider erasure:** define backup retention, legal-hold behavior, provider-side deletion requests, and verifiable erasure outcomes.
