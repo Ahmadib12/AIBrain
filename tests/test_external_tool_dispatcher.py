@@ -591,9 +591,25 @@ def test_recovery_keeps_started_external_dispatch_unknown_and_lookupable(tmp_pat
         assert isinstance(outcome, ExternalToolExecutionOutcome)
         assert provider.dispatch_count == 0
         assert provider.lookup_count == 1
-        assert [event["event_type"] for event in repository.get_dispatch_audit(
-            user_id, request_id
-        )] == ["dispatch_started", "outcome_lookup"]
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        assert [event["event_type"] for event in audit] == [
+            "dispatch_started", "outcome_lookup"
+        ]
+        authorization_rows = database.connect().execute(
+            """
+            SELECT id, certification_id, action_digest, details_json
+            FROM tool_dispatch_lookup_authorizations
+            WHERE user_id = ? AND request_id = ?
+            """,
+            (user_id, request_id),
+        ).fetchall()
+        assert len(authorization_rows) == 1
+        assert audit[-1]["details"]["lookup_authorization_id"] == (
+            authorization_rows[0]["id"]
+        )
+        assert json.loads(authorization_rows[0]["details_json"])[
+            "runner_key_id"
+        ] == "dispatcher-runner-key"
     finally:
         database.close()
 
@@ -716,6 +732,49 @@ def test_lookup_rejects_revoked_adapter_certification(tmp_path):
         assert provider.dispatch_count == 0
         assert provider.lookup_count == 0
         assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
+    finally:
+        database.close()
+
+
+def test_lookup_rejects_revoked_trusted_runner_key(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        repository.begin_external_dispatch(
+            user_id,
+            request_id,
+            expected_contract_fingerprint=fingerprint,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_id=provider.capabilities.provider_id,
+            provider_scope=provider.capabilities.provider_scope,
+            capabilities=snapshot,
+        )
+        repository.record_external_dispatch_outcome(
+            user_id,
+            request_id,
+            outcome="unknown",
+            action_digest=repository.get_execution_binding(
+                user_id, request_id
+            )["action_digest"],
+            error_code="provider_outcome_unknown",
+        )
+        repository.revoke_trusted_runner_key(
+            "dispatcher-runner-key",
+            revoked_by="test-security-admin",
+            reason="Runner key revoked before outcome lookup",
+        )
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        with pytest.raises(PermissionError, match="active, matching trusted certification"):
+            dispatcher.lookup(user_id, request_id)
+        assert provider.lookup_count == 0
+        assert provider.dispatch_count == 0
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
     finally:
         database.close()
 
