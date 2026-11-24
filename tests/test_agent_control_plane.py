@@ -189,6 +189,13 @@ def test_task_lifecycle_and_owner_isolation(client):
         headers=headers(owner), json={"status": "in_progress"},
     )
     assert repeated.status_code == 409
+    events = client.get(
+        f"/api/v1/agent-tasks/{task['id']}/events", headers=headers(owner)
+    )
+    assert events.status_code == 200
+    assert [event["event_type"] for event in events.json()] == [
+        "assigned", "in_progress", "completed"
+    ]
 
 
 def test_expiry_reconciliation_marks_only_stale_open_tasks(client):
@@ -290,3 +297,13 @@ def test_control_records_are_removed_during_account_erasure(client):
         assert connection.execute(
             f"SELECT 1 FROM {table} WHERE user_id=?", (owner["id"],)
         ).fetchone() is None
+
+
+def test_capability_catalog_is_versioned_and_non_executable(client):
+    token = owner_token(client, "control-catalog@example.com")
+    response = client.get("/api/v1/agent-capabilities/catalog",
+                          headers=headers(token))
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+    assert "notes.read" in response.json()["capabilities"]
+    assert response.json()["execution_enabled"] is False
