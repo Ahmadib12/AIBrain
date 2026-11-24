@@ -1149,10 +1149,10 @@ class Database:
                 SET audit_json = json_remove(
                     audit_json, '$.execution_reconciliation'
                 )
-                WHERE json_valid(COALESCE(audit_json, '{}'))
-                  AND json_type(
-                      audit_json, '$.execution_reconciliation'
-                  ) = 'object'
+                WHERE CASE WHEN json_valid(COALESCE(audit_json, '{}'))
+                    THEN json_type(
+                        audit_json, '$.execution_reconciliation'
+                    ) END = 'object'
                   AND EXISTS (
                       SELECT 1
                       FROM tool_execution_reconciliation_events AS e
