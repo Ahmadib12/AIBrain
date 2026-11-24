@@ -265,14 +265,20 @@ class MemoryRepository:
             consent = self._active_consent(user_id)
             if consent is None:
                 raise PermissionError("Explicit memory consent is required")
-            resolved_expiry = expires_at
-            if resolved_expiry is not None:
-                parsed_expiry = self._parse_timestamp(resolved_expiry)
+            policy_expiry = (
+                now + timedelta(days=consent["retention_days"])
+                if consent["retention_days"] is not None
+                else None
+            )
+            if expires_at is not None:
+                parsed_expiry = self._parse_timestamp(expires_at)
+                if policy_expiry is not None:
+                    parsed_expiry = min(parsed_expiry, policy_expiry)
                 resolved_expiry = _utc_text(parsed_expiry)
-            elif consent["retention_days"] is not None:
-                resolved_expiry = _utc_text(
-                    now + timedelta(days=consent["retention_days"])
-                )
+            elif policy_expiry is not None:
+                resolved_expiry = _utc_text(policy_expiry)
+            else:
+                resolved_expiry = None
             self.database.connect().execute(
                 """
                 INSERT INTO memory_items (
