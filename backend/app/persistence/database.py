@@ -1340,7 +1340,7 @@ class Database:
                     event_type TEXT NOT NULL CHECK (
                         event_type IN (
                             'proposed', 'approved', 'rejected',
-                            'suspended', 'revoked', 'expired'
+                            'suspended', 'revoked', 'expired', 'evaluated'
                         )
                     ),
                     details_json TEXT NOT NULL,
