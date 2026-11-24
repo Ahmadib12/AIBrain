@@ -124,7 +124,7 @@ def test_database_rejects_unverified_connection_activation(state):
     connection = repository.create_pending(
         owner_id, "calendar", ["calendar.events.read"], consent_version="v1"
     )
-    with pytest.raises(sqlite3.IntegrityError, match="trusted verification"):
+    with pytest.raises(sqlite3.IntegrityError, match="verified vault credentials"):
         database.connect().execute(
             "UPDATE integration_connections SET status='active' WHERE id=?",
             (connection["id"],),
