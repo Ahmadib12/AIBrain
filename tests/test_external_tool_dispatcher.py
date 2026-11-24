@@ -1199,3 +1199,78 @@ def test_provider_lookup_failure_keeps_authorization_without_success_audit(tmp_p
         assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
     finally:
         database.close()
+
+
+
+def test_lookup_authorization_ledger_is_immutable_and_erased_with_account(tmp_path):
+    import sqlite3
+
+    from backend.app.persistence.identity import IdentityRepository
+
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        binding = _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        certification = _active_lookup_certification(
+            repository, provider, user_id, request_id, fingerprint, snapshot
+        )
+        assert certification is not None
+        authorization = _begin_lookup_authorization(
+            repository, user_id, request_id, fingerprint,
+            provider, snapshot, binding, certification,
+        )
+        authorization_id = authorization["id"]
+
+        with pytest.raises(sqlite3.IntegrityError, match="are immutable"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "UPDATE tool_dispatch_lookup_authorizations "
+                    "SET details_json = '{}' WHERE id = ?",
+                    (authorization_id,),
+                )
+
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_dispatch_lookup_authorizations WHERE id = ?",
+                    (authorization_id,),
+                )
+
+        # Deleting the parent request for an active account must not silently
+        # cascade-delete its authorization evidence.
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_requests WHERE id = ? AND user_id = ?",
+                    (request_id, user_id),
+                )
+
+        remaining = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations WHERE id = ?",
+            (authorization_id,),
+        ).fetchone()[0]
+        assert remaining == 1
+
+        # The supported privacy-erasure workflow tombstones the account first,
+        # then cascades deletion of its request and associated lookup ledger.
+        identity = IdentityRepository(database, session_ttl_seconds=86400)
+        identity.delete_user(user_id)
+
+        user = database.connect().execute(
+            "SELECT deleted_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        assert user is not None and user["deleted_at"] is not None
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_requests WHERE id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations WHERE id = ?",
+            (authorization_id,),
+        ).fetchone()[0] == 0
+    finally:
+        database.close()
