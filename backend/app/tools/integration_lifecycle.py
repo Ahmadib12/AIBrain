@@ -103,8 +103,6 @@ class IntegrationConnectionLifecycle:
             raise PermissionError("Provider identity or granted scopes do not match owner consent")
         if verification.expires_at is None:
             raise PermissionError("Provider credentials must have a finite expiry")
-        if verification.expires_at is None:
-            raise PermissionError("Rotated provider credentials must have a finite expiry")
         if verification.expires_at is not None:
             try:
                 expiry = datetime.fromisoformat(verification.expires_at)
@@ -172,6 +170,8 @@ class IntegrationConnectionLifecycle:
             or tuple(sorted(verification.granted_scopes)) != scopes
         ):
             raise PermissionError("Rotated credential does not match the verified provider identity and scopes")
+        if verification.expires_at is None:
+            raise PermissionError("Rotated provider credentials must have a finite expiry")
         if verification.expires_at is not None:
             try:
                 expiry = datetime.fromisoformat(verification.expires_at)
