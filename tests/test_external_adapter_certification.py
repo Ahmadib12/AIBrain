@@ -1,5 +1,7 @@
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -645,3 +647,123 @@ def test_nonce_cannot_be_reused_across_distinct_evidence_packages(repository):
                     nonce=nonce, issued_at=issued_at, expires_at=expires_at,
                     signature=signature,
                 )
+
+
+
+def _prepare_runner_attestation(repository):
+    package = verify(repository)
+    public_key, private_key = generate_test_keypair()
+    now = datetime.now(timezone.utc)
+    key_id = "runner-key-" + package["id"]
+    repository.register_trusted_runner_key(
+        key_id=key_id,
+        runner_id="trusted-sandbox-runner",
+        **runner_scope(package),
+        public_key=public_key,
+        valid_from=(now - timedelta(days=1)).isoformat(),
+        valid_until=(now + timedelta(days=30)).isoformat(),
+        registered_by="security-admin",
+    )
+    issued_at = now.isoformat()
+    expires_at = min(
+        datetime.fromisoformat(package["expires_at"]),
+        now + timedelta(hours=20),
+    ).isoformat()
+    payload = build_attestation_payload(
+        package_id=package["id"],
+        manifest_sha256=package["manifest_sha256"],
+        artifact_hashes=package["artifact_hashes"],
+        runner_id="trusted-sandbox-runner",
+        provider_id=package["provider_id"],
+        adapter_id=package["adapter_id"],
+        adapter_version=package["adapter_version"],
+        provider_scope=package["provider_scope"],
+        sandbox_environment=package["sandbox_environment"],
+        nonce="concurrent_nonce_" + package["id"].replace("-", ""),
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    signature = sign_attestation_for_runner(private_key, payload)
+    return package, key_id, payload, signature
+
+
+def test_concurrent_runner_attestation_only_one_connection_consumes_package_and_nonce(
+    repository,
+):
+    package, key_id, payload, signature = _prepare_runner_attestation(repository)
+    second_database = Database(repository.database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    repositories = (repository, second_repository)
+    barrier = Barrier(2)
+
+    def attempt(candidate):
+        barrier.wait(timeout=10)
+        try:
+            candidate.attest_external_adapter_evidence(
+                package["id"],
+                key_id=key_id,
+                runner_id=payload["runner_id"],
+                nonce=payload["nonce"],
+                issued_at=payload["issued_at"],
+                expires_at=payload["expires_at"],
+                signature=signature,
+            )
+        except PermissionError:
+            return "rejected"
+        return "accepted"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(attempt, repositories))
+        assert sorted(outcomes) == ["accepted", "rejected"]
+        assert repository.database.connect().execute(
+            "SELECT COUNT(*) FROM external_adapter_evidence_attestations "
+            "WHERE package_id = ?",
+            (package["id"],),
+        ).fetchone()[0] == 1
+    finally:
+        second_database.close()
+
+
+def test_concurrent_certification_approvals_create_only_one_certificate(repository):
+    package, key_id, payload, signature = _prepare_runner_attestation(repository)
+    repository.attest_external_adapter_evidence(
+        package["id"],
+        key_id=key_id,
+        runner_id=payload["runner_id"],
+        nonce=payload["nonce"],
+        issued_at=payload["issued_at"],
+        expires_at=payload["expires_at"],
+        signature=signature,
+    )
+
+    second_database = Database(repository.database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    repositories = (repository, second_repository)
+    barrier = Barrier(2)
+
+    def attempt(candidate):
+        barrier.wait(timeout=10)
+        try:
+            candidate.certify_external_adapter(
+                evidence_package_id=package["id"],
+                approved_by="concurrent-reviewer",
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(hours=12)
+                ).isoformat(),
+            )
+        except PermissionError:
+            return "rejected"
+        return "accepted"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(attempt, repositories))
+        assert sorted(outcomes) == ["accepted", "rejected"]
+        assert repository.database.connect().execute(
+            "SELECT COUNT(*) FROM external_adapter_certifications "
+            "WHERE evidence_references_json = ?",
+            (json.dumps([f"evidence-package:{package['id']}"], separators=(",", ":")),),
+        ).fetchone()[0] == 1
+    finally:
+        second_database.close()
