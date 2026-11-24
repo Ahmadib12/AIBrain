@@ -307,3 +307,30 @@ def test_capability_catalog_is_versioned_and_non_executable(client):
     assert response.json()["version"] == 1
     assert "notes.read" in response.json()["capabilities"]
     assert response.json()["execution_enabled"] is False
+
+
+def test_database_rejects_grant_mutation_and_unrecorded_task_transition(client):
+    token = owner_token(client, "control-db-guards@example.com")
+    agent = create_active_agent(client, token, "DB guard agent")
+    grant = client.post(
+        f"/api/v1/agents/{agent['id']}/capabilities",
+        headers=headers(token), json={"capability": "notes.write"},
+    ).json()
+    task = client.post(
+        f"/api/v1/agents/{agent['id']}/tasks", headers=headers(token),
+        json={"title": "Guarded task", "capability_ceiling": ["notes.write"],
+              "expires_at": expiry()},
+    ).json()
+    state = get_app_state()
+    with pytest.raises(sqlite3.IntegrityError, match="grants are immutable"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE agent_capability_grants SET capability='files.read' WHERE id=?",
+                (grant["id"],),
+            )
+    with pytest.raises(sqlite3.IntegrityError, match="requires matching event"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE agent_tasks SET status='completed' WHERE id=?",
+                (task["id"],),
+            )
