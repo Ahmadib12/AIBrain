@@ -39,6 +39,13 @@ def _validate_public_text(value: str, *, label: str) -> str:
     return value
 
 
+def _validate_identifier(value: str, *, label: str) -> str:
+    _validate_public_text(value, label=label)
+    if value != value.strip():
+        raise ValueError(f"{label} must not contain surrounding whitespace")
+    return value
+
+
 class IntentContract(BaseModel):
     """A normalized interpretation of the user's request, not a permission."""
 
@@ -49,6 +56,11 @@ class IntentContract(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0.0, le=1.0)
     ambiguities: tuple[str, ...] = Field(default_factory=tuple, max_length=10)
+
+    @field_validator("intent_id")
+    @classmethod
+    def validate_intent_id(cls, value: str) -> str:
+        return _validate_identifier(value, label="Intent ID")
 
     @field_validator("summary")
     @classmethod
@@ -73,6 +85,11 @@ class GoalContract(BaseModel):
     description: str = Field(min_length=1, max_length=1_000)
     success_criteria: tuple[str, ...] = Field(min_length=1, max_length=10)
     constraints: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
+
+    @field_validator("goal_id")
+    @classmethod
+    def validate_goal_id(cls, value: str) -> str:
+        return _validate_identifier(value, label="Goal ID")
 
     @field_validator("description")
     @classmethod
@@ -99,6 +116,11 @@ class PlannedTask(BaseModel):
     capability_id: str | None = Field(default=None, min_length=1, max_length=100)
     depends_on: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
 
+    @field_validator("task_id")
+    @classmethod
+    def validate_task_id(cls, value: str) -> str:
+        return _validate_identifier(value, label="Task ID")
+
     @field_validator("description")
     @classmethod
     def validate_description(cls, value: str) -> str:
@@ -121,7 +143,10 @@ class PlannedTask(BaseModel):
     def validate_dependencies(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if len(values) != len(set(values)):
             raise ValueError("Task dependencies must be unique")
-        return values
+        return tuple(
+            _validate_identifier(value, label="Task dependency")
+            for value in values
+        )
 
 
 class TaskPlanContract(BaseModel):
@@ -133,6 +158,11 @@ class TaskPlanContract(BaseModel):
     goal: GoalContract
     tasks: tuple[PlannedTask, ...] = Field(min_length=1, max_length=20)
     rationale: str = Field(min_length=1, max_length=1_000)
+
+    @field_validator("plan_id")
+    @classmethod
+    def validate_plan_id(cls, value: str) -> str:
+        return _validate_identifier(value, label="Plan ID")
 
     @field_validator("rationale")
     @classmethod
