@@ -665,6 +665,57 @@ def test_recovery_racing_dispatch_start_is_serialized(tmp_path):
         database.close()
 
 
+def test_lookup_rejects_revoked_adapter_certification(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        repository.begin_external_dispatch(
+            user_id,
+            request_id,
+            expected_contract_fingerprint=fingerprint,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_id=provider.capabilities.provider_id,
+            provider_scope=provider.capabilities.provider_scope,
+            capabilities=snapshot,
+        )
+        repository.record_external_dispatch_outcome(
+            user_id,
+            request_id,
+            outcome="unknown",
+            action_digest=repository.get_execution_binding(
+                user_id, request_id
+            )["action_digest"],
+            error_code="provider_outcome_unknown",
+        )
+        certification = repository.get_active_external_adapter_certification(
+            provider_id=provider.capabilities.provider_id,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_scope=provider.capabilities.provider_scope,
+            tool_id=contract().tool_id,
+            tool_contract_fingerprint=fingerprint,
+            capabilities=snapshot,
+        )
+        assert certification is not None
+        repository.revoke_external_adapter_certification(
+            certification["id"],
+            revoked_by="test-security-admin",
+            reason="Test revocation before provider outcome lookup",
+        )
+
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        with pytest.raises(PermissionError, match="active, matching trusted certification"):
+            dispatcher.lookup(user_id, request_id)
+
+        assert provider.dispatch_count == 0
+        assert provider.lookup_count == 0
+        assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
+    finally:
+        database.close()
+
+
 def test_final_dispatch_gate_rejects_revoked_passkey(tmp_path):
     (
         database, repository, user_id, request_id, fingerprint, provider, snapshot
