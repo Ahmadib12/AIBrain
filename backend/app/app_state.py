@@ -11,6 +11,11 @@ from backend.app.persistence.memory import MemoryRepository
 from backend.app.persistence.tool_requests import ToolRequestRepository
 from backend.app.persistence.webauthn import WebAuthnRepository
 from backend.app.tools.integrations import IntegrationRegistry
+from backend.app.tools.integration_vault import IntegrationSecretVault
+from backend.app.tools.integration_lifecycle import (
+    IntegrationConnectionLifecycle,
+    ProviderVerifierRegistry,
+)
 from backend.app.tools.integration_runtime import (
     IntegrationAdapterRegistry,
     ReadOnlyIntegrationRuntime,
@@ -30,6 +35,17 @@ class AppState:
         self.agent_control = AgentControlRepository(self.database)
         self.agent_execution = AgentExecutionRepository(self.database)
         self.integration_connections = IntegrationConnectionRepository(self.database)
+        vault_key = (
+            settings.integration_vault_key_b64.get_secret_value()
+            if settings.integration_vault_key_b64 is not None else None
+        )
+        self.integration_vault = IntegrationSecretVault(self.database, vault_key)
+        self.integration_provider_verifiers = ProviderVerifierRegistry()
+        self.integration_connection_lifecycle = IntegrationConnectionLifecycle(
+            connections=self.integration_connections,
+            vault=self.integration_vault,
+            verifiers=self.integration_provider_verifiers,
+        )
         self.integrations = IntegrationRegistry()
         self.integration_adapters = IntegrationAdapterRegistry()
         self.integration_runtime = ReadOnlyIntegrationRuntime(
