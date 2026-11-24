@@ -105,6 +105,9 @@ def test_planning_evaluation_rejects_inconsistent_metrics() -> None:
         matched=True,
         plan_valid=True,
         execution_permitted=False,
+        context_available_matched=True,
+        clarification_matched=True,
+        history_not_exposed=True,
     )
     with pytest.raises(ValidationError, match="Total case count"):
         PlanningEvaluationResult(
