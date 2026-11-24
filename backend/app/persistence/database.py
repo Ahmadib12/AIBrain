@@ -1023,6 +1023,23 @@ class Database:
                 END;
                 """
             ),
+            (
+                18,
+                """
+                CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_delete
+                BEFORE DELETE ON tool_dispatch_lookup_authorizations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch lookup authorizations may only be deleted during account erasure'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
