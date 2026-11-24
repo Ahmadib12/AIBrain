@@ -171,6 +171,140 @@ class AgentExecutionRepository:
             })
         return self.get_run(user_id, run_id)
 
+    def create_integration_run(
+        self, user_id: str, task_id: str, actions: list[dict],
+        integrations, connections,
+    ) -> dict:
+        """Persist an integration run with immutable per-step authority bindings.
+
+        This creates and authorizes the plan only; execution is intentionally
+        unavailable until the dedicated asynchronous M9 orchestrator is wired.
+        """
+        if not isinstance(actions, list) or not 1 <= len(actions) <= 10:
+            raise ValueError("A run must contain between 1 and 10 actions")
+        with self.database.transaction(immediate=True):
+            task = self._validate_live_task(user_id, task_id)
+            ceiling = set(task["capability_ceiling"])
+            normalized = []
+            resolved_items = []
+            for index, action in enumerate(actions):
+                if not isinstance(action, dict) or set(action) - {
+                    "tool_id", "arguments", "required_capability", "connection_id"
+                }:
+                    raise ValueError("Integration run action has unsupported fields")
+                tool_id = action.get("tool_id")
+                arguments = action.get("arguments", {})
+                connection_id = action.get("connection_id")
+                required = action.get("required_capability")
+                if not isinstance(tool_id, str) or not tool_id.strip():
+                    raise ValueError("Integration tool ID is invalid")
+                if not isinstance(connection_id, str) or not connection_id.strip():
+                    raise ValueError("Integration connection ID is required")
+                if not isinstance(arguments, dict):
+                    raise ValueError("Integration arguments must be an object")
+                if required is not None and (
+                    not isinstance(required, str) or required not in ceiling
+                ):
+                    raise PermissionError("Action exceeds the task capability ceiling")
+                resolved = integrations.resolve_tool(tool_id)
+                if resolved is None:
+                    raise LookupError("Integration tool not found")
+                integration_id, item = resolved
+                contract = item.contract
+                from backend.app.tools.contracts import ToolRisk
+                if contract.risk is not ToolRisk.READ_ONLY:
+                    raise PermissionError("Integration agent runs permit read-only tools only")
+                validate_tool_arguments(contract.input_schema, arguments)
+                if not connections.has_active_grants(
+                    user_id, connection_id, integration_id, item.required_scopes
+                ):
+                    raise PermissionError("Active connection and exact owner-granted scopes are required")
+                manifest = integrations.get(integration_id)
+                if manifest is None:
+                    raise LookupError("Integration manifest is unavailable")
+                fingerprint = contract_fingerprint(contract)
+                normalized.append({
+                    "ordinal": index,
+                    "tool_id": tool_id,
+                    "arguments": arguments,
+                    "required_capability": required,
+                    "contract_fingerprint": fingerprint,
+                    "integration_binding": {
+                        "connection_id": connection_id,
+                        "integration_id": integration_id,
+                        "manifest_version": manifest.version,
+                        "required_scopes": list(item.required_scopes),
+                    },
+                })
+                resolved_items.append((integration_id, item, manifest, connection_id))
+            required_caps = {
+                item["required_capability"] for item in normalized
+                if item["required_capability"] is not None
+            }
+            if not required_caps.issubset(
+                self._effective_capabilities(user_id, task["agent_id"])
+            ):
+                raise PermissionError("Required agent capability is not currently granted")
+            validate_personal_payload(normalized)
+            now = _now()
+            run_id = str(uuid.uuid4())
+            expiry = min(
+                datetime.fromisoformat(task["expires_at"]),
+                now + timedelta(minutes=15),
+            )
+            actions_json = _canonical(normalized)
+            plan_digest = _digest(normalized)
+            self.database.connect().execute(
+                """INSERT INTO agent_runs
+                   (id,user_id,agent_id,task_id,actions_json,plan_digest,status,
+                    expires_at,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,'proposed',?,?,?)""",
+                (run_id, user_id, task["agent_id"], task_id, actions_json,
+                 plan_digest, _stamp(expiry), _stamp(now), _stamp(now)),
+            )
+            for item, resolved in zip(normalized, resolved_items):
+                step_id = str(uuid.uuid4())
+                self.database.connect().execute(
+                    """INSERT INTO agent_run_steps
+                       (id,user_id,run_id,ordinal,tool_id,arguments_json,
+                        contract_fingerprint,required_capability,status,created_at,updated_at)
+                       VALUES (?,?,?,?,?,?,?,?, 'pending',?,?)""",
+                    (step_id, user_id, run_id, item["ordinal"], item["tool_id"],
+                     _canonical(item["arguments"]), item["contract_fingerprint"],
+                     item["required_capability"], _stamp(now), _stamp(now)),
+                )
+                integration_id, tool, manifest, connection_id = resolved
+                self.database.connect().execute(
+                    """INSERT INTO agent_run_integration_bindings
+                       (step_id,user_id,run_id,connection_id,integration_id,
+                        manifest_version,tool_id,contract_fingerprint,
+                        required_scopes_json,created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (step_id, user_id, run_id, connection_id, integration_id,
+                     manifest.version, item["tool_id"], item["contract_fingerprint"],
+                     _canonical(list(tool.required_scopes)), _stamp(now)),
+                )
+            self._event(user_id, run_id, "created", {
+                "from_status": None, "to_status": "proposed",
+                "step_count": len(normalized), "plan_digest": plan_digest,
+                "integration_bound": True,
+            })
+        return self.get_run(user_id, run_id)
+
+    def list_integration_bindings(self, user_id: str, run_id: str) -> list[dict]:
+        self.get_run(user_id, run_id)
+        rows = self.database.connect().execute(
+            """SELECT step_id,connection_id,integration_id,manifest_version,
+                      tool_id,contract_fingerprint,required_scopes_json,created_at
+               FROM agent_run_integration_bindings
+               WHERE user_id=? AND run_id=? ORDER BY step_id""",
+            (user_id, run_id),
+        ).fetchall()
+        return [
+            {**dict(row), "required_scopes": json.loads(row["required_scopes_json"])}
+            for row in rows
+        ]
+
     def get_run(self, user_id: str, run_id: str) -> dict:
         row = self.database.connect().execute(
             "SELECT * FROM agent_runs WHERE id=? AND user_id=?",
