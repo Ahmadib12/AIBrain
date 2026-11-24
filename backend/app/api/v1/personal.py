@@ -78,6 +78,18 @@ class AdaptationStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = Field(pattern=r"^(approved|rejected|suspended|revoked)$")
+    reason: str = Field(default="", max_length=1000)
+
+
+class LearningEvaluationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: str = Field(pattern=r"^(improved|no_change|regressed|inconclusive)$")
+    metric: str = Field(min_length=1, max_length=120)
+    baseline_value: float
+    observed_value: float
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: object
 
 
 @router.get("/memory/consent")
@@ -437,7 +449,16 @@ async def update_adaptation(
             user["id"],
             adaptation_id,
             status=request.status,
+            reason=request.reason,
         )
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_ADAPTATION_TRANSITION",
+                "message": "The requested adaptation transition is not permitted",
+            },
+        ) from None
     except LookupError:
         raise HTTPException(
             status_code=404,
@@ -445,4 +466,70 @@ async def update_adaptation(
                 "code": "ADAPTATION_NOT_FOUND",
                 "message": "Adaptation not found",
             },
+        ) from None
+
+@router.get("/learning/adaptations/{adaptation_id}/events")
+async def list_adaptation_events(
+    adaptation_id: str,
+    user: dict = Depends(get_current_user),
+) -> list[dict]:
+    try:
+        return list(
+            get_app_state().learning.list_adaptation_events(
+                user["id"], adaptation_id
+            )
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "ADAPTATION_NOT_FOUND", "message": "Adaptation not found"},
+        ) from None
+
+
+@router.get("/learning/adaptations/{adaptation_id}/evaluations")
+async def list_adaptation_evaluations(
+    adaptation_id: str,
+    user: dict = Depends(get_current_user),
+) -> list[dict]:
+    try:
+        return list(
+            get_app_state().learning.list_evaluations(user["id"], adaptation_id)
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "ADAPTATION_NOT_FOUND", "message": "Adaptation not found"},
+        ) from None
+
+
+@router.post("/learning/adaptations/{adaptation_id}/evaluations")
+async def record_adaptation_evaluation(
+    adaptation_id: str,
+    request: LearningEvaluationRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        validate_personal_payload(request.evidence)
+        return get_app_state().learning.record_evaluation(
+            user["id"],
+            adaptation_id,
+            outcome=request.outcome,
+            metric=request.metric,
+            baseline_value=request.baseline_value,
+            observed_value=request.observed_value,
+            confidence=request.confidence,
+            evidence=request.evidence,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_LEARNING_EVALUATION",
+                "message": "Invalid learning evaluation",
+            },
+        ) from None
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "ADAPTATION_NOT_FOUND", "message": "Adaptation not found"},
         ) from None
