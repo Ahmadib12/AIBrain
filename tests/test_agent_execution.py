@@ -242,3 +242,26 @@ def test_run_definition_and_event_ledger_are_database_protected(client: TestClie
                 "UPDATE agent_run_events SET event_type='tampered' WHERE id=?",
                 (event_id,),
             )
+
+
+def test_account_erasure_cascades_agent_run_records(client: TestClient):
+    token = owner_token(client, "m9-erasure-owner@example.com")
+    agent = create_agent(client, token)
+    task = create_task(client, token, agent["id"])
+    run = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/runs",
+        headers=auth(token),
+        json={"actions": [{"tool_id": "echo", "arguments": {"text": "erase"}}]},
+    )
+    assert run.status_code == 201
+    state = get_app_state()
+    user_id = state.identity.resolve_token(token)["id"]
+
+    deleted = client.delete("/api/v1/auth/me", headers=auth(token))
+    assert deleted.status_code == 200
+
+    for table in ("agent_runs", "agent_run_steps", "agent_run_events"):
+        remaining = state.database.connect().execute(
+            f"SELECT 1 FROM {table} WHERE user_id=?", (user_id,)
+        ).fetchone()
+        assert remaining is None
