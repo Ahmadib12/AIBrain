@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from backend.app.persistence.database import Database
@@ -121,7 +123,7 @@ def test_database_rejects_unverified_connection_activation(state):
     connection = repository.create_pending(
         owner_id, "calendar", ["calendar.events.read"], consent_version="v1"
     )
-    with pytest.raises(Exception, match="trusted verification"):
+    with pytest.raises(sqlite3.IntegrityError, match="trusted verification"):
         database.connect().execute(
             "UPDATE integration_connections SET status='active' WHERE id=?",
             (connection["id"],),
@@ -133,7 +135,7 @@ def test_database_rejects_active_grant_without_active_connection(state):
     connection = repository.create_pending(
         owner_id, "calendar", ["calendar.events.read"], consent_version="v1"
     )
-    with pytest.raises(Exception, match="active integration connection"):
+    with pytest.raises(sqlite3.IntegrityError, match="active connection"):
         database.connect().execute(
             "UPDATE integration_connection_grants SET status='active' WHERE connection_id=? AND user_id=?",
             (connection["id"], owner_id),
