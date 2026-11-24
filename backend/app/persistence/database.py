@@ -2013,7 +2013,7 @@ class Database:
                     contract_fingerprint TEXT NOT NULL CHECK (length(contract_fingerprint)=64),
                     required_capability TEXT,
                     status TEXT NOT NULL CHECK (status IN (
-                        'pending','completed','failed','skipped'
+                        'pending','running','completed','failed','skipped'
                     )),
                     tool_request_id TEXT,
                     result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
@@ -2093,6 +2093,28 @@ class Database:
                 BEFORE DELETE ON agent_run_steps
                 WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
                 BEGIN SELECT RAISE(ABORT,'agent run steps may only be deleted during account erasure'); END;
+
+                CREATE TRIGGER validate_agent_run_step_status_transition
+                BEFORE UPDATE OF status ON agent_run_steps
+                WHEN OLD.status <> NEW.status
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_run_events e
+                    WHERE e.run_id=OLD.run_id AND e.user_id=OLD.user_id
+                      AND json_extract(e.details_json,'$.step_id')=OLD.id
+                      AND (
+                        (OLD.status='pending' AND (
+                            (NEW.status='running' AND e.event_type='step_started')
+                            OR (NEW.status='failed' AND e.event_type='step_failed')
+                            OR (NEW.status='skipped' AND e.event_type='step_skipped')
+                        ))
+                        OR
+                        (OLD.status='running' AND (
+                            (NEW.status='completed' AND e.event_type='step_completed')
+                            OR (NEW.status='failed' AND e.event_type='step_failed')
+                        ))
+                      )
+                )
+                BEGIN SELECT RAISE(ABORT,'agent run step status change requires matching event'); END;
 
                 CREATE TRIGGER validate_agent_run_event_insert
                 BEFORE INSERT ON agent_run_events
