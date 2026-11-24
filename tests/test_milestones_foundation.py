@@ -473,6 +473,62 @@ def test_memory_retrieval_rejects_credential_bearing_queries(
     assert "do-not-save-this" not in response.text
 
 
+
+def test_explicit_memory_expiry_cannot_exceed_consent_retention_policy(
+    client: TestClient,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    token = register_and_login(client, "memory-expiry-ceiling@example.com")
+    grant_memory_consent(client, token)
+    requested_expiry = (
+        datetime.now(timezone.utc) + timedelta(days=3000)
+    ).isoformat()
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "context",
+            "key": "retention-ceiling",
+            "value": "bounded",
+            "source": "explicit",
+            "confidence": 1.0,
+            "expires_at": requested_expiry,
+        },
+    )
+    assert created.status_code == 200
+    expires_at = datetime.fromisoformat(created.json()["expires_at"])
+    created_at = datetime.fromisoformat(created.json()["created_at"])
+    assert expires_at <= created_at + timedelta(days=365)
+
+
+def test_database_rejects_memory_insert_without_active_consent(
+    client: TestClient,
+) -> None:
+    import sqlite3
+    import uuid
+    from datetime import datetime, timezone
+
+    token = register_and_login(client, "memory-db-guard@example.com")
+    state = get_app_state()
+    user = state.identity.resolve_token(token)
+    now = datetime.now(timezone.utc).isoformat()
+    with pytest.raises(sqlite3.IntegrityError, match="active owner consent"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                """
+                INSERT INTO memory_items (
+                    id, user_id, memory_type, key, value_json, source,
+                    confidence, status, expires_at, created_at, updated_at,
+                    consent_id
+                )
+                VALUES (?, ?, 'context', 'bypass', '"attempt"', 'direct',
+                        1.0, 'active', NULL, ?, ?, NULL)
+                """,
+                (str(uuid.uuid4()), user["id"], now, now),
+            )
+
+
 def test_memory_isolated_by_user(client: TestClient) -> None:
     token_a = register_and_login(client, "memory-a@example.com")
     token_b = register_and_login(client, "memory-b@example.com")
