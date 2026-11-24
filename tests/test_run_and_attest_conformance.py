@@ -90,7 +90,6 @@ def test_workflow_submits_only_runner_generated_manifest_after_full_pass(
     monkeypatch.setattr(sys, "argv", [
         "run_and_attest_conformance",
         "--suite", str(suite),
-        "--authority-key-id", "suite-authority-1",
         "--output-dir", str(output),
         "--api-base-url", "https://aibrain.example",
         "--key-id", "runner-key",
