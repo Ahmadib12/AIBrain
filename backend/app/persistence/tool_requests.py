@@ -1373,9 +1373,10 @@ class ToolRequestRepository:
                 not isinstance(references, list)
                 or not references
                 or not isinstance(references[0], str)
-                or not references[0].startswith("evidence:")
+                or ":" not in references[0]
             ):
                 raise PermissionError("Certification evidence reference is invalid")
+            # Match the canonical reference parsing used by certification validation.
             package_id = references[0].split(":", 1)[1]
             attestation = self.get_external_adapter_evidence_attestation(package_id)
             if attestation.get("key_revoked"):
