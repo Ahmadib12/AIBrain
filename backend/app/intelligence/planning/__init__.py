@@ -13,6 +13,16 @@ from backend.app.intelligence.planning.engine import (
     PlanningResult,
 )
 
+from backend.app.intelligence.planning.lifecycle import (
+    GoalRefinementResult,
+    PlanValidationIssue,
+    PlanValidationResult,
+    PlanningLifecycle,
+    RecoveryAction,
+    RecoveryFailureKind,
+    RecoveryRecommendation,
+)
+
 from backend.app.intelligence.planning.contracts import (
     GoalContract,
     IntentContract,
@@ -36,4 +46,11 @@ __all__ = [
     "PlanningEvaluationCase",
     "PlanningEvaluationResult",
     "evaluate_planning",
+    "GoalRefinementResult",
+    "PlanValidationIssue",
+    "PlanValidationResult",
+    "PlanningLifecycle",
+    "RecoveryAction",
+    "RecoveryFailureKind",
+    "RecoveryRecommendation",
 ]
