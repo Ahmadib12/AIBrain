@@ -1211,6 +1211,116 @@ class Database:
                 END;
                 """
             ),
+            (
+                21,
+                """
+                CREATE TABLE memory_consents (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    purpose TEXT NOT NULL
+                        CHECK (purpose = 'personal_memory'),
+                    policy_version INTEGER NOT NULL
+                        CHECK (policy_version = 1),
+                    retention_days INTEGER
+                        CHECK (
+                            retention_days IS NULL
+                            OR retention_days BETWEEN 1 AND 3650
+                        ),
+                    granted_at TEXT NOT NULL,
+                    revoked_at TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+
+                CREATE UNIQUE INDEX idx_memory_active_consent
+                    ON memory_consents(user_id, purpose)
+                    WHERE revoked_at IS NULL;
+
+                CREATE INDEX idx_memory_consent_user_history
+                    ON memory_consents(user_id, granted_at);
+
+                ALTER TABLE memory_items
+                    ADD COLUMN consent_id TEXT
+                    REFERENCES memory_consents(id);
+
+                CREATE INDEX idx_memory_items_consent
+                    ON memory_items(user_id, consent_id, status, expires_at);
+
+                CREATE TRIGGER prevent_memory_consent_for_deleted_user
+                BEFORE INSERT ON memory_consents
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = NEW.user_id AND deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'user account is not active');
+                END;
+
+                CREATE TRIGGER prevent_memory_consent_identity_update
+                BEFORE UPDATE OF id, user_id, purpose, policy_version, granted_at
+                ON memory_consents
+                BEGIN
+                    SELECT RAISE(ABORT, 'memory consent identity is immutable');
+                END;
+
+                CREATE TRIGGER prevent_memory_consent_reactivation
+                BEFORE UPDATE OF revoked_at ON memory_consents
+                WHEN OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL
+                BEGIN
+                    SELECT RAISE(ABORT, 'revoked memory consent cannot be reactivated');
+                END;
+
+                CREATE TRIGGER prevent_memory_consent_delete
+                BEFORE DELETE ON memory_consents
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'memory consent history may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER validate_memory_consent_insert
+                BEFORE INSERT ON memory_items
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM memory_consents AS c
+                    JOIN users AS u ON u.id = c.user_id
+                    WHERE c.id = NEW.consent_id
+                      AND c.user_id = NEW.user_id
+                      AND c.purpose = 'personal_memory'
+                      AND c.revoked_at IS NULL
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'memory creation requires active owner consent'
+                    );
+                END;
+
+                CREATE TRIGGER validate_memory_consent_update
+                BEFORE UPDATE ON memory_items
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM memory_consents AS c
+                    JOIN users AS u ON u.id = c.user_id
+                    WHERE c.id = NEW.consent_id
+                      AND c.user_id = NEW.user_id
+                      AND c.purpose = 'personal_memory'
+                      AND c.revoked_at IS NULL
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'memory updates require active owner consent'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
