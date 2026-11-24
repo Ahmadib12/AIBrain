@@ -125,13 +125,14 @@ class MemoryRepository:
                     "UPDATE memory_consents SET revoked_at = ? WHERE id = ?",
                     (_utc_text(), consent["id"]),
                 )
-                if purge_existing:
-                    cursor = connection.execute(
-                        "DELETE FROM memory_items "
-                        "WHERE user_id = ? AND consent_id = ?",
-                        (user_id, consent["id"]),
-                    )
-                    deleted_count = cursor.rowcount
+            if purge_existing:
+                # Purge every generation, including records locked by an
+                # earlier revoked consent and legacy unbound records.
+                cursor = connection.execute(
+                    "DELETE FROM memory_items WHERE user_id = ?",
+                    (user_id,),
+                )
+                deleted_count = cursor.rowcount
         return {
             **self.consent_status(user_id),
             "revoked": consent is not None,
