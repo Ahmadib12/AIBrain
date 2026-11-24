@@ -1070,6 +1070,84 @@ class Database:
                 END;
                 """
             ),
+            (
+                20,
+                """
+                CREATE TABLE tool_execution_reconciliation_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('succeeded', 'failed')
+                    ),
+                    note TEXT NOT NULL CHECK (
+                        length(trim(note)) BETWEEN 1 AND 1000
+                    ),
+                    error_code TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, request_id),
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_execution_reconciliation_request
+                    ON tool_execution_reconciliation_events(
+                        user_id, request_id, created_at
+                    );
+
+                CREATE TRIGGER prevent_tool_execution_reconciliation_update
+                BEFORE UPDATE ON tool_execution_reconciliation_events
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool execution reconciliation events are immutable'
+                    );
+                END;
+
+                CREATE TRIGGER prevent_tool_execution_reconciliation_delete
+                BEFORE DELETE ON tool_execution_reconciliation_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool execution reconciliation events may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER validate_tool_execution_reconciliation_event
+                BEFORE INSERT ON tool_execution_reconciliation_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND r.status = 'outcome_unknown'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'outcome_unknown'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM tool_execution_reconciliation_events AS prior
+                          WHERE prior.user_id = r.user_id
+                            AND prior.request_id = r.id
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'reconciliation event violates execution lifecycle'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
