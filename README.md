@@ -221,8 +221,7 @@ Example:
 
 ```bash
 python -m scripts.run_and_attest_conformance \
-  --binding runner-binding.json \
-  --commands conformance-commands.json \
+  --suite signed-conformance-suite.json \
   --output-dir ./conformance-output \
   --api-base-url https://aibrain.example \
   --key-id registered-runner-key \
