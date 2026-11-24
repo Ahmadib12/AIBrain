@@ -174,3 +174,48 @@ def test_vault_key_must_be_exactly_32_bytes():
 
     with pytest.raises(ValueError, match="exactly 32 bytes"):
         Settings(integration_vault_key_b64=base64.b64encode(b"too-short").decode())
+
+
+def test_verified_credential_rotation_replaces_ciphertext_and_is_audited(integration_state):
+    database, owner_id, connection, connections, vault, lifecycle = integration_state
+    _activate(integration_state)
+    before = database.connect().execute(
+        "SELECT ciphertext,key_version FROM integration_secrets WHERE connection_id=?",
+        (connection["id"],),
+    ).fetchone()
+    rotated = asyncio.run(lifecycle.rotate_verified(
+        owner_id, connection["id"], {"access_token": "rotated-secret"}
+    ))
+    after = database.connect().execute(
+        "SELECT ciphertext,key_version FROM integration_secrets WHERE connection_id=?",
+        (connection["id"],),
+    ).fetchone()
+    assert after["key_version"] == before["key_version"] + 1
+    assert after["ciphertext"] != before["ciphertext"]
+    assert vault.load(owner_id, connection["id"], "calendar") == {
+        "access_token": "rotated-secret"
+    }
+    event = database.connect().execute(
+        """SELECT details_json FROM integration_connection_events
+           WHERE connection_id=? AND event_type='provider_credentials_rotated'""",
+        (connection["id"],),
+    ).fetchone()
+    assert "rotated-secret" not in event["details_json"]
+    assert rotated["status"] == "active"
+
+
+def test_expired_scope_expires_connection_when_no_scopes_remain(integration_state):
+    database, owner_id, connection, connections, vault, _ = integration_state
+    _activate(integration_state)
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    database.connect().execute(
+        """UPDATE integration_connection_grants SET expires_at=?
+           WHERE connection_id=?""",
+        (past, connection["id"]),
+    )
+    assert connections.expire_due() >= 2
+    expired = connections.get(owner_id, connection["id"])
+    assert expired["status"] == "expired"
+    assert expired["grants"][0]["status"] == "expired"
+    with pytest.raises(LookupError):
+        vault.load(owner_id, connection["id"], "calendar")
