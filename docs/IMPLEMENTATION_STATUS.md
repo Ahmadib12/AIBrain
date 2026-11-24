@@ -11,7 +11,7 @@ This document distinguishes implemented foundations from external integrations t
   authenticated CRUD/export/search, per-request intelligence opt-in, retention,
   revocation, and deletion controls (M6.1–M6.6 implemented and verified; 778 tests
   passing in Codespaces on 2026-11-24).
-- Behavioral-learning observations, expiring adaptation proposals, owner decisions, immutable governance events, and user-reported outcome evaluations (M7 implementation committed; local verification pending).
+- Behavioral-learning observations, expiring adaptation proposals, owner decisions, immutable governance events, and user-reported outcome evaluations (M7.1–M7.6 implemented and verified in Codespaces on 2026-11-24: 785 tests passed; compilation and dependency checks passed).
 - Provider timeout, fallback, health monitoring, and bounded health-check locking.
 - Safe tool contracts and a read-only echo tool.
 - Multimodal and streaming event Pydantic contracts.
@@ -26,7 +26,7 @@ This document distinguishes implemented foundations from external integrations t
 - Behavioral learning: evaluation evidence is currently user-reported and descriptive; automatic telemetry, causal attribution, model training, and automatic adaptation application are not implemented.
 - AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
 - Tools: contracts and a read-only echo implementation exist, but confirmation storage, consequential tools, isolation, and verification are not implemented.
-- Agents: the interface exists, but lifecycle and planning orchestration are not implemented.
+- Agents: only the abstract SpecializedAgent/AgentTask interface exists. M8 lifecycle and controlled orchestration are not implemented; the M8 architecture contract is documented in docs/m8-agent-lifecycle-architecture.md.
 - Android and desktop: no application projects are present; only backend contracts can support future clients.
 - Multimodal: typed media and event contracts exist, but image/document processing and real-time voice are not implemented.
 - Providers: the deterministic mock provider exists; no external provider credentials or local runtime are active.
