@@ -25,6 +25,7 @@ class AgentRunActionRequest(BaseModel):
     tool_id: str = Field(min_length=1, max_length=100)
     arguments: dict[str, Any] = Field(default_factory=dict)
     required_capability: str | None = Field(default=None, min_length=1, max_length=80)
+    connection_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class AgentRunCreateRequest(BaseModel):
@@ -38,6 +39,22 @@ def _reject_unbound_integration_actions(actions, state) -> None:
             raise PermissionError(
                 "Integration tools require the dedicated bound asynchronous orchestrator"
             )
+
+
+def _integration_run_requested(actions, state) -> bool:
+    selected = [
+        state.integrations.resolve_tool(action["tool_id"]) is not None
+        for action in actions
+    ]
+    if any(selected) and not all(selected):
+        raise PermissionError("Mixed integration and non-integration runs are not permitted")
+    if all(selected):
+        if any(not action.get("connection_id") for action in actions):
+            raise ValueError("Every integration action requires an owner connection")
+        return True
+    if any(action.get("connection_id") is not None for action in actions):
+        raise ValueError("Connection IDs are only valid for registered integration tools")
+    return False
 
 
 def _runtime():
@@ -55,10 +72,18 @@ async def create_agent_run(
     try:
         state = get_app_state()
         actions = [item.model_dump() for item in request.actions]
-        _reject_unbound_integration_actions(actions, state)
+        if _integration_run_requested(actions, state):
+            return state.agent_execution.create_integration_run(
+                user["id"], task_id, actions,
+                state.integrations, state.integration_connections,
+            )
         registry, _ = _runtime()
+        ordinary_actions = [
+            {key: value for key, value in action.items() if key != "connection_id"}
+            for action in actions
+        ]
         return state.agent_execution.create_run(
-            user["id"], task_id, actions, registry
+            user["id"], task_id, ordinary_actions, registry
         )
     except LookupError:
         _error(404, "AGENT_TASK_OR_TOOL_NOT_FOUND", "Agent task or tool not found")
@@ -110,8 +135,12 @@ async def authorize_agent_run(run_id: str, user: dict = Depends(get_current_user
 @router.post("/agent-runs/{run_id}/execute")
 async def execute_agent_run(run_id: str, user: dict = Depends(get_current_user)):
     try:
+        state = get_app_state()
+        run = state.agent_execution.get_run(user["id"], run_id)
+        if any("integration_binding" in action for action in run["actions"]):
+            return await state.integration_orchestrator.execute_run(user["id"], run_id)
         registry, gateway = _runtime()
-        return get_app_state().agent_execution.execute_run(
+        return state.agent_execution.execute_run(
             user["id"], run_id, gateway, registry
         )
     except LookupError:
