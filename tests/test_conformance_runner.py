@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import time
-import time
 from pathlib import Path
 
 import pytest
@@ -209,7 +208,7 @@ def test_runner_kills_descendants_after_command_parent_exits(tmp_path):
 
 
 def test_unsigned_suite_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="signed conformance suite"):
+    with pytest.raises(ValueError, match="payload fields"):
         run_suite(
             suite_envelope={"payload": {"binding": BINDING}, "signature": ""},
             authority_public_key=b"x" * 32,
