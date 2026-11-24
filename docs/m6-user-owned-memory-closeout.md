@@ -1,9 +1,11 @@
 # M6 Closeout — User-Owned Memory Core
 
-**Implementation status:** M6.1–M6.6 implementation is committed on
-`dev/tool-authorization-lifecycle`. Local verification is pending. Do not mark
-M6 closed until the focused tests, full test suite, compilation, and dependency
-check pass in the Codespaces environment.
+**Implementation status:** M6.1–M6.6 is implemented, committed, and verified on
+`dev/tool-authorization-lifecycle`. Codespaces verification completed on
+2026-11-24: the migration idempotency test passed (1 passed), the full suite
+passed (778 passed), `compileall` passed, and `pip check` reported no broken
+requirements. One non-blocking Starlette/httpx TestClient deprecation warning
+remains.
 
 ## Milestones delivered
 
@@ -76,8 +78,10 @@ check pass in the Codespaces environment.
   user isolation, revocation, re-grant isolation, record edits, retention
   ceilings, search/context isolation, account erasure, per-request opt-in,
   provider context framing, and retention-worker lifecycle.
-- Compilation, focused tests, full suite, and dependency validation are the
-  required local exit checks below.
+- Codespaces verification: focused migration idempotency test — 1 passed;
+  full suite — 778 passed in 34.16 seconds; compilation — passed;
+  dependency check — no broken requirements. One non-blocking
+  Starlette/httpx TestClient deprecation warning remains.
 
 ## API surface
 
