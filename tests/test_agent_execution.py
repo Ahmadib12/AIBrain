@@ -311,3 +311,101 @@ def test_m9_agent_run_rejects_registered_integration_tool_ids():
     _reject_unbound_integration_actions(
         [{"tool_id": "echo"}], State()
     )
+
+
+def test_integration_agent_run_persists_immutable_owner_scope_binding(
+    client: TestClient,
+):
+    from backend.app.tools.integrations import IntegrationManifest, IntegrationTool
+
+    token = owner_token(client, "m10-binding-owner@example.com")
+    agent = create_agent(client, token)
+    task = create_task(client, token, agent["id"])
+    state = get_app_state()
+    user_id = state.identity.resolve_token(token)["id"]
+
+    contract = ToolContract(
+        tool_id="catalog.search",
+        name="Catalog search",
+        description="Read catalog entries",
+        risk=ToolRisk.READ_ONLY,
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "maxLength": 100}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object"},
+    )
+    state.integrations.register(IntegrationManifest(
+        integration_id="catalog",
+        name="Catalog",
+        description="Owner connected catalog",
+        version="1",
+        tools=(IntegrationTool(contract, ("catalog.read",)),),
+    ))
+    connection = state.integration_connections.create_pending(
+        user_id, "catalog", ["catalog.read"], consent_version="v1"
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    with state.database.transaction(immediate=True):
+        state.database.connect().execute(
+            """INSERT INTO integration_secrets
+               (secret_ref,user_id,connection_id,integration_id,nonce,ciphertext,
+                key_version,created_at,updated_at)
+               VALUES ('vault-ref:m10-test',?,?,?, ?, ?,1,?,?)""",
+            (user_id, connection["id"], "catalog", b"n" * 12, b"c" * 16, now, now),
+        )
+        state.database.connect().execute(
+            """UPDATE integration_connections
+               SET status='active',verified_at=?,secret_ref='vault-ref:m10-test',
+                   expires_at=?,updated_at=? WHERE id=?""",
+            (now, (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+             now, connection["id"]),
+        )
+        state.database.connect().execute(
+            """UPDATE integration_connection_grants
+               SET status='active',expires_at=?
+               WHERE connection_id=? AND user_id=?""",
+            ((datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+             connection["id"], user_id),
+        )
+
+    run = state.agent_execution.create_integration_run(
+        user_id,
+        task["id"],
+        [{
+            "tool_id": "catalog.search",
+            "arguments": {"query": "invoices"},
+            "connection_id": connection["id"],
+        }],
+        state.integrations,
+        state.integration_connections,
+    )
+    assert run["status"] == "proposed"
+    assert run["steps"][0]["tool_id"] == "catalog.search"
+    bindings = state.agent_execution.list_integration_bindings(user_id, run["id"])
+    assert len(bindings) == 1
+    assert bindings[0]["connection_id"] == connection["id"]
+    assert bindings[0]["integration_id"] == "catalog"
+    assert bindings[0]["manifest_version"] == "1"
+    assert bindings[0]["required_scopes"] == ["catalog.read"]
+    assert bindings[0]["contract_fingerprint"] == run["steps"][0]["contract_fingerprint"]
+
+    authorized = state.agent_execution.authorize_run(user_id, run["id"])
+    assert authorized["status"] == "authorized"
+
+    binding_step = bindings[0]["step_id"]
+    with pytest.raises(Exception, match="integration bindings are immutable"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                """UPDATE agent_run_integration_bindings
+                   SET manifest_version='2' WHERE step_id=?""",
+                (binding_step,),
+            )
+    with pytest.raises(Exception, match="may only be deleted during account erasure"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "DELETE FROM agent_run_integration_bindings WHERE step_id=?",
+                (binding_step,),
+            )
