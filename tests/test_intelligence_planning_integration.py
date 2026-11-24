@@ -78,3 +78,34 @@ async def test_planning_failure_does_not_bypass_existing_core_flow(
     assert response.status.value == "completed"
     assert response.planning is None
     assert adapter.calls == 1
+
+class ProviderFailureAdapter(CapabilityAdapter):
+    async def execute(
+        self,
+        request: IntelligenceRequest,
+        context: RequestContext,
+    ) -> AdapterResult:
+        from backend.app.intelligence.adapters import ProviderRoutingAdapterError
+
+        raise ProviderRoutingAdapterError("PROVIDER_FAILURE")
+
+
+@pytest.mark.asyncio
+async def test_error_response_does_not_expose_user_text_through_planning() -> None:
+    core = OrchestrationCore(
+        adapters={"text_generation": ProviderFailureAdapter()}
+    )
+    request = IntelligenceRequest(
+        messages=[{
+            "role": "user",
+            "content": "Analyze this private phrase: ORCHID-PRIVATE-4821",
+        }]
+    )
+
+    response = await core.process(request)
+
+    assert response.status.value == "error"
+    assert response.error_code == "PROVIDER_FAILURE"
+    assert response.planning is None
+    assert "ORCHID-PRIVATE-4821" not in str(response.model_dump())
+
