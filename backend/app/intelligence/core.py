@@ -218,10 +218,15 @@ class OrchestrationCore(CentralIntelligenceCore):
             if last_user_index is not None
             else ""
         )
-        conversation_history = tuple(
-            ContextTurn(role=message.role, content=message.content)
-            for message in validated.messages[max(0, (last_user_index or 0) - 20):last_user_index]
-        ) if last_user_index is not None else ()
+        history_start = max(0, last_user_index - 20) if last_user_index is not None else 0
+        conversation_history = (
+            tuple(
+                ContextTurn(role=message.role, content=message.content)
+                for message in validated.messages[history_start:last_user_index]
+            )
+            if last_user_index is not None
+            else ()
+        )
         classification = self.classifier.classify(
             text,
             validated.task_type,
