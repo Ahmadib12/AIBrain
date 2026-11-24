@@ -59,31 +59,28 @@ Introduce owner-controlled agent identities, lifecycle management, capability bo
 - Account erasure removes agent-owned records transactionally after tombstoning the owner.
 - Tests cover owner isolation, invalid transitions, grant/task ceiling enforcement, expiry, immutability, replay, and account erasure.
 
-## Remaining delivery sequence
+## M8.2 is closed. M8.3–M8.6 have been implemented together on the development branch as one integrated control-plane slice:
 
-The remaining M8 work is split into five independently verifiable milestones and must be delivered in dependency order:
+- **M8.3:** versioned capability allow-list, owner-issued immutable grants, expiry, append-only revocation, and grant checks when tasks are created.
+- **M8.4:** owner-created tasks with immutable definitions, grant-ceiling enforcement, explicit state transitions, cancellation, and deadline expiry.
+- **M8.5:** bounded informational messages between active agents belonging to the same owner, with optional task-recipient binding.
+- **M8.6:** immutable task/control-event ledgers, explicit expired-task reconciliation, database ownership/immutability triggers, and account-erasure coverage.
 
-1. **M8.2 — Lifecycle management:** implement the explicit agent state machine and immutable lifecycle events.
-2. **M8.3 — Capability and permission boundaries:** implement owner-controlled, expiring/revocable grants and enforce the versioned capability allow-list. Grants remain non-executable policy records.
-3. **M8.4 — Task assignment and lifecycle:** implement owner-created tasks, grant-ceiling validation, explicit task states, cancellation, and expiry. Task records remain non-executable.
-4. **M8.5 — Controlled coordination:** implement bounded same-owner agent messages/references with strict sender, recipient, task, payload, and ownership validation. Coordination cannot convey authority.
-5. **M8.6 — Audit, recovery, and failure handling:** complete append-only ledgers, stale/unknown-outcome reconciliation, transactional account-erasure coverage, and cross-milestone security verification.
+The combined implementation is not verified until the focused tests, complete suite, compilation, dependency check, and migration/account-erasure tests pass in Codespaces.
 
-Each milestone must add focused tests and migration/account-erasure coverage where applicable. After each milestone, run compilation, focused tests, the full test suite, and dependency checks in Codespaces. Update this architecture and `docs/IMPLEMENTATION_STATUS.md` only after the corresponding implementation and verification evidence exists. M8.6 closes M8 only after the complete verification gate below passes.
+## API shape (implemented; verification pending)
 
-## API shape (target)
+All endpoints are authenticated and owner-scoped:
 
-All routes are authenticated and owner-scoped under `/api/v1/agents`:
+- `POST /api/v1/agents/{agent_id}/capabilities`, `GET /api/v1/agents/{agent_id}/capabilities`, `DELETE /api/v1/agents/{agent_id}/capabilities/{grant_id}`
+- `GET /api/v1/agent-capabilities/catalog`
+- `POST /api/v1/agents/{agent_id}/tasks`, `GET /api/v1/agents/{agent_id}/tasks`
+- `GET /api/v1/agent-tasks/{task_id}`, `PATCH /api/v1/agent-tasks/{task_id}/lifecycle`, `GET /api/v1/agent-tasks/{task_id}/events`
+- `POST /api/v1/agents/{agent_id}/messages`, `GET /api/v1/agents/{agent_id}/messages`
+- `GET /api/v1/agents/{agent_id}/control-events`
+- `POST /api/v1/agent-tasks/reconcile-expired`
 
-- `POST /agents`, `GET /agents`, `GET /agents/{agent_id}`
-- `PATCH /agents/{agent_id}/lifecycle`
-- `GET /agents/{agent_id}/events`
-- `POST /agents/{agent_id}/capabilities`, `GET /agents/{agent_id}/capabilities`, `DELETE /agents/{agent_id}/capabilities/{grant_id}`
-- `POST /agents/{agent_id}/tasks`, `GET /agents/{agent_id}/tasks`
-- `GET /tasks/{task_id}`, `PATCH /tasks/{task_id}/lifecycle`
-- `POST /agents/{agent_id}/messages`, `GET /agents/{agent_id}/messages`
-
-The final route set may be narrowed to avoid duplicate or ambiguous resource ownership. Responses must use the centralized public error envelope.
+Task lifecycle transitions and message creation are owner-authored records; they do not represent execution telemetry or proof of agent activity. The capability catalog is descriptive and `execution_enabled` is always false.
 
 ## Explicit non-goals
 
