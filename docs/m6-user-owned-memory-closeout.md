@@ -109,8 +109,10 @@ and active consent; it is not silently enabled for anonymous users.
 - Revocation prevents subsequent retrievals. A provider request that already
   received a context snapshot cannot be made to “unsee” it; in-flight requests
   may complete with the snapshot assembled while consent was active.
-- Existing legacy memory rows are intentionally excluded because they have no
-  consent binding. Owners may clear all records; a later grant never adopts them.
+- Existing legacy memory rows have no consent binding or M6 retention deadline.
+  They remain visible only to the owner for export/deletion, are excluded from
+  assistant retrieval, and require owner deletion or account erasure; a later
+  grant never adopts them.
 - Behavioral-learning observations and adaptation proposals remain separate
   APIs and are not automatically added to the memory context.
 - No mobile/desktop memory management interface is included in this backend
