@@ -520,6 +520,14 @@ async def record_adaptation_evaluation(
             confidence=request.confidence,
             evidence=request.evidence,
         )
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LEARNING_STATE_CHANGED",
+                "message": "The adaptation changed state; refresh and retry",
+            },
+        ) from None
     except ValueError:
         raise HTTPException(
             status_code=400,
