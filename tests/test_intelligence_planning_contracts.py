@@ -182,4 +182,4 @@ def test_capability_reference_does_not_imply_permission() -> None:
     )
 
     assert task.capability_id == "email"
-    assert "permission" not in task.model_fields
+    assert "permission" not in PlannedTask.model_fields
