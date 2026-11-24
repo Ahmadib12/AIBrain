@@ -243,6 +243,7 @@ class BehavioralLearningRepository:
             raise ValueError("Unknown adaptation status")
         if not isinstance(reason, str) or len(reason) > 1000:
             raise ValueError("Invalid adaptation decision reason")
+        validate_personal_payload(reason.strip())
         self._expire_if_due(user_id, adaptation_id)
         now = _utc_now()
         with self.database.transaction(immediate=True):
@@ -287,6 +288,7 @@ class BehavioralLearningRepository:
             raise ValueError("Unknown evaluation outcome")
         if not isinstance(metric, str) or not metric.strip() or len(metric) > 120:
             raise ValueError("Invalid evaluation metric")
+        validate_personal_payload(metric.strip())
         numeric = (baseline_value, observed_value, confidence)
         if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numeric):
             raise ValueError("Evaluation values must be numeric")
