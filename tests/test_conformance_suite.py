@@ -70,7 +70,7 @@ def test_valid_signed_suite_returns_stable_digest_and_commands():
 def test_unsigned_or_invalid_signature_is_rejected():
     envelope, public = signed_envelope()
     envelope["signature"] = "A" * 86
-    with pytest.raises(PermissionError, match="signature verification failed"):
+    with pytest.raises(PermissionError, match="binding does not match"):
         verify(envelope, public)
 
 
