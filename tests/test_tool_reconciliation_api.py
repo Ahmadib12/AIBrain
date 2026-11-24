@@ -95,15 +95,15 @@ def test_owner_can_reconcile_unknown_attempt_as_succeeded(client: TestClient) ->
     attempt = state.tool_requests.get_execution_attempt(user_id, request["id"])
     assert attempt["status"] == "succeeded"
 
-    audit_row = state.database.connect().execute(
-        "SELECT audit_json FROM tool_requests WHERE id = ? AND user_id = ?",
-        (request["id"], user_id),
-    ).fetchone()
-    import json
-    audit = json.loads(audit_row["audit_json"])
-    assert audit["execution_reconciliation"]["outcome"] == "succeeded"
-    assert audit["execution_reconciliation"]["reconciled_by"] == user_id
-    assert audit["execution_reconciliation"]["note"] == (
+    history = state.tool_requests.get_execution_history(user_id, request["id"])
+    reconciliation_events = [
+        event for event in history
+        if event["record_type"] == "execution_reconciliation"
+    ]
+    assert len(reconciliation_events) == 1
+    assert reconciliation_events[0]["details"]["outcome"] == "succeeded"
+    assert reconciliation_events[0]["details"]["reconciled_by"] == user_id
+    assert reconciliation_events[0]["details"]["note"] == (
         "Checked the external service and confirmed completion."
     )
 
