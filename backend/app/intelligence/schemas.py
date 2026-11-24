@@ -277,6 +277,7 @@ class IntelligenceResponse(BaseModel):
 
     request_id: str = Field(default_factory=lambda: str(uuid4()))
     decision_trace: DecisionTrace | None = None
+    planning: dict[str, Any] | None = None
     task_type: TaskType
     status: ResponseStatus
     content: str | None = Field(default=None, max_length=100_000)
