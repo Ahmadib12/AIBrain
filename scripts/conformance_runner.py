@@ -91,7 +91,6 @@ def _resource_limiter(memory_mb: int, cpu_seconds: int):
     import resource
 
     def apply() -> None:
-        os.setsid()
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
         memory = memory_mb * 1024 * 1024
         if hasattr(resource, "RLIMIT_AS"):
