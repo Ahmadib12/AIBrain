@@ -1395,3 +1395,76 @@ def test_transaction_releases_lock_when_begin_fails(
         database._lock.release()
     finally:
         database.close()
+
+
+def test_migration_twenty_backfills_legacy_reconciliation_json(tmp_path) -> None:
+    import json
+
+    from backend.app.persistence.database import Database
+
+    path = tmp_path / "legacy-reconciliation.db"
+    database = Database(f"sqlite:///{path}")
+    connection = database.connect()
+    timestamp = "2026-11-24T12:00:00+00:00"
+    user_id = "legacy-reconciliation-user"
+    request_id = "legacy-reconciliation-request"
+    connection.execute(
+        """
+        INSERT INTO users (
+            id, email, password_salt, password_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (user_id, "legacy-reconciliation@example.com", "salt", "hash", timestamp),
+    )
+    legacy_reconciliation = {
+        "outcome": "failed",
+        "reconciled_by": user_id,
+        "reconciled_at": timestamp,
+        "note": "Legacy resolution carried forward",
+    }
+    connection.execute(
+        """
+        INSERT INTO tool_requests (
+            id, user_id, tool_id, arguments_json, status,
+            created_at, updated_at, audit_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            user_id,
+            "legacy-tool",
+            "{}",
+            "failed",
+            timestamp,
+            timestamp,
+            json.dumps({"execution_reconciliation": legacy_reconciliation}),
+        ),
+    )
+    connection.commit()
+
+    # Simulate upgrading a database that predates migration 20.
+    connection.execute("DROP TABLE tool_execution_reconciliation_events")
+    connection.execute("DELETE FROM schema_migrations WHERE version = 20")
+    connection.commit()
+    database.migrate()
+
+    migrated = database.connect().execute(
+        """
+        SELECT user_id, request_id, outcome, note, error_code, created_at
+        FROM tool_execution_reconciliation_events
+        WHERE user_id = ? AND request_id = ?
+        """,
+        (user_id, request_id),
+    ).fetchone()
+    assert migrated is not None
+    assert migrated["outcome"] == "failed"
+    assert migrated["note"] == "Legacy resolution carried forward"
+    assert migrated["error_code"] is None
+    assert migrated["created_at"] == timestamp
+
+    remaining_audit = database.connect().execute(
+        "SELECT audit_json FROM tool_requests WHERE id = ?",
+        (request_id,),
+    ).fetchone()["audit_json"]
+    assert json.loads(remaining_audit) == {}
+    database.close()
