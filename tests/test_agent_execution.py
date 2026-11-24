@@ -371,17 +371,17 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
              connection["id"], user_id),
         )
 
-    run = state.agent_execution.create_integration_run(
-        user_id,
-        task["id"],
-        [{
+    created = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/runs",
+        headers=auth(token),
+        json={"actions": [{
             "tool_id": "catalog.search",
             "arguments": {"query": "invoices"},
             "connection_id": connection["id"],
-        }],
-        state.integrations,
-        state.integration_connections,
+        }]},
     )
+    assert created.status_code == 201, created.text
+    run = created.json()
     assert run["status"] == "proposed"
     assert run["steps"][0]["tool_id"] == "catalog.search"
     bindings = state.agent_execution.list_integration_bindings(user_id, run["id"])
