@@ -6,6 +6,7 @@ import re
 
 from backend.app.intelligence.schemas import (
     ContextRole,
+    ContextTurn,
     IntelligenceRequest,
     IntelligenceResponse,
     ResponseStatus,
@@ -204,14 +205,23 @@ class OrchestrationCore(CentralIntelligenceCore):
                 warnings=("The request could not be validated",),
             ))
 
-        text = next(
+        last_user_index = next(
             (
-                message.content
-                for message in reversed(validated.messages)
-                if message.role == ContextRole.USER
+                index
+                for index in range(len(validated.messages) - 1, -1, -1)
+                if validated.messages[index].role == ContextRole.USER
             ),
-            "",
+            None,
         )
+        text = (
+            validated.messages[last_user_index].content
+            if last_user_index is not None
+            else ""
+        )
+        conversation_history = tuple(
+            ContextTurn(role=message.role, content=message.content)
+            for message in validated.messages[max(0, (last_user_index or 0) - 20):last_user_index]
+        ) if last_user_index is not None else ()
         classification = self.classifier.classify(
             text,
             validated.task_type,
@@ -233,6 +243,7 @@ class OrchestrationCore(CentralIntelligenceCore):
                     for capability in self.capability_registry.available()
                     if capability.capability_id in self.adapters
                 ),
+                conversation_history=conversation_history,
             )
             planning_payload = planning.model_dump(mode="json")
         except Exception:
