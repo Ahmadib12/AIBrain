@@ -2409,6 +2409,10 @@ class Database:
                       AND EXISTS (
                         SELECT 1
                         FROM agent_run_integration_bindings b
+                        JOIN agent_run_steps s
+                          ON s.id=b.step_id AND s.user_id=b.user_id
+                        JOIN agent_runs r
+                          ON r.id=b.run_id AND r.user_id=b.user_id
                         JOIN integration_connections c
                           ON c.id=b.connection_id AND c.user_id=b.user_id
                         JOIN users u ON u.id=b.user_id
@@ -2416,6 +2420,12 @@ class Database:
                           AND b.user_id=OLD.user_id
                           AND b.run_id=OLD.run_id
                           AND b.connection_id=OLD.connection_id
+                          AND b.integration_id=OLD.integration_id
+                          AND b.tool_id=OLD.tool_id
+                          AND b.contract_fingerprint=OLD.contract_fingerprint
+                          AND s.status='running'
+                          AND r.status='running'
+                          AND c.integration_id=OLD.integration_id
                           AND c.status='active'
                           AND (c.expires_at IS NULL OR c.expires_at>NEW.dispatch_started_at)
                           AND u.deleted_at IS NULL
