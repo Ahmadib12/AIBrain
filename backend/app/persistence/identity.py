@@ -259,6 +259,10 @@ class IdentityRepository:
                 (user_id,),
             )
             connection.execute(
+                "DELETE FROM memory_consents WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
                 "UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?) "
                 "WHERE user_id = ?",
                 (now, user_id),
