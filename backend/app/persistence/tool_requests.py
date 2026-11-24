@@ -759,7 +759,7 @@ class ToolRequestRepository:
         return self.get(user_id, request_id)
 
     def recover_stale_execution_attempts(self, *, stale_before: str) -> int:
-        """Mark abandoned claims unknown; never retry an operation automatically."""
+        """Classify abandoned claims conservatively; never retry an operation."""
         try:
             cutoff = datetime.fromisoformat(stale_before.replace("Z", "+00:00"))
         except (AttributeError, TypeError, ValueError) as exc:
@@ -773,23 +773,77 @@ class ToolRequestRepository:
             connection = self.database.connect()
             stale_rows = connection.execute(
                 """
-                SELECT request_id, user_id
-                FROM tool_execution_attempts
-                WHERE status = 'claimed' AND claimed_at < ?
+                SELECT a.request_id, a.user_id,
+                       b.action_digest, b.adapter_id, b.adapter_version,
+                       b.provider_id, b.provider_scope,
+                       EXISTS (
+                           SELECT 1
+                           FROM tool_dispatch_audit_events AS s
+                           WHERE s.request_id = a.request_id
+                             AND s.user_id = a.user_id
+                             AND s.event_type = 'dispatch_started'
+                       ) AS dispatch_started
+                FROM tool_execution_attempts AS a
+                LEFT JOIN tool_execution_bindings AS b
+                  ON b.request_id = a.request_id AND b.user_id = a.user_id
+                WHERE a.status = 'claimed' AND a.claimed_at < ?
                 """,
                 (cutoff_text,),
             ).fetchall()
 
             recovered = 0
             for row in stale_rows:
+                has_external_binding = row["action_digest"] is not None
+                dispatch_started = bool(row["dispatch_started"])
+
+                if has_external_binding and not dispatch_started:
+                    # The final dispatch gate writes dispatch_started in an
+                    # IMMEDIATE transaction before adapter.execute is called.
+                    # Since recovery also owns that lock, this state proves
+                    # the provider boundary was not crossed.
+                    details = {
+                        "reason": "stale_claim_before_provider_dispatch",
+                        "adapter_id": row["adapter_id"],
+                        "adapter_version": row["adapter_version"],
+                        "provider_id": row["provider_id"],
+                        "provider_scope": row["provider_scope"],
+                    }
+                    connection.execute(
+                        """
+                        INSERT INTO tool_dispatch_recovery_events
+                            (id, user_id, request_id, event_type,
+                             action_digest, details_json, created_at)
+                        VALUES (?, ?, ?, 'dispatch_not_started', ?, ?, ?)
+                        """,
+                        (
+                            str(uuid.uuid4()), row["user_id"], row["request_id"],
+                            row["action_digest"],
+                            json.dumps(
+                                details, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":"), allow_nan=False,
+                            ),
+                            now,
+                        ),
+                    )
+                    terminal_status = "failed"
+                    error_code = "recovery_dispatch_not_started"
+                else:
+                    # Generic executions and external executions with a
+                    # durable dispatch_started marker may already have acted.
+                    terminal_status = "outcome_unknown"
+                    error_code = "recovery_outcome_unknown"
+
                 attempt = connection.execute(
                     """
                     UPDATE tool_execution_attempts
-                    SET status = 'outcome_unknown', updated_at = ?,
-                        finished_at = ?, error_code = 'recovery_outcome_unknown'
+                    SET status = ?, updated_at = ?, finished_at = ?,
+                        error_code = ?
                     WHERE request_id = ? AND user_id = ? AND status = 'claimed'
                     """,
-                    (now, now, row["request_id"], row["user_id"]),
+                    (
+                        terminal_status, now, now, error_code,
+                        row["request_id"], row["user_id"],
+                    ),
                 )
                 if attempt.rowcount != 1:
                     continue
@@ -797,15 +851,16 @@ class ToolRequestRepository:
                 request_update = connection.execute(
                     """
                     UPDATE tool_requests
-                    SET status = 'outcome_unknown', updated_at = ?
+                    SET status = ?, updated_at = ?
                     WHERE id = ? AND user_id = ? AND status = 'executing'
                       AND consumed_at IS NOT NULL
                     """,
-                    (now, row["request_id"], row["user_id"]),
+                    (
+                        terminal_status, now, row["request_id"], row["user_id"],
+                    ),
                 )
                 if request_update.rowcount != 1:
-                    # Roll back the attempt transition as well. A recovered
-                    # attempt and its owning request must never diverge.
+                    # Roll back the event and attempt transition as well.
                     raise PermissionError(
                         "Tool request is no longer awaiting recovery"
                     )
