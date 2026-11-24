@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from backend.app.intelligence.classifier import DeterministicTaskClassifier
 from backend.app.intelligence.planning.contracts import IntentKind, PlanTaskKind
 from backend.app.intelligence.planning.engine import PlanningEngine
-from backend.app.intelligence.schemas import TaskType
+from backend.app.intelligence.schemas import ContextRole, ContextTurn, TaskType
 
 
 @pytest.fixture
@@ -164,3 +164,45 @@ def test_planning_assessment_cannot_grant_execution() -> None:
             requires_authorization=False,
             execution_permitted=True,
         )
+
+
+
+def test_follow_up_uses_bounded_prior_context_without_copying_it_into_summary(
+    planner: PlanningEngine,
+    classifier: DeterministicTaskClassifier,
+) -> None:
+    text = "Make it shorter"
+    history = (
+        ContextTurn(role=ContextRole.USER, content="Explain how DNS works"),
+        ContextTurn(role=ContextRole.ASSISTANT, content="DNS translates domain names into IP addresses."),
+    )
+
+    result = planner.plan(
+        text,
+        classifier.classify(text),
+        conversation_history=history,
+        available_capabilities=("text_generation",),
+    )
+
+    assert result.intent.kind is IntentKind.TRANSFORM
+    assert result.intent.context_used is True
+    assert result.intent.summary == text
+    assert result.assessment.requires_clarification is False
+    assert result.assessment.execution_permitted is False
+    assert result.plan.tasks[0].kind is PlanTaskKind.GENERATE
+
+
+def test_contextual_follow_up_without_history_requests_clarification(
+    planner: PlanningEngine,
+    classifier: DeterministicTaskClassifier,
+) -> None:
+    text = "Make it shorter"
+    result = planner.plan(text, classifier.classify(text))
+
+    assert result.intent.context_used is False
+    assert result.assessment.requires_clarification is True
+    assert result.assessment.requires_authorization is False
+    assert result.assessment.execution_permitted is False
+    assert result.intent.ambiguities
+    assert result.plan.tasks[0].kind is PlanTaskKind.REQUEST_INPUT
+    assert result.plan.tasks[0].task_id == "clarify-context"
