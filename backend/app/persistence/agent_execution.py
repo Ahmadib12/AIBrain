@@ -390,6 +390,8 @@ class AgentExecutionRepository:
             raise PermissionError("Integration authority services are required")
         if len(rows) != len(expected):
             raise PermissionError("Integration run binding set is incomplete")
+        if rows and len(expected) != len(actions):
+            raise PermissionError("Mixed integration and non-integration runs are not permitted")
         by_ordinal = {ordinal: action for ordinal, action in expected}
         if len(by_ordinal) != len(expected):
             raise PermissionError("Integration run contains duplicate or invalid actions")
@@ -475,7 +477,12 @@ class AgentExecutionRepository:
             run = self._raw_run(user_id, run_id)
             if run["status"] != "authorized":
                 raise ValueError("Run requires explicit owner authorization")
-            if self._validate_integration_bindings(user_id, run, None, None):
+            bound = self.database.connect().execute(
+                """SELECT 1 FROM agent_run_integration_bindings
+                   WHERE user_id=? AND run_id=? LIMIT 1""",
+                (user_id, run_id),
+            ).fetchone()
+            if bound is not None:
                 raise PermissionError(
                     "Integration runs require the dedicated asynchronous orchestrator"
                 )
