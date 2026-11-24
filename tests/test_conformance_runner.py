@@ -120,3 +120,34 @@ def test_manifest_builder_rejects_invalid_binding(tmp_path):
     binding["tool_contract_fingerprint"] = "not-a-digest"
     with pytest.raises(ValueError, match="fingerprint"):
         run_suite(binding=binding, commands=commands_for(), output_dir=tmp_path / "out")
+
+
+
+def test_process_that_cannot_start_is_not_run_and_not_certifiable(tmp_path):
+    commands = commands_for()
+    commands[sorted(REQUIRED_CHECKS)[0]] = ["/definitely/not/a/real/executable"]
+    output = tmp_path / "out"
+    result = run_suite(binding=BINDING, commands=commands, output_dir=output)
+    assert result["status"] == "incomplete"
+    assert result["results"][sorted(REQUIRED_CHECKS)[0]]["status"] == "not_run"
+    assert result["manifest"] is None
+
+
+def test_output_flood_is_bounded_by_child_file_size_limit(tmp_path):
+    commands = commands_for()
+    commands[sorted(REQUIRED_CHECKS)[0]] = [
+        sys.executable, "-c", "import sys; sys.stdout.write('x' * 2_000_000)"
+    ]
+    output = tmp_path / "out"
+    result = run_suite(binding=BINDING, commands=commands, output_dir=output)
+    assert result["status"] == "incomplete"
+    assert result["results"][sorted(REQUIRED_CHECKS)[0]]["status"] == "failed"
+    assert (output / f"{sorted(REQUIRED_CHECKS)[0]}.log").stat().st_size <= 256 * 1024
+
+
+def test_invalid_capability_claims_rejected_before_execution(tmp_path):
+    binding = dict(BINDING)
+    binding["capabilities"] = dict(BINDING["capabilities"])
+    binding["capabilities"]["supports_outcome_lookup"] = "yes"
+    with pytest.raises(ValueError, match="must be boolean"):
+        run_suite(binding=binding, commands=commands_for(), output_dir=tmp_path / "out")
