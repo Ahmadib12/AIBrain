@@ -49,11 +49,17 @@ remains disabled.
   registry. Integration catalog tools are not inserted into that registry.
 - An integration tool ID therefore cannot be smuggled into an ordinary agent
   run or executed through the synchronous M9 gateway.
-- Full integration-aware agent plans require a dedicated asynchronous
-  orchestrator that persists and revalidates connection ID, integration ID,
-  manifest version, contract fingerprint, and exact scopes per step. That
-  orchestrator is not enabled in this commit; the current boundary is fail
-  closed rather than silently bypassing the binding requirement.
+- Integration-aware plans now persist immutable per-step bindings for
+  connection ID, integration ID, manifest version, contract fingerprint, and
+  exact required scopes. Database constraints bind each row to its owner, run,
+  step, active connection, and current grants.
+- Owner authorization revalidates the binding against the current trusted
+  integration registry and live owner grants. Missing, changed, expired, or
+  revoked authority fails closed.
+- The synchronous M9 executor explicitly refuses integration-bound runs.
+  The dedicated asynchronous orchestrator and its final dispatch-time binding
+  revalidation are not enabled yet; no integration provider operation can be
+  executed through this path.
 
 ## 5. Execution-time authority
 
@@ -61,6 +67,9 @@ remains disabled.
 - It permits READ_ONLY contracts only, validates arguments and output schemas,
   applies timeout and serialized output limits, rejects credential-like output
   keys, and checks active exact-scope grants before and after adapter execution.
+- Run-level binding validation is performed during owner authorization.
+  Revalidation immediately before each asynchronous dispatch remains a
+  required control for the not-yet-enabled integration-aware orchestrator.
 - No state-changing or consequential integration operation is accepted here.
   Those operations remain in the existing M9/M5 authorization, passkey,
   certification, idempotency, and reconciliation workflows.
