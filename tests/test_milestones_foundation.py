@@ -410,6 +410,69 @@ def test_clear_all_memory_is_available_without_active_consent(client: TestClient
     assert cleared.status_code == 200
     assert cleared.json()["deleted_count"] == 2
 
+
+def test_memory_detail_and_owner_edit_can_update_key_and_type(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "memory-edit-fields@example.com")
+    grant_memory_consent(client, token)
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "context",
+            "key": "old-key",
+            "value": {"topic": "networking"},
+            "source": "explicit",
+            "confidence": 0.8,
+        },
+    )
+    assert created.status_code == 200
+    memory_id = created.json()["id"]
+
+    fetched = client.get(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["key"] == "old-key"
+
+    updated = client.patch(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+        json={
+            "key": "networking-topic",
+            "memory_type": "project",
+            "value": {"topic": "networking and security"},
+            "confidence": 1.0,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["key"] == "networking-topic"
+    assert updated.json()["memory_type"] == "project"
+
+    foreign_token = register_and_login(client, "memory-edit-foreign@example.com")
+    foreign_read = client.get(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(foreign_token),
+    )
+    assert foreign_read.status_code == 404
+
+
+def test_memory_retrieval_rejects_credential_bearing_queries(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "memory-query-validation@example.com")
+    grant_memory_consent(client, token)
+    response = client.post(
+        "/api/v1/personal/memory/search",
+        headers=auth_header(token),
+        json={"query": "password=do-not-save-this"},
+    )
+    assert response.status_code == 400
+    assert "do-not-save-this" not in response.text
+
+
 def test_memory_isolated_by_user(client: TestClient) -> None:
     token_a = register_and_login(client, "memory-a@example.com")
     token_b = register_and_login(client, "memory-b@example.com")
