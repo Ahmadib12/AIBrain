@@ -1,6 +1,6 @@
 # M8 — Agent Lifecycle and Controlled Orchestration
 
-**Status:** M8.1 and M8.2 are implemented and verified in Codespaces. M8.2 verification: 805 tests passed, compilation passed, and `pip check` reported no broken requirements (2026-11-24). M8.3–M8.6 control-plane implementation is committed to `dev/tool-authorization-lifecycle`; the new focused tests and full suite still require Codespaces verification.
+**Status:** M8.1–M8.6 implemented and verified in Codespaces on 2026-11-24: 816 tests passed, compilation passed, and `pip check` reported no broken requirements. One non-blocking Starlette/httpx deprecation warning remains.
 
 ## Objective
 
@@ -66,9 +66,9 @@ Introduce owner-controlled agent identities, lifecycle management, capability bo
 - **M8.5:** bounded informational messages between active agents belonging to the same owner, with optional task-recipient binding.
 - **M8.6:** immutable task/control-event ledgers, explicit expired-task reconciliation, database ownership/immutability triggers, and account-erasure coverage.
 
-The combined implementation is not verified until the focused tests, complete suite, compilation, dependency check, and migration/account-erasure tests pass in Codespaces.
+The combined implementation was verified in Codespaces on 2026-11-24: the agent control-plane tests passed (11), identity tests passed (10), lifecycle tests passed (10), foundation tests passed (55), the full suite passed (816), compilation passed, and dependency checks were clean.
 
-## API shape (implemented; verification pending)
+## API shape (implemented and verified)
 
 All endpoints are authenticated and owner-scoped:
 
@@ -92,4 +92,4 @@ Task lifecycle transitions and message creation are owner-authored records; they
 
 ## Verification gate
 
-M8 is not complete until focused agent tests, the full test suite, compilation, dependency checks, and migration/account-erasure tests pass in Codespaces. Keep all work on `dev/tool-authorization-lifecycle`; do not merge to `main` without explicit approval.
+M8 closeout verification is complete. Keep subsequent milestone work on `dev/tool-authorization-lifecycle`; do not merge to `main` without explicit approval.
