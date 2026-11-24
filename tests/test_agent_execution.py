@@ -591,8 +591,43 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
     # Recovery classifies the unknown outcome; it never calls the adapter.
     assert timeout_adapter.calls == 1
 
-    # A revoked owner connection invalidates the previously authorized binding.
+    # Revocation committed before dispatch must prevent adapter invocation.
+    revoked_before_dispatch = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/runs",
+        headers=auth(token),
+        json={"actions": [{
+            "tool_id": "catalog.search",
+            "arguments": {"query": "revoked-before-dispatch"},
+            "connection_id": connection["id"],
+        }]},
+    )
+    assert revoked_before_dispatch.status_code == 201
+    revoked_run_id = revoked_before_dispatch.json()["id"]
+    assert client.post(
+        f"/api/v1/agent-runs/{revoked_run_id}/authorize", headers=auth(token)
+    ).status_code == 200
+
+    class CountingCatalogAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, *, user_id, connection_id, tool_id, arguments):
+            self.calls += 1
+            return {"items": ["must-not-run"]}
+
+    counting_adapter = CountingCatalogAdapter()
+    state.integration_adapters._adapters["catalog"] = counting_adapter
     state.integration_connections.revoke(user_id, connection["id"])
+    with pytest.raises(PermissionError, match="no longer active"):
+        import asyncio
+        asyncio.run(state.integration_orchestrator.execute_run(user_id, revoked_run_id))
+    assert counting_adapter.calls == 0
+    assert state.database.connect().execute(
+        "SELECT 1 FROM agent_run_integration_dispatches WHERE run_id=?",
+        (revoked_run_id,),
+    ).fetchone() is None
+
+    # A revoked owner connection invalidates the previously authorized binding.
     raw_run = state.agent_execution._raw_run(user_id, run["id"])
     with pytest.raises(PermissionError, match="no longer active"):
         state.agent_execution._validate_integration_bindings(
