@@ -221,8 +221,8 @@ def test_expired_scope_expires_connection_when_no_scopes_remain(integration_stat
     expired = connections.get(owner_id, connection["id"])
     assert expired["status"] == "expired"
     assert expired["grants"][0]["status"] == "expired"
-    with pytest.raises(LookupError):
-        vault.load(owner_id, connection["id"], "calendar")
+    with pytest.raises(PermissionError):
+        vault.load(owner_id, connection["id"], "calendar", ("calendar.events.read",))
 
 
 def test_account_erasure_removes_encrypted_integration_credentials(integration_state):
