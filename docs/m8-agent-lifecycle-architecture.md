@@ -1,6 +1,6 @@
 # M8 — Agent Lifecycle and Controlled Orchestration
 
-**Status:** Architecture contract approved. M8.1 owner-scoped identity registration is implemented on the development branch; Codespaces verification is pending. M8.2–M8.6 remain unimplemented.
+**Status:** Architecture contract approved. M8.1 owner-scoped identity registration is implemented, verified in Codespaces (795 tests passed; compilation and dependency checks passed), and pushed to `dev/tool-authorization-lifecycle` as `b9e9243`. M8.2–M8.6 are the remaining implementation milestones.
 
 ## Objective
 
@@ -58,6 +58,18 @@ Introduce owner-controlled agent identities, lifecycle management, capability bo
 - Explicit task cancellation and stale/expired task reconciliation; unknown outcomes remain unknown.
 - Account erasure removes agent-owned records transactionally after tombstoning the owner.
 - Tests cover owner isolation, invalid transitions, grant/task ceiling enforcement, expiry, immutability, replay, and account erasure.
+
+## Remaining delivery sequence
+
+The remaining M8 work is split into five independently verifiable milestones and must be delivered in dependency order:
+
+1. **M8.2 — Lifecycle management:** implement the explicit agent state machine and immutable lifecycle events.
+2. **M8.3 — Capability and permission boundaries:** implement owner-controlled, expiring/revocable grants and enforce the versioned capability allow-list. Grants remain non-executable policy records.
+3. **M8.4 — Task assignment and lifecycle:** implement owner-created tasks, grant-ceiling validation, explicit task states, cancellation, and expiry. Task records remain non-executable.
+4. **M8.5 — Controlled coordination:** implement bounded same-owner agent messages/references with strict sender, recipient, task, payload, and ownership validation. Coordination cannot convey authority.
+5. **M8.6 — Audit, recovery, and failure handling:** complete append-only ledgers, stale/unknown-outcome reconciliation, transactional account-erasure coverage, and cross-milestone security verification.
+
+Each milestone must add focused tests and migration/account-erasure coverage where applicable. After each milestone, run compilation, focused tests, the full test suite, and dependency checks in Codespaces. Update this architecture and `docs/IMPLEMENTATION_STATUS.md` only after the corresponding implementation and verification evidence exists. M8.6 closes M8 only after the complete verification gate below passes.
 
 ## API shape (target)
 
