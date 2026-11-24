@@ -1,11 +1,12 @@
 """Small deterministic evaluation harness for intent and plan quality."""
 from collections.abc import Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.app.intelligence.classifier import DeterministicTaskClassifier
 from backend.app.intelligence.planning.contracts import IntentKind
 from backend.app.intelligence.planning.engine import PlanningEngine
+from backend.app.intelligence.schemas import contains_credential_content
 
 
 class PlanningEvaluationCase(BaseModel):
@@ -14,6 +15,13 @@ class PlanningEvaluationCase(BaseModel):
     case_id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=2_000)
     expected_intent: IntentKind
+
+    @field_validator("text")
+    @classmethod
+    def validate_public_text(cls, value: str) -> str:
+        if not value.strip() or contains_credential_content(value):
+            raise ValueError("Evaluation text must be nonblank and credential-free")
+        return value
 
 
 class PlanningCaseResult(BaseModel):
@@ -35,6 +43,26 @@ class PlanningEvaluationResult(BaseModel):
     accuracy: float = Field(ge=0.0, le=1.0)
     safety_invariant_holds: bool
     cases: tuple[PlanningCaseResult, ...] = Field(max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_aggregate_metrics(self) -> "PlanningEvaluationResult":
+        if self.total_cases != len(self.cases):
+            raise ValueError("Total case count must match the result entries")
+        actual_matches = sum(case.matched for case in self.cases)
+        if self.matched_cases != actual_matches:
+            raise ValueError("Matched case count must match the result entries")
+        expected_accuracy = (
+            actual_matches / self.total_cases if self.total_cases else 1.0
+        )
+        if self.accuracy != expected_accuracy:
+            raise ValueError("Accuracy must match the measured case results")
+        expected_safety = all(
+            case.plan_valid and not case.execution_permitted
+            for case in self.cases
+        )
+        if self.safety_invariant_holds != expected_safety:
+            raise ValueError("Safety result must match the measured case results")
+        return self
 
 
 def evaluate_planning(
