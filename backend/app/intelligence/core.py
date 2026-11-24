@@ -136,6 +136,8 @@ class OrchestrationCore(CentralIntelligenceCore):
     async def process(
         self,
         request: IntelligenceRequest,
+        *,
+        memory_context: str | None = None,
     ) -> IntelligenceResponse:
         trace: DecisionTraceBuilder | None
         trace_recording_failed = False
@@ -342,6 +344,7 @@ class OrchestrationCore(CentralIntelligenceCore):
         context = RequestContext(
             validated.context_id,
             execution_state=execution_state,
+            memory_context=memory_context,
         )
         for message in validated.messages:
             context.add_turn(message.role, message.content)
