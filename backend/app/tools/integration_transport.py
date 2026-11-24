@@ -109,6 +109,12 @@ class PinnedProviderHTTPTransport:
         self.max_response_headers = max_response_headers
         self.max_response_header_bytes = max_response_header_bytes
         self.ssl_context = ssl_context or ssl.create_default_context()
+        if (
+            self.ssl_context.verify_mode != ssl.CERT_REQUIRED
+            or not self.ssl_context.check_hostname
+            or self.ssl_context.minimum_version < ssl.TLSVersion.TLSv1_2
+        ):
+            raise ValueError("Provider TLS requires certificate and hostname verification with TLS 1.2+")
         self.resolver = resolver
 
     @staticmethod
