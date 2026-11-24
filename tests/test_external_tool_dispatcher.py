@@ -1274,3 +1274,94 @@ def test_lookup_authorization_ledger_is_immutable_and_erased_with_account(tmp_pa
         ).fetchone()[0] == 0
     finally:
         database.close()
+
+
+
+def test_dispatch_audit_events_are_retained_until_account_erasure(tmp_path):
+    import sqlite3
+
+    from backend.app.persistence.identity import IdentityRepository
+
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        _begin_dispatch(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        event = database.connect().execute(
+            "SELECT id FROM tool_dispatch_audit_events "
+            "WHERE user_id = ? AND request_id = ?",
+            (user_id, request_id),
+        ).fetchone()
+        assert event is not None
+
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_dispatch_audit_events WHERE id = ?",
+                    (event["id"],),
+                )
+
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_requests WHERE id = ? AND user_id = ?",
+                    (request_id, user_id),
+                )
+
+        identity = IdentityRepository(database, session_ttl_seconds=86400)
+        identity.delete_user(user_id)
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_audit_events WHERE id = ?",
+            (event["id"],),
+        ).fetchone()[0] == 0
+    finally:
+        database.close()
+
+
+def test_dispatch_recovery_events_are_retained_until_account_erasure(tmp_path):
+    import sqlite3
+
+    from backend.app.persistence.identity import IdentityRepository
+
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        stale_before = (
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat()
+        assert repository.recover_stale_execution_attempts(
+            stale_before=stale_before
+        ) == 1
+
+        event = database.connect().execute(
+            "SELECT id FROM tool_dispatch_recovery_events "
+            "WHERE user_id = ? AND request_id = ?",
+            (user_id, request_id),
+        ).fetchone()
+        assert event is not None
+
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_dispatch_recovery_events WHERE id = ?",
+                    (event["id"],),
+                )
+
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_requests WHERE id = ? AND user_id = ?",
+                    (request_id, user_id),
+                )
+
+        identity = IdentityRepository(database, session_ttl_seconds=86400)
+        identity.delete_user(user_id)
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_recovery_events WHERE id = ?",
+            (event["id"],),
+        ).fetchone()[0] == 0
+    finally:
+        database.close()
