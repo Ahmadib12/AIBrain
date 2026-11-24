@@ -1625,7 +1625,7 @@ def test_concurrent_file_database_writes_and_reads(tmp_path) -> None:
 def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     from backend.app.persistence.database import Database
 
-    expected_versions = list(range(1, 24))
+    expected_versions = list(range(1, 25))
     path = tmp_path / "migrations.db"
     first = Database(f"sqlite:///{path}")
     first.migrate()
