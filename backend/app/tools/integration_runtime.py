@@ -60,7 +60,13 @@ def _reject_sensitive_output(value: Any, depth: int = 0) -> None:
         for key, item in value.items():
             if not isinstance(key, str):
                 raise ValueError("Adapter output keys must be strings")
-            if key.lower() in _SENSITIVE_KEYS:
+            normalized_key = key.lower().replace("-", "_").replace(" ", "_")
+            compact_key = normalized_key.replace("_", "")
+            if normalized_key in _SENSITIVE_KEYS or compact_key in {
+                "accesstoken", "refreshtoken", "authorization",
+                "clientsecret", "privatekey", "apikey", "credential",
+                "password", "secret", "cookie", "setcookie",
+            }:
                 raise ValueError("Adapter output contains a credential-like field")
             _reject_sensitive_output(item, depth + 1)
     elif isinstance(value, list):
@@ -109,6 +115,12 @@ class ReadOnlyIntegrationRuntime:
             user_id, connection_id, integration_id, item.required_scopes
         ):
             raise PermissionError("An active owner connection and exact scope grants are required")
+        # Recheck immediately before dispatch. This narrows the race window;
+        # a request already in flight is not retroactively cancelled by revoke.
+        if not self.connections.has_active_grants(
+            user_id, connection_id, integration_id, item.required_scopes
+        ):
+            raise PermissionError("Integration authority changed before dispatch")
         adapter = self.adapters.get(integration_id)
         if adapter is None:
             raise PermissionError("No trusted adapter is registered for this integration")
@@ -124,6 +136,11 @@ class ReadOnlyIntegrationRuntime:
             ),
             timeout=self.timeout_seconds,
         )
+        # Discard results if owner authority was revoked or expired in flight.
+        if not self.connections.has_active_grants(
+            user_id, connection_id, integration_id, item.required_scopes
+        ):
+            raise PermissionError("Integration authority changed during execution")
         if not isinstance(result, dict):
             raise ValueError("Integration adapter must return an object")
         _reject_sensitive_output(result)
