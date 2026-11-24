@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.app.tools.conformance import REQUIRED_CHECKS, canonical_json
+from backend.app.tools.conformance import (\n    REQUIRED_CHECKS, canonical_json, verify_evidence_manifest,\n)
 
 MAX_COMMANDS = 64
 MAX_OUTPUT_BYTES = 256 * 1024
@@ -287,6 +287,9 @@ def run_suite(
             for name, content in sorted(artifacts.items())
         },
     }
+    # Reuse the server-side verifier locally before exposing a certifiable
+    # manifest. This catches schema drift between runner and AIBrain.
+    verify_evidence_manifest(manifest, artifacts, now=finished)
     manifest_bytes = canonical_json(manifest)
     (output_dir / "manifest.json").write_bytes(manifest_bytes)
     response["manifest"] = "manifest.json"
