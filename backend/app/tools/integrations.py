@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Governed integration catalog for trusted, server-configured connectors.
 
 The catalog is metadata and contract governance only. It does not load adapters,
