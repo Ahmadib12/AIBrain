@@ -142,6 +142,7 @@ class PinnedProviderHTTPTransport:
             raise ProviderTransportRejected("Provider request headers are invalid")
         checked: dict[str, str] = {}
         total_header_bytes = 0
+        seen_header_names: set[str] = set()
         for name, value in headers.items():
             if (
                 not isinstance(name, str) or not _TOKEN.fullmatch(name)
@@ -151,6 +152,10 @@ class PinnedProviderHTTPTransport:
                 or any((ord(char) < 32 and char != "\t") or ord(char) > 126 for char in value)
             ):
                 raise ProviderTransportRejected("Provider request header is prohibited")
+            normalized_name = name.lower()
+            if normalized_name in seen_header_names:
+                raise ProviderTransportRejected("Duplicate provider request header names are prohibited")
+            seen_header_names.add(normalized_name)
             total_header_bytes += len(name) + len(value) + 4
             if total_header_bytes > 16_384:
                 raise ProviderTransportRejected("Provider request headers exceed the size limit")
