@@ -106,6 +106,41 @@ def get_current_user(
         ) from None
 
 
+def get_optional_current_user(
+    authorization: str | None = Header(default=None),
+) -> dict | None:
+    """Resolve an optional session without accepting invalid bearer credentials."""
+    if authorization is None:
+        return None
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "A valid bearer token is required",
+            },
+        )
+    token = authorization[len("Bearer "):].strip()
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "A valid bearer token is required",
+            },
+        )
+    try:
+        return get_app_state().identity.resolve_token(token)
+    except LookupError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "UNAUTHORIZED",
+                "message": "The session is invalid or expired",
+            },
+        ) from None
+
+
 @router.post("/register", response_model=dict)
 async def register(
     request: RegisterRequest,
