@@ -1307,6 +1307,121 @@ class ToolRequestRepository:
                 raise PermissionError("Tool execution attempt is no longer active")
         return self.get(user_id, request_id)
 
+    def begin_external_outcome_lookup(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        certification_id: str,
+        provider_id: str,
+        adapter_id: str,
+        adapter_version: str,
+        provider_scope: str,
+        tool_id: str,
+        tool_contract_fingerprint: str,
+        capabilities: dict,
+        action_digest: str,
+    ) -> dict:
+        """Atomically authorize a read-only provider lookup against live trust."""
+        if not isinstance(action_digest, str) or len(action_digest) != 64:
+            raise ValueError("Lookup action digest is invalid")
+        lookup_id = str(uuid.uuid4())
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            execution = connection.execute(
+                """
+                SELECT r.status AS request_status, r.consumed_at,
+                       a.status AS attempt_status, b.action_digest,
+                       b.idempotency_key
+                FROM tool_requests AS r
+                JOIN tool_execution_attempts AS a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                JOIN tool_execution_bindings AS b
+                  ON b.request_id = r.id AND b.user_id = r.user_id
+                WHERE r.id = ? AND r.user_id = ?
+                """,
+                (request_id, user_id),
+            ).fetchone()
+            if (
+                execution is None
+                or execution["request_status"] != "outcome_unknown"
+                or execution["attempt_status"] != "outcome_unknown"
+                or execution["consumed_at"] is None
+                or execution["idempotency_key"] != request_id
+                or execution["action_digest"] != action_digest
+            ):
+                raise PermissionError(
+                    "Execution is no longer eligible for provider outcome lookup"
+                )
+
+            certification = self.get_active_external_adapter_certification(
+                provider_id=provider_id,
+                adapter_id=adapter_id,
+                adapter_version=adapter_version,
+                provider_scope=provider_scope,
+                tool_id=tool_id,
+                tool_contract_fingerprint=tool_contract_fingerprint,
+                capabilities=capabilities,
+            )
+            if certification is None or certification["id"] != certification_id:
+                raise PermissionError(
+                    "Outcome lookup requires an active, matching trusted certification"
+                )
+            references = certification.get("evidence_references", [])
+            if (
+                not isinstance(references, list)
+                or not references
+                or not isinstance(references[0], str)
+                or not references[0].startswith("evidence:")
+            ):
+                raise PermissionError("Certification evidence reference is invalid")
+            package_id = references[0].split(":", 1)[1]
+            attestation = self.get_external_adapter_evidence_attestation(package_id)
+            if attestation.get("key_revoked"):
+                raise PermissionError("Trusted runner key has been revoked")
+            key_id = attestation.get("key_id")
+            if not isinstance(key_id, str) or not key_id:
+                raise PermissionError("Trusted runner attestation key is invalid")
+
+            started = connection.execute(
+                """
+                SELECT 1 FROM tool_dispatch_audit_events
+                WHERE user_id = ? AND request_id = ?
+                  AND event_type = 'dispatch_started'
+                  AND action_digest = ?
+                """,
+                (user_id, request_id, action_digest),
+            ).fetchone()
+            if started is None:
+                raise PermissionError("No matching external dispatch exists")
+            details = {
+                "certification_id": certification_id,
+                "evidence_package_id": package_id,
+                "runner_key_id": key_id,
+                "provider_id": provider_id,
+                "adapter_id": adapter_id,
+                "adapter_version": adapter_version,
+                "provider_scope": provider_scope,
+                "tool_id": tool_id,
+                "tool_contract_fingerprint": tool_contract_fingerprint,
+            }
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_lookup_authorizations
+                    (id, user_id, request_id, certification_id,
+                     action_digest, details_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lookup_id, user_id, request_id, certification_id,
+                    action_digest,
+                    json.dumps(details, sort_keys=True, separators=(",", ":")),
+                    now,
+                ),
+            )
+        return {"id": lookup_id, **details, "created_at": now}
+
     def record_external_outcome_lookup(
         self,
         user_id: str,
@@ -1315,6 +1430,7 @@ class ToolRequestRepository:
         action_digest: str,
         outcome: str,
         evidence_reference: str | None,
+        lookup_authorization_id: str | None = None,
     ) -> None:
         if outcome not in ("succeeded", "failed", "unknown"):
             raise ValueError("Lookup outcome is invalid")
@@ -1349,6 +1465,7 @@ class ToolRequestRepository:
                     json.dumps({
                         "observed_outcome": outcome,
                         "evidence_reference": evidence_reference,
+                        "lookup_authorization_id": lookup_authorization_id,
                     }, sort_keys=True, separators=(",", ":")),
                     now,
                 ),
