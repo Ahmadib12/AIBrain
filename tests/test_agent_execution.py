@@ -265,3 +265,30 @@ def test_account_erasure_cascades_agent_run_records(client: TestClient):
             f"SELECT 1 FROM {table} WHERE user_id=?", (user_id,)
         ).fetchone()
         assert remaining is None
+
+
+def test_expired_unstarted_runs_are_reconciled(client: TestClient, monkeypatch):
+    import backend.app.persistence.agent_execution as execution_module
+
+    token = owner_token(client, "m9-expiry-owner@example.com")
+    agent = create_agent(client, token)
+    task = create_task(client, token, agent["id"])
+    run = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/runs",
+        headers=auth(token),
+        json={"actions": [{"tool_id": "echo", "arguments": {"text": "expire"}}]},
+    )
+    assert run.status_code == 201
+    monkeypatch.setattr(
+        execution_module, "_now",
+        lambda: datetime.now(timezone.utc) + timedelta(minutes=16),
+    )
+    reconciled = client.post(
+        "/api/v1/agent-runs/reconcile-expired", headers=auth(token)
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["expired"] == 1
+    expired = client.get(
+        f"/api/v1/agent-runs/{run.json()['id']}", headers=auth(token)
+    )
+    assert expired.json()["status"] == "expired"
