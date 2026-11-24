@@ -4,7 +4,7 @@
 
 ## Objective
 
-Connect the M5 planning foundation and M8 agent control plane to a narrowly governed execution lifecycle. An agent run is a bounded, persisted proposal that is explicitly authorized by the account owner and revalidated immediately before execution.
+Build a narrowly governed execution lifecycle on the M8 agent control plane while preserving M5 planning as advisory. An agent run is a bounded, persisted proposal that is explicitly authorized by the account owner and revalidated immediately before execution.
 
 M9 establishes the execution control plane and a first read-only runtime path. It does not claim unrestricted autonomy or production-ready external integrations.
 
@@ -17,7 +17,7 @@ M9 establishes the execution control plane and a first read-only runtime path. I
 5. Capability requirements on an action must be inside the task's capability ceiling and backed by current, unexpired, unrevoked owner-issued grants.
 6. This M9 runtime executes only registered `READ_ONLY` tool contracts. `STATE_CHANGE` and `CONSEQUENTIAL` actions are rejected; agent-run authorization cannot replace tool confirmation or passkey approval.
 7. Tool execution is delegated to the existing `ToolExecutionGateway`; it does not create an alternate tool execution boundary.
-8. A run executes steps sequentially. A failed step stops the run, remaining steps are skipped, and automatic retry is disabled.
+8. A run executes steps sequentially. Each step is revalidated and durably marked started at an authorization linearization point before the gateway call. A later revocation cannot retroactively cancel a step already authorized at that point. A failed step stops the run, remaining steps are skipped, and automatic retry is disabled.
 9. Run and step definitions are immutable; run events are append-only outside account erasure. All records are owner-scoped.
 10. Agent run completion is not equivalent to owner acceptance or task completion. M8 task lifecycle remains separately controlled.
 
@@ -48,7 +48,8 @@ M9 establishes the execution control plane and a first read-only runtime path. I
 - Run lifecycle: `proposed → authorized → running → completed/failed`; unstarted runs may be cancelled.
 - Step outcomes and lifecycle events are persisted.
 - A failed step halts the run; no automatic retry is attempted.
-- Run state transitions require matching immutable events at the database boundary.
+- Run and step state transitions require matching immutable events at the database boundary.
+- Proposed/authorized runs can be expired through owner-scoped reconciliation; running runs are not replayed automatically.
 - Account erasure cascades run, step, and event records after owner tombstoning.
 
 ## API
@@ -59,6 +60,7 @@ M9 establishes the execution control plane and a first read-only runtime path. I
 - `POST /api/v1/agent-runs/{run_id}/authorize`
 - `POST /api/v1/agent-runs/{run_id}/execute`
 - `POST /api/v1/agent-runs/{run_id}/cancel`
+- `POST /api/v1/agent-runs/reconcile-expired` (owner-scoped expiry reconciliation for unstarted runs)
 - `POST /api/v1/agent-runs/reconcile-expired` (owner-scoped expiry reconciliation for unstarted runs)
 
 ## Current runtime limits
