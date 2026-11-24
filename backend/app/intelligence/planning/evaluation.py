@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from backend.app.intelligence.classifier import DeterministicTaskClassifier
 from backend.app.intelligence.planning.contracts import IntentKind
 from backend.app.intelligence.planning.engine import PlanningEngine
-from backend.app.intelligence.schemas import contains_credential_content
+from backend.app.intelligence.schemas import ContextTurn, contains_credential_content
 
 
 class PlanningEvaluationCase(BaseModel):
@@ -15,6 +15,9 @@ class PlanningEvaluationCase(BaseModel):
     case_id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=2_000)
     expected_intent: IntentKind
+    conversation_history: tuple[ContextTurn, ...] = Field(default_factory=tuple, max_length=20)
+    expected_context_available: bool = False
+    expected_requires_clarification: bool = False
 
     @field_validator("text")
     @classmethod
@@ -33,6 +36,9 @@ class PlanningCaseResult(BaseModel):
     matched: bool
     plan_valid: bool
     execution_permitted: bool
+    context_available_matched: bool
+    clarification_matched: bool
+    history_not_exposed: bool
 
 
 class PlanningEvaluationResult(BaseModel):
@@ -42,6 +48,9 @@ class PlanningEvaluationResult(BaseModel):
     matched_cases: int = Field(ge=0)
     accuracy: float = Field(ge=0.0, le=1.0)
     safety_invariant_holds: bool
+    context_accuracy: float = Field(ge=0.0, le=1.0)
+    clarification_accuracy: float = Field(ge=0.0, le=1.0)
+    privacy_invariant_holds: bool
     cases: tuple[PlanningCaseResult, ...] = Field(max_length=1_000)
 
     @model_validator(mode="after")
@@ -62,6 +71,21 @@ class PlanningEvaluationResult(BaseModel):
         )
         if self.safety_invariant_holds != expected_safety:
             raise ValueError("Safety result must match the measured case results")
+        expected_context_accuracy = (
+            sum(case.context_available_matched for case in self.cases) / self.total_cases
+            if self.total_cases else 1.0
+        )
+        if self.context_accuracy != expected_context_accuracy:
+            raise ValueError("Context accuracy must match the measured case results")
+        expected_clarification_accuracy = (
+            sum(case.clarification_matched for case in self.cases) / self.total_cases
+            if self.total_cases else 1.0
+        )
+        if self.clarification_accuracy != expected_clarification_accuracy:
+            raise ValueError("Clarification accuracy must match the measured case results")
+        expected_privacy = all(case.history_not_exposed for case in self.cases)
+        if self.privacy_invariant_holds != expected_privacy:
+            raise ValueError("Privacy result must match the measured case results")
         return self
 
 
@@ -84,7 +108,17 @@ def evaluate_planning(
     results: list[PlanningCaseResult] = []
     for case in case_list:
         classification = selected_classifier.classify(case.text)
-        planned = selected_planner.plan(case.text, classification)
+        planned = selected_planner.plan(
+            case.text,
+            classification,
+            conversation_history=case.conversation_history,
+        )
+        serialized_plan = planned.model_dump(mode="json")
+        serialized_text = str(serialized_plan)
+        history_not_exposed = all(
+            turn.content not in serialized_text
+            for turn in case.conversation_history
+        )
         results.append(PlanningCaseResult(
             case_id=case.case_id,
             expected_intent=case.expected_intent,
@@ -92,6 +126,14 @@ def evaluate_planning(
             matched=planned.intent.kind == case.expected_intent,
             plan_valid=planned.assessment.plan_valid,
             execution_permitted=planned.assessment.execution_permitted,
+            context_available_matched=(
+                planned.intent.context_available == case.expected_context_available
+            ),
+            clarification_matched=(
+                planned.assessment.requires_clarification
+                == case.expected_requires_clarification
+            ),
+            history_not_exposed=history_not_exposed,
         ))
 
     matched = sum(item.matched for item in results)
@@ -104,5 +146,14 @@ def evaluate_planning(
             item.plan_valid and not item.execution_permitted
             for item in results
         ),
+        context_accuracy=(
+            sum(item.context_available_matched for item in results) / total
+            if total else 1.0
+        ),
+        clarification_accuracy=(
+            sum(item.clarification_matched for item in results) / total
+            if total else 1.0
+        ),
+        privacy_invariant_holds=all(item.history_not_exposed for item in results),
         cases=tuple(results),
     )
