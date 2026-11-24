@@ -36,12 +36,14 @@ class RequestContext:
         *,
         max_turns: int = 20,
         execution_state: ExecutionState | None = None,
+        memory_context: str | None = None,
     ) -> None:
         if max_turns < 1 or max_turns > 20:
             raise ValueError("Request context size must be between 1 and 20 turns")
         self.max_turns = max_turns
         self.execution_state = execution_state
         self.routing_summary: ProviderRoutingSummary | None = None
+        self.memory_context = memory_context
         self._context = (
             ConversationContext(context_id=context_id)
             if context_id
