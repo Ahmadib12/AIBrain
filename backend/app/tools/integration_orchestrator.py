@@ -151,7 +151,7 @@ class IntegrationAgentRunOrchestrator:
                            WHERE step_id=? AND user_id=? AND status='prepared'""",
                         (now, now, step["id"], user_id),
                     )
-                    dispatch_started = True
+                dispatch_started = True
 
                 result = await self.runtime.execute(
                     user_id, binding["connection_id"], step["tool_id"],
