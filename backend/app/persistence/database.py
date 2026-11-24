@@ -2327,32 +2327,6 @@ class Database:
                 END;
                 """
             ),
-            (
-                31,
-                """
-                CREATE TABLE agent_run_integration_dispatches (
-                    step_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL,
-                    connection_id TEXT NOT NULL,
-                    integration_id TEXT NOT NULL,
-                    tool_id TEXT NOT NULL,
-                    contract_fingerprint TEXT NOT NULL
-                        CHECK (length(contract_fingerprint)=64),
-                    status TEXT NOT NULL CHECK (status IN (
-                        'prepared','dispatch_started','succeeded','failed',
-                        'outcome_unknown'
-                    )),
-                    dispatch_started_at TEXT,
-                    finished_at TEXT,
-                    outcome_json TEXT
-                        CHECK (outcome_json IS NULL OR json_valid(outcome_json)),
-                    error_code TEXT CHECK (
-                        error_code IS NULL OR (
-                            length(error_code) BETWEEN 1 AND 64
-                            AND error_code NOT GLOB '*[^A-Z0-9_]*'
-                        )
-                    ),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(step_id) REFERENCES agent_run_steps(id)
@@ -2591,6 +2565,32 @@ class Database:
                 END;
                 """
             ),
+            (
+                31,
+                """
+                CREATE TABLE agent_run_integration_dispatches (
+                    step_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    integration_id TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    contract_fingerprint TEXT NOT NULL
+                        CHECK (length(contract_fingerprint)=64),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'prepared','dispatch_started','succeeded','failed',
+                        'outcome_unknown'
+                    )),
+                    dispatch_started_at TEXT,
+                    finished_at TEXT,
+                    outcome_json TEXT
+                        CHECK (outcome_json IS NULL OR json_valid(outcome_json)),
+                    error_code TEXT CHECK (
+                        error_code IS NULL OR (
+                            length(error_code) BETWEEN 1 AND 64
+                            AND error_code NOT GLOB '*[^A-Z0-9_]*'
+                        )
+                    ),
         )
 
         with self._lock:
