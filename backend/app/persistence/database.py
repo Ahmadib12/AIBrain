@@ -378,6 +378,839 @@ class Database:
                     );
                 """,
             ),
+            (
+                9,
+                """
+                CREATE TABLE tool_execution_attempts (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL
+                        CHECK (
+                            status IN (
+                                'claimed',
+                                'succeeded',
+                                'failed',
+                                'outcome_unknown'
+                            )
+                        ),
+                    claimed_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    error_code TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE,
+                    CHECK (
+                        (status = 'claimed' AND finished_at IS NULL)
+                        OR
+                        (
+                            status IN (
+                                'succeeded',
+                                'failed',
+                                'outcome_unknown'
+                            )
+                            AND finished_at IS NOT NULL
+                        )
+                    )
+                );
+
+                CREATE INDEX idx_tool_execution_attempts_status_claimed
+                    ON tool_execution_attempts(status, claimed_at);
+
+                CREATE INDEX idx_tool_execution_attempts_user
+                    ON tool_execution_attempts(user_id);
+
+                CREATE TRIGGER prevent_tool_execution_attempt_for_inactive_user
+                BEFORE INSERT ON tool_execution_attempts
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool execution attempt requires an active request owner'
+                    );
+                END;
+                """,
+            ),
+            (
+                10,
+                """
+                CREATE TABLE tool_execution_bindings (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    action_digest TEXT NOT NULL
+                        CHECK (length(action_digest) = 64),
+                    payload_json TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_execution_bindings_user
+                    ON tool_execution_bindings(user_id);
+
+                CREATE TRIGGER prevent_tool_execution_binding_insert_unclaimed
+                BEFORE INSERT ON tool_execution_bindings
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND r.status = 'executing'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'claimed'
+                      AND a.idempotency_key = NEW.idempotency_key
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'dispatch binding requires an active claimed execution'
+                    );
+                END;
+
+                CREATE TRIGGER prevent_tool_execution_binding_update
+                BEFORE UPDATE ON tool_execution_bindings
+                BEGIN
+                    SELECT RAISE(ABORT, 'tool execution bindings are immutable');
+                END;
+
+                """,
+            ),
+            (
+                11,
+                """
+                CREATE TABLE tool_dispatch_audit_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (
+                        event_type IN (
+                            'dispatch_started',
+                            'dispatch_succeeded',
+                            'dispatch_failed',
+                            'dispatch_unknown',
+                            'outcome_lookup'
+                        )
+                    ),
+                    action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_dispatch_audit_user
+                    ON tool_dispatch_audit_events(user_id, created_at);
+
+                CREATE TRIGGER prevent_tool_dispatch_audit_update
+                BEFORE UPDATE ON tool_dispatch_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'tool dispatch audit events are immutable');
+                END;
+
+                CREATE TRIGGER validate_tool_dispatch_audit_event
+                BEFORE INSERT ON tool_dispatch_audit_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND (
+                        (
+                          NEW.event_type = 'dispatch_started'
+                          AND r.status = 'executing'
+                          AND r.consumed_at IS NOT NULL
+                          AND a.status = 'claimed'
+                          AND NOT EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS prior_start
+                            WHERE prior_start.request_id = r.id
+                              AND prior_start.user_id = r.user_id
+                              AND prior_start.event_type = 'dispatch_started'
+                          )
+                          AND EXISTS (
+                            SELECT 1 FROM tool_execution_bindings AS b
+                            WHERE b.request_id = r.id
+                              AND b.user_id = r.user_id
+                              AND b.action_digest = NEW.action_digest
+                              AND b.idempotency_key = r.id
+                          )
+                        )
+                        OR
+                        (
+                          NEW.event_type IN (
+                            'dispatch_succeeded',
+                            'dispatch_failed',
+                            'dispatch_unknown'
+                          )
+                          AND r.status = 'executing'
+                          AND r.consumed_at IS NOT NULL
+                          AND a.status = 'claimed'
+                          AND NOT EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS prior_outcome
+                            WHERE prior_outcome.request_id = r.id
+                              AND prior_outcome.user_id = r.user_id
+                              AND prior_outcome.event_type IN (
+                                'dispatch_succeeded', 'dispatch_failed', 'dispatch_unknown'
+                              )
+                          )
+                          AND EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS s
+                            WHERE s.request_id = r.id
+                              AND s.user_id = r.user_id
+                              AND s.event_type = 'dispatch_started'
+                              AND s.action_digest = NEW.action_digest
+                          )
+                        )
+                        OR
+                        (
+                          NEW.event_type = 'outcome_lookup'
+                          AND r.status = 'outcome_unknown'
+                          AND a.status = 'outcome_unknown'
+                          AND EXISTS (
+                            SELECT 1 FROM tool_dispatch_audit_events AS s
+                            WHERE s.request_id = r.id
+                              AND s.user_id = r.user_id
+                              AND s.event_type = 'dispatch_started'
+                              AND s.action_digest = NEW.action_digest
+                          )
+                        )
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'dispatch audit event violates execution lifecycle');
+                END;
+                """
+            ),
+            (
+                12,
+                """
+                CREATE TABLE external_adapter_certifications (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
+                    capabilities_json TEXT NOT NULL,
+                    test_suite_version TEXT NOT NULL,
+                    conformance_results_json TEXT NOT NULL,
+                    test_report_sha256 TEXT NOT NULL
+                        CHECK (length(test_report_sha256) = 64),
+                    evidence_references_json TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX idx_external_adapter_certification_lookup
+                    ON external_adapter_certifications(
+                        provider_id, adapter_id, adapter_version,
+                        provider_scope, tool_id, tool_contract_fingerprint, expires_at
+                    );
+
+                CREATE TABLE external_adapter_certification_revocations (
+                    id TEXT PRIMARY KEY,
+                    certification_id TEXT NOT NULL,
+                    revoked_by TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(certification_id)
+                        REFERENCES external_adapter_certifications(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_external_adapter_certification_revocations
+                    ON external_adapter_certification_revocations(certification_id);
+
+                CREATE TRIGGER prevent_external_adapter_certification_update
+                BEFORE UPDATE ON external_adapter_certifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certifications are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_certification_delete
+                BEFORE DELETE ON external_adapter_certifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certifications are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_revocation_update
+                BEFORE UPDATE ON external_adapter_certification_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certification revocations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_revocation_delete
+                BEFORE DELETE ON external_adapter_certification_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'adapter certification revocations are immutable');
+                END;
+                """
+            ),
+            (
+                13,
+                """
+                CREATE TABLE external_adapter_evidence_packages (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
+                    capabilities_json TEXT NOT NULL,
+                    test_suite_version TEXT NOT NULL,
+                    sandbox_environment TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    manifest_sha256 TEXT NOT NULL
+                        CHECK (length(manifest_sha256) = 64),
+                    artifact_hashes_json TEXT NOT NULL,
+                    conformance_results_json TEXT NOT NULL,
+                    executed_at TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    provenance TEXT NOT NULL DEFAULT 'unattested'
+                        CHECK (provenance IN ('unattested', 'runner_attested', 'provider_signed')),
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE external_adapter_evidence_artifacts (
+                    id TEXT PRIMARY KEY,
+                    package_id TEXT NOT NULL,
+                    artifact_name TEXT NOT NULL,
+                    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+                    content BLOB NOT NULL,
+                    FOREIGN KEY(package_id)
+                        REFERENCES external_adapter_evidence_packages(id)
+                        ON DELETE CASCADE,
+                    UNIQUE(package_id, artifact_name)
+                );
+
+                CREATE INDEX idx_external_adapter_evidence_binding
+                    ON external_adapter_evidence_packages(
+                        provider_id, adapter_id, adapter_version,
+                        provider_scope, tool_id, tool_contract_fingerprint,
+                        expires_at
+                    );
+
+                CREATE TRIGGER prevent_external_adapter_evidence_update
+                BEFORE UPDATE ON external_adapter_evidence_packages
+                BEGIN
+                    SELECT RAISE(ABORT, 'verified evidence packages are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_evidence_delete
+                BEFORE DELETE ON external_adapter_evidence_packages
+                BEGIN
+                    SELECT RAISE(ABORT, 'verified evidence packages are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_evidence_artifact_update
+                BEFORE UPDATE ON external_adapter_evidence_artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'evidence artifacts are immutable');
+                END;
+
+                CREATE TRIGGER prevent_external_adapter_evidence_artifact_delete
+                BEFORE DELETE ON external_adapter_evidence_artifacts
+                BEGIN
+                    SELECT RAISE(ABORT, 'evidence artifacts are immutable');
+                END;
+                """
+            ),
+            (
+                14,
+                """
+                CREATE TABLE trusted_runner_keys (
+                    key_id TEXT PRIMARY KEY,
+                    runner_id TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    provider_scope TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    tool_contract_fingerprint TEXT NOT NULL
+                        CHECK (length(tool_contract_fingerprint) = 64),
+                    algorithm TEXT NOT NULL CHECK (algorithm = 'Ed25519'),
+                    public_key BLOB NOT NULL CHECK (length(public_key) = 32),
+                    valid_from TEXT NOT NULL,
+                    valid_until TEXT NOT NULL,
+                    registered_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(public_key),
+                    CHECK (valid_until > valid_from)
+                );
+
+                CREATE INDEX idx_trusted_runner_keys_runner
+                    ON trusted_runner_keys(runner_id, valid_until);
+
+                CREATE TABLE trusted_runner_key_revocations (
+                    id TEXT PRIMARY KEY,
+                    key_id TEXT NOT NULL,
+                    revoked_by TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(key_id) REFERENCES trusted_runner_keys(key_id)
+                );
+
+                CREATE INDEX idx_trusted_runner_key_revocations
+                    ON trusted_runner_key_revocations(key_id);
+
+                CREATE TRIGGER prevent_trusted_runner_key_update
+                BEFORE UPDATE ON trusted_runner_keys
+                BEGIN
+                    SELECT RAISE(ABORT, 'trusted runner keys are immutable');
+                END;
+
+                CREATE TRIGGER prevent_runner_key_revocation_update
+                BEFORE UPDATE ON trusted_runner_key_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner key revocations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_runner_key_revocation_delete
+                BEFORE DELETE ON trusted_runner_key_revocations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner key revocations are immutable');
+                END;
+
+                CREATE TABLE external_adapter_evidence_attestations (
+                    id TEXT PRIMARY KEY,
+                    package_id TEXT NOT NULL UNIQUE,
+                    key_id TEXT NOT NULL,
+                    runner_id TEXT NOT NULL,
+                    nonce TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+                    signature TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    FOREIGN KEY(package_id)
+                        REFERENCES external_adapter_evidence_packages(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(key_id) REFERENCES trusted_runner_keys(key_id)
+                );
+
+                CREATE INDEX idx_evidence_attestation_key
+                    ON external_adapter_evidence_attestations(key_id);
+
+                CREATE TRIGGER prevent_trusted_runner_key_delete
+                BEFORE DELETE ON trusted_runner_keys
+                BEGIN
+                    SELECT RAISE(ABORT, 'trusted runner keys cannot be deleted');
+                END;
+
+                CREATE TRIGGER prevent_evidence_attestation_update
+                BEFORE UPDATE ON external_adapter_evidence_attestations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner attestations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_evidence_attestation_delete
+                BEFORE DELETE ON external_adapter_evidence_attestations
+                BEGIN
+                    SELECT RAISE(ABORT, 'runner attestations are immutable');
+                END;
+                """
+            ),
+            (
+                15,
+                """
+                CREATE TABLE security_operator_audit_events (
+                    id TEXT PRIMARY KEY,
+                    actor_user_id TEXT NOT NULL,
+                    actor_email TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (outcome IN ('succeeded')),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+                );
+
+                CREATE INDEX idx_security_operator_audit_actor
+                    ON security_operator_audit_events(actor_user_id, created_at);
+
+                CREATE INDEX idx_security_operator_audit_target
+                    ON security_operator_audit_events(target_type, target_id, created_at);
+
+                CREATE TRIGGER prevent_security_operator_audit_update
+                BEFORE UPDATE ON security_operator_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'security operator audit events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_security_operator_audit_delete
+                BEFORE DELETE ON security_operator_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'security operator audit events are immutable');
+                END;
+                """
+            ),
+            (
+                16,
+                """
+                CREATE TABLE tool_dispatch_recovery_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL
+                        CHECK (event_type = 'dispatch_not_started'),
+                    action_digest TEXT NOT NULL
+                        CHECK (length(action_digest) = 64),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_dispatch_recovery_request
+                    ON tool_dispatch_recovery_events(request_id, created_at);
+
+                CREATE TRIGGER prevent_tool_dispatch_recovery_update
+                BEFORE UPDATE ON tool_dispatch_recovery_events
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch recovery events are immutable'
+                    );
+                END;
+
+                CREATE TRIGGER validate_tool_dispatch_recovery_event
+                BEFORE INSERT ON tool_dispatch_recovery_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN tool_execution_bindings AS b
+                      ON b.request_id = r.id AND b.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND r.status = 'executing'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'claimed'
+                      AND b.idempotency_key = r.id
+                      AND b.action_digest = NEW.action_digest
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM tool_dispatch_audit_events AS s
+                        WHERE s.request_id = r.id
+                          AND s.user_id = r.user_id
+                          AND s.event_type = 'dispatch_started'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM tool_dispatch_recovery_events AS prior
+                        WHERE prior.request_id = r.id
+                          AND prior.user_id = r.user_id
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'dispatch recovery event violates execution lifecycle'
+                    );
+                END;
+                """
+            ),
+            (
+                17,
+                """
+                CREATE TABLE tool_dispatch_lookup_authorizations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    certification_id TEXT NOT NULL,
+                    action_digest TEXT NOT NULL
+                        CHECK (length(action_digest) = 64),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(certification_id)
+                        REFERENCES external_adapter_certifications(id)
+                );
+
+                CREATE INDEX idx_tool_dispatch_lookup_authorizations_request
+                    ON tool_dispatch_lookup_authorizations(
+                        user_id, request_id, created_at
+                    );
+
+                CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_update
+                BEFORE UPDATE ON tool_dispatch_lookup_authorizations
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch lookup authorizations are immutable'
+                    );
+                END;
+
+                CREATE TRIGGER validate_tool_dispatch_lookup_authorization
+                BEFORE INSERT ON tool_dispatch_lookup_authorizations
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN tool_execution_bindings AS b
+                      ON b.request_id = r.id AND b.user_id = r.user_id
+                    JOIN tool_dispatch_audit_events AS s
+                      ON s.request_id = r.id AND s.user_id = r.user_id
+                     AND s.event_type = 'dispatch_started'
+                    JOIN external_adapter_certifications AS c
+                      ON c.id = NEW.certification_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND r.status = 'outcome_unknown'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'outcome_unknown'
+                      AND b.idempotency_key = r.id
+                      AND b.action_digest = NEW.action_digest
+                      AND s.action_digest = NEW.action_digest
+                      AND c.expires_at > NEW.created_at
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM external_adapter_certification_revocations AS cr
+                        WHERE cr.certification_id = c.id
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'lookup authorization violates execution lifecycle'
+                    );
+                END;
+                """
+            ),
+            (
+                18,
+                """
+                CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_delete
+                BEFORE DELETE ON tool_dispatch_lookup_authorizations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch lookup authorizations may only be deleted during account erasure'
+                    );
+                END;
+                """
+            ),
+            (
+                19,
+                """
+                CREATE TRIGGER prevent_tool_dispatch_audit_delete
+                BEFORE DELETE ON tool_dispatch_audit_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch audit events may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER prevent_tool_dispatch_recovery_delete
+                BEFORE DELETE ON tool_dispatch_recovery_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool dispatch recovery events may only be deleted during account erasure'
+                    );
+                END;
+                """
+            ),
+            (
+                20,
+                """
+                CREATE TABLE tool_execution_reconciliation_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('succeeded', 'failed')
+                    ),
+                    note TEXT NOT NULL CHECK (
+                        length(trim(note)) BETWEEN 1 AND 1000
+                    ),
+                    error_code TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, request_id),
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(request_id) REFERENCES tool_requests(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_tool_execution_reconciliation_request
+                    ON tool_execution_reconciliation_events(
+                        user_id, request_id, created_at
+                    );
+
+                -- Preserve reconciliation records written by the previous
+                -- audit_json implementation before adding lifecycle triggers.
+                INSERT INTO tool_execution_reconciliation_events (
+                    id, user_id, request_id, outcome, note, error_code, created_at
+                )
+                SELECT
+                    lower(hex(randomblob(16))),
+                    r.user_id,
+                    r.id,
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.outcome'
+                        ) END,
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.note'
+                        ) END,
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.error_code'
+                        ) END,
+                    COALESCE(
+                        CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                            THEN json_extract(
+                                r.audit_json,
+                                '$.execution_reconciliation.reconciled_at'
+                            ) END,
+                        r.updated_at
+                    )
+                FROM tool_requests AS r
+                JOIN users AS u ON u.id = r.user_id
+                WHERE CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                    THEN json_type(
+                        r.audit_json, '$.execution_reconciliation'
+                    ) END = 'object'
+                  AND CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                    THEN json_extract(
+                        r.audit_json, '$.execution_reconciliation.outcome'
+                    ) END IN ('succeeded', 'failed')
+                  AND length(trim(COALESCE(
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.note'
+                        ) END,
+                    ''
+                  ))) BETWEEN 1 AND 1000
+                  AND u.deleted_at IS NULL;
+
+                UPDATE tool_requests
+                SET audit_json = json_remove(
+                    audit_json, '$.execution_reconciliation'
+                )
+                WHERE CASE WHEN json_valid(COALESCE(audit_json, '{}'))
+                    THEN json_type(
+                        audit_json, '$.execution_reconciliation'
+                    ) END = 'object'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tool_execution_reconciliation_events AS e
+                      WHERE e.user_id = tool_requests.user_id
+                        AND e.request_id = tool_requests.id
+                  );
+
+                CREATE TRIGGER prevent_tool_execution_reconciliation_update
+                BEFORE UPDATE ON tool_execution_reconciliation_events
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool execution reconciliation events are immutable'
+                    );
+                END;
+
+                CREATE TRIGGER prevent_tool_execution_reconciliation_delete
+                BEFORE DELETE ON tool_execution_reconciliation_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'tool execution reconciliation events may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER validate_tool_execution_reconciliation_event
+                BEFORE INSERT ON tool_execution_reconciliation_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM tool_requests AS r
+                    JOIN tool_execution_attempts AS a
+                      ON a.request_id = r.id AND a.user_id = r.user_id
+                    JOIN users AS u ON u.id = r.user_id
+                    WHERE r.id = NEW.request_id
+                      AND r.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                      AND r.status = 'outcome_unknown'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'outcome_unknown'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM tool_execution_reconciliation_events AS prior
+                          WHERE prior.user_id = r.user_id
+                            AND prior.request_id = r.id
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'reconciliation event violates execution lifecycle'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:

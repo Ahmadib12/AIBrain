@@ -20,19 +20,77 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///:memory:"
     session_ttl_seconds: int = Field(default=86_400, gt=0)
     max_request_body_bytes: int = Field(default=1_048_576, gt=0)
+    runner_evidence_max_request_body_bytes: int = Field(
+        default=15_728_640, gt=0
+    )
     ai_max_concurrent_requests: int = Field(default=10, gt=0)
     provider_operator_token: SecretStr | None = Field(
         default=None,
         min_length=32,
     )
+    trusted_runner_ingest_token: SecretStr | None = Field(
+        default=None,
+        min_length=32,
+    )
+    security_operator_emails: str = ""
+    conformance_suite_authority_public_key_b64: str | None = None
+    conformance_suite_authority_key_id: str | None = None
+    conformance_suite_expected_id: str | None = None
+    conformance_suite_expected_version: str | None = None
     login_rate_limit_attempts: int = Field(default=5, gt=0)
     login_rate_limit_window_seconds: int = Field(default=300, gt=0)
+
+    tool_execution_recovery_interval_seconds: int = Field(default=60, gt=0)
+    tool_execution_stale_after_seconds: int = Field(default=300, gt=0)
 
     webauthn_enabled: bool = False
     webauthn_rp_id: str | None = None
     webauthn_rp_name: str = "AIBrain"
     webauthn_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ()
     webauthn_challenge_ttl_seconds: int = Field(default=300, gt=0)
+
+    @model_validator(mode="after")
+    def validate_privileged_tokens_are_separate(self):
+        configured = [
+            token.get_secret_value()
+            for token in (
+                self.provider_operator_token,
+                self.trusted_runner_ingest_token,
+            )
+            if token is not None
+        ]
+        if len(configured) != len(set(configured)):
+            raise ValueError(
+                "Provider operator and runner ingestion tokens must be distinct"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_conformance_suite_authority(self):
+        values = (
+            self.conformance_suite_authority_public_key_b64,
+            self.conformance_suite_authority_key_id,
+            self.conformance_suite_expected_id,
+            self.conformance_suite_expected_version,
+        )
+        if any(value is not None for value in values):
+            if any(not isinstance(value, str) or not value.strip() for value in values):
+                raise ValueError("All conformance suite authority pins must be configured together")
+            import base64
+            import binascii
+            try:
+                public_key = base64.b64decode(
+                    self.conformance_suite_authority_public_key_b64,
+                    validate=True,
+                )
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("Conformance suite authority public key must be valid base64") from exc
+            if len(public_key) != 32:
+                raise ValueError("Conformance suite authority public key must decode to 32 bytes")
+            for value in values[1:]:
+                if len(value) > 256:
+                    raise ValueError("Conformance suite authority pins must be at most 256 characters")
+        return self
 
     @field_validator("webauthn_allowed_origins", mode="before")
     @classmethod

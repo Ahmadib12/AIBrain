@@ -219,8 +219,16 @@ class IdentityRepository:
 
     def delete_user(self, user_id: str) -> None:
         now = _utc_now()
-        with self.database.transaction():
+        with self.database.transaction(immediate=True):
             connection = self.database.connect()
+
+            # Tombstone the account before erasing dependent rows. The
+            # lookup-authorization ledger permits cascading deletion only
+            # inside this explicit account-erasure lifecycle.
+            connection.execute(
+                "UPDATE users SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
+                (now, user_id),
+            )
 
             # Remove dependent authorization records before their parents.
             for table in (
@@ -249,10 +257,6 @@ class IdentityRepository:
             connection.execute(
                 "DELETE FROM memory_items WHERE user_id = ?",
                 (user_id,),
-            )
-            connection.execute(
-                "UPDATE users SET deleted_at = ? WHERE id = ?",
-                (now, user_id),
             )
             connection.execute(
                 "UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?) "

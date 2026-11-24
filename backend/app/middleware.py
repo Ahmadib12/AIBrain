@@ -10,22 +10,43 @@ ASGISend = Callable[[ASGIMessage], Awaitable[None]]
 class RequestBodyLimitMiddleware:
     """Enforce a request-body limit using actual received bytes."""
 
-    def __init__(self, app: Any, *, max_body_bytes: int) -> None:
+    def __init__(
+        self, app: Any, *, max_body_bytes: int,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
         if max_body_bytes < 1:
             raise ValueError("Maximum request body size must be positive")
+        normalized_limits = path_limits or {}
+        if any(
+            not isinstance(path, str) or not path.startswith("/")
+            or not isinstance(limit, int) or isinstance(limit, bool) or limit < 1
+            for path, limit in normalized_limits.items()
+        ):
+            raise ValueError("Path-specific request body limits are invalid")
         self.app = app
         self.max_body_bytes = max_body_bytes
+        self.path_limits = normalized_limits
+
+    def _limit_for_scope(self, scope: dict[str, Any]) -> int:
+        path = scope.get("path", "")
+        matches = [
+            (prefix, limit)
+            for prefix, limit in self.path_limits.items()
+            if path == prefix or path.startswith(prefix.rstrip("/") + "/")
+        ]
+        return max(matches, key=lambda item: len(item[0]))[1] if matches else self.max_body_bytes
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
+        body_limit = self._limit_for_scope(scope)
         headers = dict(scope.get("headers", []))
         declared_length = headers.get(b"content-length")
         if declared_length is not None:
             try:
-                if int(declared_length) > self.max_body_bytes:
+                if int(declared_length) > body_limit:
                     await self._reject(scope, send)
                     return
             except ValueError:
@@ -40,7 +61,7 @@ class RequestBodyLimitMiddleware:
                 continue
 
             body.extend(message.get("body", b""))
-            if len(body) > self.max_body_bytes:
+            if len(body) > body_limit:
                 await self._reject(scope, send)
                 return
             if not message.get("more_body", False):

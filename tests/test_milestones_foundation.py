@@ -498,7 +498,6 @@ def test_deleted_user_cannot_create_sessions_or_personal_records(
     user_id = user["id"]
 
     state.identity.delete_user(user_id)
-
     # Simulate requests that passed authentication before account deletion.
     with pytest.raises(sqlite3.IntegrityError):
         state.memory.create(
@@ -1168,15 +1167,154 @@ def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     rows = first.connect().execute(
         "SELECT COUNT(*) AS count FROM schema_migrations"
     ).fetchone()
-    assert rows["count"] == 8
+    assert rows["count"] == 20
     first.close()
 
     second = Database(f"sqlite:///{path}")
     rows = second.connect().execute(
         "SELECT COUNT(*) AS count FROM schema_migrations"
     ).fetchone()
-    assert rows["count"] == 8
+    assert rows["count"] == 20
     second.close()
+
+
+def test_migration_nine_creates_constrained_execution_attempt_table(
+    client: TestClient,
+) -> None:
+    import sqlite3
+
+    state = get_app_state()
+    # Serialize direct SQL assertions with the lifespan recovery worker.
+    with state.database.transaction(immediate=True):
+        connection = state.database.connect()
+        user_id = "migration-nine-user"
+        timestamp = "2026-11-23T00:00:00+00:00"
+
+        connection.execute(
+            "INSERT OR IGNORE INTO users "
+            "(id, email, password_salt, password_hash, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, "migration-nine@example.com", "salt", "hash", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO tool_requests (
+                id, user_id, tool_id, arguments_json, status,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "migration-nine-request",
+                user_id,
+                "echo",
+                "{}",
+                "executing",
+                timestamp,
+                timestamp,
+            ),
+        )
+
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(tool_execution_attempts)"
+            ).fetchall()
+        }
+        assert {
+            "id",
+            "user_id",
+            "request_id",
+            "idempotency_key",
+            "status",
+            "claimed_at",
+            "updated_at",
+            "finished_at",
+            "error_code",
+        } <= columns
+
+        connection.execute(
+            """
+            INSERT INTO tool_execution_attempts (
+                id, user_id, request_id, idempotency_key,
+                status, claimed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "migration-nine-attempt",
+                user_id,
+                "migration-nine-request",
+                "migration-nine-idempotency-key",
+                "claimed",
+                timestamp,
+                timestamp,
+            ),
+        )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "migration-nine-duplicate",
+                    user_id,
+                    "migration-nine-request",
+                    "another-idempotency-key",
+                    "claimed",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "migration-nine-invalid-status",
+                    user_id,
+                    "migration-nine-request",
+                    "invalid-status-key",
+                    "retrying",
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key,
+                    status, claimed_at, updated_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "migration-nine-invalid-finished-state",
+                    user_id,
+                    "migration-nine-request",
+                    "invalid-finished-state-key",
+                    "succeeded",
+                    timestamp,
+                    timestamp,
+                    None,
+                ),
+            )
+
+        attempt = connection.execute(
+            "SELECT status, finished_at FROM tool_execution_attempts WHERE id = ?",
+            ("migration-nine-attempt",),
+        ).fetchone()
+        assert attempt["status"] == "claimed"
+        assert attempt["finished_at"] is None
 
 
 def test_migration_failure_prevents_database_initialization(
@@ -1257,3 +1395,104 @@ def test_transaction_releases_lock_when_begin_fails(
         database._lock.release()
     finally:
         database.close()
+
+
+def test_migration_twenty_backfills_legacy_reconciliation_json(tmp_path) -> None:
+    import json
+
+    from backend.app.persistence.database import Database
+
+    path = tmp_path / "legacy-reconciliation.db"
+    database = Database(f"sqlite:///{path}")
+    connection = database.connect()
+    timestamp = "2026-11-24T12:00:00+00:00"
+    user_id = "legacy-reconciliation-user"
+    request_id = "legacy-reconciliation-request"
+    connection.execute(
+        """
+        INSERT INTO users (
+            id, email, password_salt, password_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (user_id, "legacy-reconciliation@example.com", "salt", "hash", timestamp),
+    )
+    legacy_reconciliation = {
+        "outcome": "failed",
+        "reconciled_by": user_id,
+        "reconciled_at": timestamp,
+        "note": "Legacy resolution carried forward",
+    }
+    connection.execute(
+        """
+        INSERT INTO tool_requests (
+            id, user_id, tool_id, arguments_json, status,
+            created_at, updated_at, audit_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            user_id,
+            "legacy-tool",
+            "{}",
+            "failed",
+            timestamp,
+            timestamp,
+            json.dumps({"execution_reconciliation": legacy_reconciliation}),
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO tool_requests (
+            id, user_id, tool_id, arguments_json, status,
+            created_at, updated_at, audit_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "malformed-legacy-reconciliation-request",
+            user_id,
+            "legacy-tool",
+            "{}",
+            "failed",
+            timestamp,
+            timestamp,
+            "{not-valid-json",
+        ),
+    )
+    connection.commit()
+
+    # Simulate upgrading a database that predates migration 20.
+    connection.execute("DROP TABLE tool_execution_reconciliation_events")
+    connection.execute("DELETE FROM schema_migrations WHERE version = 20")
+    connection.commit()
+    database.migrate()
+
+    migrated = database.connect().execute(
+        """
+        SELECT user_id, request_id, outcome, note, error_code, created_at
+        FROM tool_execution_reconciliation_events
+        WHERE user_id = ? AND request_id = ?
+        """,
+        (user_id, request_id),
+    ).fetchone()
+    assert migrated is not None
+    assert migrated["outcome"] == "failed"
+    assert migrated["note"] == "Legacy resolution carried forward"
+    assert migrated["error_code"] is None
+    assert migrated["created_at"] == timestamp
+
+    remaining_audit = database.connect().execute(
+        "SELECT audit_json FROM tool_requests WHERE id = ?",
+        (request_id,),
+    ).fetchone()["audit_json"]
+    assert json.loads(remaining_audit) == {}
+
+    malformed_audit = database.connect().execute(
+        "SELECT audit_json FROM tool_requests "
+        "WHERE id = 'malformed-legacy-reconciliation-request'"
+    ).fetchone()["audit_json"]
+    assert malformed_audit == "{not-valid-json"
+    assert database.connect().execute(
+        "SELECT COUNT(*) FROM tool_execution_reconciliation_events "
+        "WHERE request_id = 'malformed-legacy-reconciliation-request'"
+    ).fetchone()[0] == 0
+    database.close()
