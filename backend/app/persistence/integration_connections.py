@@ -5,10 +5,13 @@ cannot become active through public API input: trusted provider verification
 and a separately managed encrypted secret store are required first.
 """
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
 from backend.app.persistence.database import Database
+
+_SCOPE_PATTERN = re.compile(r"^[a-z][a-z0-9_.:-]{1,95}$")
 
 
 def _now() -> str:
@@ -33,7 +36,7 @@ class IntegrationConnectionRepository:
             raise ValueError("Consent version is invalid")
         if not isinstance(requested_scopes, list) or not requested_scopes:
             raise ValueError("At least one scope must be explicitly requested")
-        if any(not isinstance(scope, str) or not scope.strip() or len(scope) > 128 for scope in requested_scopes):
+        if any(not isinstance(scope, str) or not _SCOPE_PATTERN.fullmatch(scope) for scope in requested_scopes):
             raise ValueError("Requested scope is invalid")
         if len(requested_scopes) != len(set(requested_scopes)):
             raise ValueError("Requested scopes must be unique")
