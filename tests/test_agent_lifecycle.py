@@ -93,7 +93,7 @@ def test_agent_lifecycle_supports_explicit_activation_suspension_and_resume(
     ("initial_status", "requested_status"),
     [
         ("draft", "suspended"),
-        ("active", "draft"),
+        ("active", "active"),
         ("suspended", "suspended"),
         ("terminated", "active"),
     ],
