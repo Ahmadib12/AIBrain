@@ -140,3 +140,10 @@ def test_database_rejects_active_grant_without_active_connection(state):
             "UPDATE integration_connection_grants SET status='active' WHERE connection_id=? AND user_id=?",
             (connection["id"], owner_id),
         )
+
+def test_invalid_scope_identifier_is_rejected_at_repository_boundary(state):
+    _, _, owner_id, _, repository = state
+    with pytest.raises(ValueError, match="Requested scope is invalid"):
+        repository.create_pending(
+            owner_id, "calendar", ["../secrets"], consent_version="v1"
+        )
