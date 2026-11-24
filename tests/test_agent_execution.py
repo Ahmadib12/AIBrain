@@ -392,7 +392,9 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
     assert bindings[0]["required_scopes"] == ["catalog.read"]
     assert bindings[0]["contract_fingerprint"] == run["steps"][0]["contract_fingerprint"]
 
-    authorized = state.agent_execution.authorize_run(user_id, run["id"])
+    authorized = state.agent_execution.authorize_run(
+        user_id, run["id"], state.integrations, state.integration_connections
+    )
     assert authorized["status"] == "authorized"
 
     binding_step = bindings[0]["step_id"]
@@ -409,3 +411,15 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
                 "DELETE FROM agent_run_integration_bindings WHERE step_id=?",
                 (binding_step,),
             )
+
+    # A revoked owner connection invalidates the previously authorized binding.
+    state.integration_connections.revoke(user_id, connection["id"])
+    raw_run = state.agent_execution._raw_run(user_id, run["id"])
+    with pytest.raises(PermissionError, match="no longer active"):
+        state.agent_execution._validate_integration_bindings(
+            user_id, raw_run, state.integrations, state.integration_connections
+        )
+
+    # The synchronous M9 executor must never execute integration-bound runs.
+    with pytest.raises(PermissionError, match="dedicated asynchronous orchestrator"):
+        state.agent_execution.execute_run(user_id, run["id"], None, None)
