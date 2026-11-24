@@ -1440,6 +1440,24 @@ def test_migration_twenty_backfills_legacy_reconciliation_json(tmp_path) -> None
             json.dumps({"execution_reconciliation": legacy_reconciliation}),
         ),
     )
+    connection.execute(
+        """
+        INSERT INTO tool_requests (
+            id, user_id, tool_id, arguments_json, status,
+            created_at, updated_at, audit_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "malformed-legacy-reconciliation-request",
+            user_id,
+            "legacy-tool",
+            "{}",
+            "failed",
+            timestamp,
+            timestamp,
+            "{not-valid-json",
+        ),
+    )
     connection.commit()
 
     # Simulate upgrading a database that predates migration 20.
@@ -1467,4 +1485,14 @@ def test_migration_twenty_backfills_legacy_reconciliation_json(tmp_path) -> None
         (request_id,),
     ).fetchone()["audit_json"]
     assert json.loads(remaining_audit) == {}
+
+    malformed_audit = database.connect().execute(
+        "SELECT audit_json FROM tool_requests "
+        "WHERE id = 'malformed-legacy-reconciliation-request'"
+    ).fetchone()["audit_json"]
+    assert malformed_audit == "{not-valid-json"
+    assert database.connect().execute(
+        "SELECT COUNT(*) FROM tool_execution_reconciliation_events "
+        "WHERE request_id = 'malformed-legacy-reconciliation-request'"
+    ).fetchone()[0] == 0
     database.close()
