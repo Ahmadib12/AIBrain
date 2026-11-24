@@ -1,6 +1,6 @@
 # M8 — Agent Lifecycle and Controlled Orchestration
 
-**Status:** Architecture contract approved. M8.1 owner-scoped identity registration is implemented, verified in Codespaces (795 tests passed; compilation and dependency checks passed), and pushed to `dev/tool-authorization-lifecycle` as `b9e9243`. M8.2–M8.6 are the remaining implementation milestones.
+**Status:** Architecture contract approved. M8.1 is implemented and verified in Codespaces (795 tests passed; compilation and dependency checks passed), pushed as `b9e9243`. M8.2 lifecycle controls have been implemented on the development branch; Codespaces verification is pending. M8.3–M8.6 remain unimplemented.
 
 ## Objective
 
