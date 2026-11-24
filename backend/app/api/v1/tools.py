@@ -504,7 +504,6 @@ async def get_runner_attestation_payload(
             nonce=request.nonce,
             issued_at=request.issued_at,
             expires_at=request.expires_at,
-            audit_actor=operator,
         )
     except LookupError:
         raise HTTPException(
