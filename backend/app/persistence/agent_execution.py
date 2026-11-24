@@ -365,3 +365,30 @@ class AgentExecutionRepository:
                 (now, now, run_id, user_id),
             )
         return self.get_run(user_id, run_id)
+
+    def reconcile_expired_runs(self, user_id: str) -> int:
+        now = _stamp()
+        rows = self.database.connect().execute(
+            """SELECT id FROM agent_runs WHERE user_id=?
+               AND status IN ('proposed','authorized') AND expires_at <= ?""",
+            (user_id, now),
+        ).fetchall()
+        changed = 0
+        for row in rows:
+            with self.database.transaction(immediate=True):
+                run = self._raw_run(user_id, row["id"])
+                if run["status"] not in {"proposed", "authorized"}:
+                    continue
+                if run["expires_at"] > now:
+                    continue
+                self._event(user_id, run["id"], "expired", {
+                    "from_status": run["status"], "to_status": "expired",
+                    "reason": "run_deadline_elapsed",
+                })
+                self.database.connect().execute(
+                    """UPDATE agent_runs SET status='expired',finished_at=?,updated_at=?
+                       WHERE id=? AND user_id=? AND status=?""",
+                    (now, now, run["id"], user_id, run["status"]),
+                )
+                changed += 1
+        return changed
