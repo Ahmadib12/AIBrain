@@ -24,8 +24,10 @@ header injection, and oversized request headers are rejected.
 The transport has configurable, hard-capped socket inactivity timeouts, request
 header count/value/aggregate limits, response body limits, response header
 count/aggregate size limits, and returns only a small allowlist of response
-metadata headers. It reads at most the configured body limit plus one byte to
-detect overflow. Redirect responses are rejected rather than followed.
+metadata headers. It validates response framing, rejects ambiguous duplicate
+Content-Length/Transfer-Encoding headers, checks declared body lengths, and reads
+at most the configured body limit plus one byte to detect overflow. Redirect
+responses are rejected rather than followed.
 
 The timeout is a socket connect/read inactivity timeout, not a hard wall-clock
 deadline for a complete response. Adapters must execute the transport within
