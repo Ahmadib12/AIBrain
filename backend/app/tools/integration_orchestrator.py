@@ -241,6 +241,105 @@ class IntegrationAgentRunOrchestrator:
                 (code, now, step["id"], user_id, current["status"]),
             )
 
+    def recover_stale_dispatches(self, *, stale_before: str) -> int:
+        """Fail closed on dispatches abandoned by a crashed process.
+
+        A stale dispatch-started record is never replayed. The durable ledger is
+        moved to outcome_unknown and its run is failed atomically.
+        """
+        candidates = self.execution.database.connect().execute(
+            """SELECT step_id,user_id,run_id FROM agent_run_integration_dispatches
+               WHERE status='dispatch_started' AND dispatch_started_at<=?
+               ORDER BY dispatch_started_at,step_id""",
+            (stale_before,),
+        ).fetchall()
+        recovered = 0
+        for candidate in candidates:
+            user_id = candidate["user_id"]
+            run_id = candidate["run_id"]
+            step_id = candidate["step_id"]
+            with self.execution.database.transaction(immediate=True):
+                dispatch = self.execution.database.connect().execute(
+                    """SELECT status,dispatch_started_at FROM agent_run_integration_dispatches
+                       WHERE step_id=? AND user_id=? AND run_id=?""",
+                    (step_id, user_id, run_id),
+                ).fetchone()
+                if (
+                    dispatch is None
+                    or dispatch["status"] != "dispatch_started"
+                    or dispatch["dispatch_started_at"] is None
+                    or dispatch["dispatch_started_at"] > stale_before
+                ):
+                    continue
+                step = self.execution.database.connect().execute(
+                    """SELECT ordinal,tool_id,status FROM agent_run_steps
+                       WHERE id=? AND user_id=? AND run_id=?""",
+                    (step_id, user_id, run_id),
+                ).fetchone()
+                if step is None or step["status"] != "running":
+                    continue
+                now = _stamp()
+                code = "INTEGRATION_PROCESS_INTERRUPTED"
+                self.execution._event(user_id, run_id, "integration_dispatch_outcome_unknown", {
+                    "step_id": step_id,
+                    "error_code": code,
+                    "automatic_retry": False,
+                    "recovered_after_process_interruption": True,
+                })
+                cursor = self.execution.database.connect().execute(
+                    """UPDATE agent_run_integration_dispatches
+                       SET status='outcome_unknown',finished_at=?,error_code=?,updated_at=?
+                       WHERE step_id=? AND user_id=? AND run_id=?
+                         AND status='dispatch_started'""",
+                    (now, code, now, step_id, user_id, run_id),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                self.execution._event(user_id, run_id, "step_failed", {
+                    "step_id": step_id,
+                    "ordinal": step["ordinal"],
+                    "error_code": code,
+                    "automatic_retry": False,
+                })
+                self.execution.database.connect().execute(
+                    """UPDATE agent_run_steps SET status='failed',error_code=?,updated_at=?
+                       WHERE id=? AND user_id=? AND status='running'""",
+                    (code, now, step_id, user_id),
+                )
+                run = self.execution._raw_run(user_id, run_id)
+                if run["status"] == "running":
+                    self.execution._event(user_id, run_id, "failed", {
+                        "from_status": "running",
+                        "to_status": "failed",
+                        "reason": "integration_dispatch_interrupted",
+                        "automatic_retry": False,
+                        "integration_bound": True,
+                    })
+                    self.execution.database.connect().execute(
+                        """UPDATE agent_runs SET status='failed',finished_at=?,updated_at=?
+                           WHERE id=? AND user_id=? AND status='running'""",
+                        (now, now, run_id, user_id),
+                    )
+                    pending = self.execution.database.connect().execute(
+                        """SELECT id,ordinal FROM agent_run_steps
+                           WHERE user_id=? AND run_id=? AND status='pending'
+                           ORDER BY ordinal""",
+                        (user_id, run_id),
+                    ).fetchall()
+                    for item in pending:
+                        self.execution._event(user_id, run_id, "step_skipped", {
+                            "step_id": item["id"],
+                            "ordinal": item["ordinal"],
+                            "reason": "prior_integration_dispatch_interrupted",
+                        })
+                        self.execution.database.connect().execute(
+                            """UPDATE agent_run_steps SET status='skipped',updated_at=?
+                               WHERE id=? AND user_id=? AND status='pending'""",
+                            (now, item["id"], user_id),
+                        )
+                recovered += 1
+        return recovered
+
     def _finish_run(self, user_id: str, run_id: str, *, failed: bool) -> dict:
         with self.execution.database.transaction(immediate=True):
             run = self.execution._raw_run(user_id, run_id)
