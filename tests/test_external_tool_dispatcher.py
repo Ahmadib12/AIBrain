@@ -1,6 +1,8 @@
 import json
 import hashlib
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -556,4 +558,102 @@ def test_final_dispatch_gate_rejects_revoked_runner_key(tmp_path):
             )
         assert repository.get_dispatch_audit(user_id, request_id) == []
     finally:
+        database.close()
+
+
+
+def _begin_dispatch(repository, user_id, request_id, fingerprint, provider, snapshot):
+    return repository.begin_external_dispatch(
+        user_id,
+        request_id,
+        expected_contract_fingerprint=fingerprint,
+        adapter_id=provider.capabilities.adapter_id,
+        adapter_version=provider.capabilities.adapter_version,
+        provider_id=provider.capabilities.provider_id,
+        provider_scope=provider.capabilities.provider_scope,
+        capabilities=snapshot,
+    )
+
+
+def test_concurrent_dispatch_start_is_single_use_across_database_connections(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    second_database = Database(database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    barrier = Barrier(2)
+
+    def attempt(candidate):
+        barrier.wait(timeout=10)
+        try:
+            _begin_dispatch(
+                candidate, user_id, request_id, fingerprint, provider, snapshot
+            )
+        except PermissionError:
+            return "rejected"
+        return "accepted"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(attempt, (repository, second_repository)))
+        assert sorted(outcomes) == ["accepted", "rejected"]
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        assert [event["event_type"] for event in audit] == ["dispatch_started"]
+    finally:
+        second_database.close()
+        database.close()
+
+
+def test_runner_key_revocation_racing_dispatch_is_linearized(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    second_database = Database(database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    barrier = Barrier(2)
+
+    def dispatch_attempt():
+        barrier.wait(timeout=10)
+        try:
+            _begin_dispatch(
+                repository, user_id, request_id, fingerprint, provider, snapshot
+            )
+        except PermissionError:
+            return "rejected"
+        return "accepted"
+
+    def revoke_attempt():
+        barrier.wait(timeout=10)
+        second_repository.revoke_trusted_runner_key(
+            "dispatcher-runner-key",
+            revoked_by="concurrent-security-operator",
+            reason="Concurrency test revocation",
+        )
+        return "revoked"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            dispatch_future = executor.submit(dispatch_attempt)
+            revoke_future = executor.submit(revoke_attempt)
+            dispatch_result = dispatch_future.result(timeout=15)
+            assert revoke_future.result(timeout=15) == "revoked"
+
+        revocation_count = repository.database.connect().execute(
+            "SELECT COUNT(*) FROM trusted_runner_key_revocations "
+            "WHERE key_id = ?",
+            ("dispatcher-runner-key",),
+        ).fetchone()[0]
+        assert revocation_count == 1
+
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        starts = [event for event in audit if event["event_type"] == "dispatch_started"]
+        if dispatch_result == "accepted":
+            # Dispatch acquired the SQLite write transaction first; revocation
+            # committed only after the final authorization gate completed.
+            assert len(starts) == 1
+        else:
+            # Revocation committed first; the final dispatch gate must fail closed.
+            assert starts == []
+    finally:
+        second_database.close()
         database.close()
