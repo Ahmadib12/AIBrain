@@ -107,6 +107,19 @@ def test_owner_can_reconcile_unknown_attempt_as_succeeded(client: TestClient) ->
         "Checked the external service and confirmed completion."
     )
 
+    history_response = client.get(
+        f"/api/v1/tools/requests/{request['id']}/history",
+        headers=auth_header(token),
+    )
+    assert history_response.status_code == 200
+    history_item = history_response.json()["items"][0]
+    assert history_item["record_type"] == "execution_reconciliation"
+    assert history_item["details"] == {
+        "outcome": "succeeded",
+        "error_code": None,
+        "note": "Checked the external service and confirmed completion.",
+    }
+
 
 def test_owner_can_reconcile_unknown_attempt_as_failed(client: TestClient) -> None:
     state = get_app_state()
@@ -327,15 +340,24 @@ def test_owner_can_page_redacted_execution_history(
     connection = state.database.connect()
     # These synthetic rows exercise the read projection and page boundary;
     # production insert validation remains covered by dispatcher tests.
-    connection.execute("DROP TRIGGER validate_tool_dispatch_audit_event")
-    connection.executemany(
+    validation_trigger = connection.execute(
         """
-        INSERT INTO tool_dispatch_audit_events (
-            id, user_id, request_id, event_type, action_digest,
-            details_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
+        SELECT sql FROM sqlite_master
+        WHERE type = 'trigger'
+          AND name = 'validate_tool_dispatch_audit_event'
+        """
+    ).fetchone()
+    assert validation_trigger is not None
+    connection.execute("DROP TRIGGER validate_tool_dispatch_audit_event")
+    try:
+        connection.executemany(
+            """
+            INSERT INTO tool_dispatch_audit_events (
+                id, user_id, request_id, event_type, action_digest,
+                details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
             (
                 "history-started",
                 user_id,
@@ -363,9 +385,11 @@ def test_owner_can_page_redacted_execution_history(
                 ),
                 "2026-11-24T10:00:01+00:00",
             ),
-        ],
-    )
-    connection.commit()
+            ],
+        )
+    finally:
+        connection.execute(validation_trigger["sql"])
+        connection.commit()
 
     url = f"/api/v1/tools/requests/{request['id']}/history"
     first = client.get(
