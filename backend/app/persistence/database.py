@@ -2193,6 +2193,27 @@ class Database:
                 )
                 BEGIN SELECT RAISE(ABORT,'integration connection requires active owner'); END;
 
+                CREATE TRIGGER require_verified_integration_activation
+                BEFORE UPDATE OF status ON integration_connections
+                WHEN NEW.status='active'
+                  AND (NEW.verified_at IS NULL OR NEW.secret_ref IS NULL
+                       OR length(trim(NEW.secret_ref))=0)
+                BEGIN SELECT RAISE(ABORT,'integration activation requires trusted verification and secret reference'); END;
+
+                CREATE TRIGGER require_active_connection_for_active_grant
+                BEFORE UPDATE OF status ON integration_connection_grants
+                WHEN NEW.status='active' AND NOT EXISTS (
+                    SELECT 1 FROM integration_connections c
+                    WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                      AND c.status='active'
+                )
+                BEGIN SELECT RAISE(ABORT,'active integration grant requires active connection'); END;
+
+                CREATE TRIGGER prevent_integration_grant_scope_update
+                BEFORE UPDATE OF user_id,connection_id,scope,created_at
+                ON integration_connection_grants
+                BEGIN SELECT RAISE(ABORT,'integration grant definition is immutable'); END;
+
                 CREATE TRIGGER validate_integration_grant_insert
                 BEFORE INSERT ON integration_connection_grants
                 WHEN NOT EXISTS (
