@@ -171,7 +171,7 @@ existing state-changing execution path remains disabled. Tests are in
 
 ### Provider-neutral bounded conformance process runner
 
-The provider-neutral runner implementation is `scripts/conformance_runner.py`. It requires an Ed25519 authority-signed suite envelope containing the exact provider/tool binding, suite ID/version, and command map for all ten required conformance checks. The runner verifies the signature against a deployment-pinned public key before executing any command. Each check runs as a separate subprocess with a clean environment, stdin closed, no shell, a fresh temporary working directory, bounded wall time, POSIX CPU/address-space/file-size/open-file/core-dump limits, and bounded captured output. The test subprocesses do not inherit the runner API token or signing-key environment variables.
+The provider-neutral runner implementation is `scripts/conformance_runner.py`. It requires an Ed25519 authority-signed suite envelope containing the exact provider/tool binding, suite ID/version, and command map for all ten required conformance checks. The runner verifies the signature against a deployment-pinned public key and requires the suite ID and version to match deployment-pinned expected values before executing any command. This prevents replay of an older, still-validly-signed suite after the deployment advances its approved version. Each check runs as a separate subprocess with a clean environment, stdin closed, no shell, a fresh temporary working directory, bounded wall time, POSIX CPU/address-space/file-size/open-file/core-dump limits, and bounded captured output. The test subprocesses do not inherit the runner API token or signing-key environment variables.
 
 The runner records each check as `passed`, `failed`, `unknown` (timeout), or `not_run` (process could not start). It always emits an execution report. It creates a certifiable evidence manifest only when every required check exits successfully; manifest and artifact digests are generated from the runner's execution output, not accepted as caller-supplied pass claims.
 
@@ -180,6 +180,8 @@ Example invocation:
 ```bash
 export AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64="<pinned-public-key-base64>"
 export AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID="suite-authority-2026-01"
+export AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID="provider-tool-safety-suite"
+export AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION="2026-01"
 python -m scripts.conformance_runner \\
   --suite signed-conformance-suite.json \\
   --output-dir ./conformance-output
@@ -202,7 +204,9 @@ must never be copied to the runner, AIBrain API server, repository, or CI
 environment. Provision the corresponding raw 32-byte Ed25519 public key as
 base64 and the authority key ID to the isolated runner deployment.
 
-The signed suite payload schema is `aibrain-conformance-suite-v1`; its signature covers the suite identity, version, exact provider/tool binding, and every argv command. The suite-authority public key and key ID must be pinned by the runner deployment through `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64` and `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`, not supplied by the suite file or command line. The private suite-authority key is kept offline and separate from the runner attestation key. The runner records the signed suite as an evidence artifact and binds its digest, per-command digests, and execution limits into the execution report. A signature proves that the authority approved the exact commands; it does not prove that human-authored test logic correctly exercises a provider guarantee. Review and version-control suite source before signing.
+The signed suite payload schema is `aibrain-conformance-suite-v1`; its signature covers the suite identity, version, exact provider/tool binding, and every argv command. The suite-authority public key and key ID must be pinned by the runner deployment through `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64` and `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`,
+`AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID`,
+`AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION`, not supplied by the suite file or command line. The approved suite ID and version are separately pinned through `AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID` and `AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION`. The private suite-authority key is kept offline and separate from the runner attestation key. The runner records the signed suite as an evidence artifact and binds its digest, per-command digests, and execution limits into the execution report. A signature proves that the authority approved the exact commands; it does not prove that human-authored test logic correctly exercises a provider guarantee. Review and version-control suite source before signing.
 
 **Isolation limitation:** this is a bounded POSIX subprocess supervisor, not yet a hostile-code sandbox. It does not create a network namespace, enforce provider-domain egress allowlists, or isolate the child from the runner account's kernel. Deploy only inside a separately hardened ephemeral VM/container with a dedicated unprivileged account, read-only source, and externally enforced network policy and container/cgroup PID limits. Keep signing keys and ingestion credentials in a separate submission step after test execution; never mount them into the test environment. The existing evidence verifier, trusted-runner attestation, and independent operator approval remain mandatory. Production dispatch remains disabled.
 
