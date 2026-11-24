@@ -1505,11 +1505,7 @@ class ToolRequestRepository:
         ]
 
     def get_execution_history(self, user_id: str, request_id: str) -> list[dict]:
-        """Return owner-scoped dispatch, recovery, and lookup authorization history.
-
-        This is a read model over the immutable source ledgers. It does not
-        merge or overwrite their distinct record types.
-        """
+        """Return owner-scoped execution history across immutable source ledgers."""
         connection = self.database.connect()
         request = connection.execute(
             """
@@ -1524,7 +1520,8 @@ class ToolRequestRepository:
         rows = connection.execute(
             """
             SELECT id, record_type, event_type, action_digest,
-                   details_json, created_at, certification_id
+                   details_json, created_at, certification_id,
+                   outcome, error_code, note
             FROM (
                 SELECT
                     id,
@@ -1533,7 +1530,10 @@ class ToolRequestRepository:
                     action_digest,
                     details_json,
                     created_at,
-                    NULL AS certification_id
+                    NULL AS certification_id,
+                    NULL AS outcome,
+                    NULL AS error_code,
+                    NULL AS note
                 FROM tool_dispatch_audit_events
                 WHERE user_id = ? AND request_id = ?
 
@@ -1546,7 +1546,10 @@ class ToolRequestRepository:
                     action_digest,
                     details_json,
                     created_at,
-                    NULL AS certification_id
+                    NULL AS certification_id,
+                    NULL AS outcome,
+                    NULL AS error_code,
+                    NULL AS note
                 FROM tool_dispatch_recovery_events
                 WHERE user_id = ? AND request_id = ?
 
@@ -1559,8 +1562,27 @@ class ToolRequestRepository:
                     action_digest,
                     details_json,
                     created_at,
-                    certification_id
+                    certification_id,
+                    NULL AS outcome,
+                    NULL AS error_code,
+                    NULL AS note
                 FROM tool_dispatch_lookup_authorizations
+                WHERE user_id = ? AND request_id = ?
+
+                UNION ALL
+
+                SELECT
+                    id,
+                    'execution_reconciliation' AS record_type,
+                    'execution_reconciled' AS event_type,
+                    NULL AS action_digest,
+                    '{}' AS details_json,
+                    created_at,
+                    NULL AS certification_id,
+                    outcome,
+                    error_code,
+                    note
+                FROM tool_execution_reconciliation_events
                 WHERE user_id = ? AND request_id = ?
             )
             ORDER BY created_at ASC, record_type ASC, id ASC
@@ -1569,21 +1591,30 @@ class ToolRequestRepository:
                 user_id, request_id,
                 user_id, request_id,
                 user_id, request_id,
+                user_id, request_id,
             ),
         ).fetchall()
 
-        return [
-            {
+        history = []
+        for row in rows:
+            details = json.loads(row["details_json"])
+            if row["record_type"] == "execution_reconciliation":
+                details = {
+                    "outcome": row["outcome"],
+                    "error_code": row["error_code"],
+                    "note": row["note"],
+                    "reconciled_by": user_id,
+                }
+            history.append({
                 "id": row["id"],
                 "record_type": row["record_type"],
                 "event_type": row["event_type"],
                 "action_digest": row["action_digest"],
-                "details": json.loads(row["details_json"]),
+                "details": details,
                 "created_at": row["created_at"],
                 "certification_id": row["certification_id"],
-            }
-            for row in rows
-        ]
+            })
+        return history
 
     def reconcile_execution_attempt(
         self,
@@ -1635,7 +1666,7 @@ class ToolRequestRepository:
             connection = self.database.connect()
             row = connection.execute(
                 """
-                SELECT r.status AS request_status, r.consumed_at, r.audit_json,
+                SELECT r.status AS request_status, r.consumed_at,
                        a.status AS attempt_status
                 FROM tool_requests AS r
                 LEFT JOIN tool_execution_attempts AS a
@@ -1653,22 +1684,27 @@ class ToolRequestRepository:
             ):
                 raise PermissionError("Tool execution is not awaiting reconciliation")
 
-            audit = json.loads(row["audit_json"] or "{}")
-            if not isinstance(audit, dict):
-                raise ValueError("Tool request audit data is invalid")
-            if "execution_reconciliation" in audit:
-                raise PermissionError("Tool execution has already been reconciled")
-
-            audit["execution_reconciliation"] = {
-                "outcome": outcome,
-                "reconciled_by": user_id,
-                "reconciled_at": now,
-                "note": note.strip(),
-            }
+            reconciliation_id = str(uuid.uuid4())
+            connection.execute(
+                """
+                INSERT INTO tool_execution_reconciliation_events (
+                    id, user_id, request_id, outcome, note, error_code, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    reconciliation_id,
+                    user_id,
+                    request_id,
+                    outcome,
+                    note.strip(),
+                    final_error_code,
+                    now,
+                ),
+            )
             request_update = connection.execute(
                 """
                 UPDATE tool_requests
-                SET status = ?, result_json = ?, updated_at = ?, audit_json = ?
+                SET status = ?, result_json = ?, updated_at = ?
                 WHERE id = ? AND user_id = ? AND status = 'outcome_unknown'
                   AND consumed_at IS NOT NULL
                 """,
@@ -1676,7 +1712,6 @@ class ToolRequestRepository:
                     final_status,
                     result_json,
                     now,
-                    json.dumps(audit, ensure_ascii=False),
                     request_id,
                     user_id,
                 ),
