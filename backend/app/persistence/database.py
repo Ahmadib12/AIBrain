@@ -1482,7 +1482,7 @@ class Database:
                     metadata_json TEXT NOT NULL DEFAULT '{}'
                         CHECK (json_valid(metadata_json)),
                     status TEXT NOT NULL DEFAULT 'draft'
-                        CHECK (status = 'draft'),
+                        CHECK (status IN ('draft', 'active', 'suspended', 'terminated')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
