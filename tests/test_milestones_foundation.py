@@ -198,6 +198,218 @@ def test_successful_login_resets_failed_attempts(
     assert fourth_failed.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
 
 
+
+
+def test_memory_creation_requires_explicit_consent(client: TestClient) -> None:
+    token = register_and_login(client, "no-memory-consent@example.com")
+    response = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "preference",
+            "key": "language",
+            "value": "English",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "MEMORY_CONSENT_REQUIRED"
+    assert client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    ).json() == []
+
+
+def test_memory_consent_revocation_locks_old_records_and_new_consent_does_not_restore_them(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "memory-revocation@example.com")
+    grant_memory_consent(client, token)
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "preference",
+            "key": "language",
+            "value": "English",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    memory_id = created.json()["id"]
+
+    revoked = client.delete(
+        "/api/v1/personal/memory/consent",
+        headers=auth_header(token),
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["enabled"] is False
+    assert revoked.json()["deleted_memories"] == 0
+    assert client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    ).json() == []
+
+    regranted = client.post(
+        "/api/v1/personal/memory/consent",
+        headers=auth_header(token),
+        json={"retention_days": 365},
+    )
+    assert regranted.status_code == 200
+    assert client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    ).json() == []
+
+    deleted = client.delete(
+        f"/api/v1/personal/memory/{memory_id}",
+        headers=auth_header(token),
+    )
+    assert deleted.status_code == 200
+
+
+def test_memory_consent_purge_option_erases_existing_records(client: TestClient) -> None:
+    token = register_and_login(client, "memory-purge@example.com")
+    grant_memory_consent(client, token)
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "context",
+            "key": "temporary",
+            "value": "remove this",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert created.status_code == 200
+
+    revoked = client.delete(
+        "/api/v1/personal/memory/consent?purge_existing=true",
+        headers=auth_header(token),
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["deleted_memories"] == 1
+    assert client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    ).json() == []
+
+
+def test_memory_retention_policy_is_applied_to_existing_and_new_records(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "memory-retention@example.com")
+    grant_memory_consent(client, token)
+    created = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "goal",
+            "key": "study",
+            "value": "Learn Python",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert created.status_code == 200
+    initial_expiry = created.json()["expires_at"]
+
+    policy = client.patch(
+        "/api/v1/personal/memory/consent/retention",
+        headers=auth_header(token),
+        json={"retention_days": 1},
+    )
+    assert policy.status_code == 200
+    assert policy.json()["retention_days"] == 1
+
+    listed = client.get(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    )
+    assert listed.status_code == 200
+    shortened = listed.json()[0]["expires_at"]
+    assert shortened != initial_expiry
+
+
+def test_memory_search_and_context_are_owner_scoped_and_opt_in(client: TestClient) -> None:
+    token_a = register_and_login(client, "memory-search-a@example.com")
+    token_b = register_and_login(client, "memory-search-b@example.com")
+    grant_memory_consent(client, token_a)
+    grant_memory_consent(client, token_b)
+    create_a = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token_a),
+        json={
+            "memory_type": "preference",
+            "key": "preferred_language",
+            "value": "English",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    create_b = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token_b),
+        json={
+            "memory_type": "preference",
+            "key": "preferred_language",
+            "value": "French",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert create_a.status_code == 200
+    assert create_b.status_code == 200
+
+    search = client.post(
+        "/api/v1/personal/memory/search",
+        headers=auth_header(token_a),
+        json={"query": "preferred language", "limit": 5},
+    )
+    assert search.status_code == 200
+    assert len(search.json()["matches"]) == 1
+    assert search.json()["matches"][0]["value"] == "English"
+
+    context = client.post(
+        "/api/v1/personal/memory/context",
+        headers=auth_header(token_a),
+        json={"query": "preferred language"},
+    )
+    assert context.status_code == 200
+    assert context.json()["memories"][0]["value"] == "English"
+    assert "French" not in context.text
+
+
+def test_clear_all_memory_is_available_without_active_consent(client: TestClient) -> None:
+    token = register_and_login(client, "memory-clear@example.com")
+    grant_memory_consent(client, token)
+    for key in ("first", "second"):
+        response = client.post(
+            "/api/v1/personal/memory",
+            headers=auth_header(token),
+            json={
+                "memory_type": "context",
+                "key": key,
+                "value": key,
+                "source": "explicit",
+                "confidence": 1.0,
+            },
+        )
+        assert response.status_code == 200
+    revoked = client.delete(
+        "/api/v1/personal/memory/consent",
+        headers=auth_header(token),
+    )
+    assert revoked.status_code == 200
+    cleared = client.delete(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["deleted_count"] == 2
+
 def test_memory_isolated_by_user(client: TestClient) -> None:
     token_a = register_and_login(client, "memory-a@example.com")
     token_b = register_and_login(client, "memory-b@example.com")
@@ -369,7 +581,7 @@ def test_database_migrations_are_versioned_and_persisted(client: TestClient) -> 
     rows = database.connect().execute(
         "SELECT version FROM schema_migrations ORDER BY version"
     ).fetchall()
-    assert [row["version"] for row in rows] >= [1, 2, 3]
+    assert [row["version"] for row in rows] == list(range(1, 22))
 
 
 def test_streaming_intelligence_endpoint_is_available(client: TestClient) -> None:
@@ -574,6 +786,7 @@ def test_deleted_user_cannot_create_sessions_or_personal_records(
     # Personal records must be physically removed.
     for table in (
         "memory_items",
+        "memory_consents",
         "observations",
         "adaptations",
         "tool_requests",
