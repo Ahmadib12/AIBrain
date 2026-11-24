@@ -6,6 +6,7 @@ private key is used only by the existing submitter and is never passed to tests.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import sys
@@ -17,8 +18,8 @@ from scripts.submit_conformance_evidence import load_evidence, submit_evidence
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binding", type=Path, required=True)
-    parser.add_argument("--commands", type=Path, required=True)
+    parser.add_argument("--suite", type=Path, required=True)
+    parser.add_argument("--authority-key-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-base-url", required=True)
     parser.add_argument("--key-id", required=True)
@@ -32,9 +33,17 @@ def main() -> int:
         # Execute first. Do not read or use any runner credentials until all
         # required checks have completed successfully and the manifest passes
         # the same verifier used by AIBrain.
+        authority_public_key_b64 = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "")
+        if not authority_public_key_b64:
+            raise ValueError("Pinned suite-authority public key is not provisioned")
+        try:
+            authority_public_key = base64.b64decode(authority_public_key_b64, validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise ValueError("Pinned suite-authority public key encoding is invalid") from exc
         result = run_suite(
-            binding=_load_json(args.binding),
-            commands=_load_json(args.commands),
+            suite_envelope=_load_json(args.suite),
+            authority_public_key=authority_public_key,
+            authority_key_id=args.authority_key_id,
             output_dir=args.output_dir,
             timeout_seconds=args.timeout_seconds,
             memory_mb=args.memory_mb,
