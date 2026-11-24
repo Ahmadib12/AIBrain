@@ -7,6 +7,8 @@ from backend.app.persistence.database import Database
 from backend.app.persistence.validation import validate_personal_payload
 
 
+CAPABILITY_CATALOG_VERSION = 1
+
 CAPABILITIES = frozenset({
     "research.read",
     "notes.read",
@@ -326,6 +328,23 @@ class AgentControlRepository:
         if row is None:
             raise LookupError("Message not found")
         return self._message(row)
+
+
+    def list_task_events(self, user_id: str, task_id: str, limit: int = 100) -> list[dict]:
+        self.get_task(user_id, task_id)
+        if not 1 <= limit <= 100:
+            raise ValueError("Limit must be between 1 and 100")
+        rows = self.database.connect().execute(
+            """SELECT * FROM agent_task_events
+               WHERE user_id=? AND task_id=? ORDER BY created_at,id LIMIT ?""",
+            (user_id, task_id, limit),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["details"] = json.loads(item.pop("details_json"))
+            result.append(item)
+        return result
 
     def list_messages(self, user_id: str, agent_id: str, limit: int = 100) -> list[dict]:
         self._agent(user_id, agent_id)
