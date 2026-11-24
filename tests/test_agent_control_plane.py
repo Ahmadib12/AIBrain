@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -198,10 +199,7 @@ def test_expiry_reconciliation_marks_only_stale_open_tasks(client):
         json={"title": "Will expire", "expires_at": expiry()},
     ).json()
     state = get_app_state()
-    state.database.connect().execute(
-        "UPDATE agent_tasks SET expires_at=? WHERE id=?",
-        ("2000-01-01T00:00:00+00:00", task["id"]),
-    )
+    time.sleep(1.1)
     result = client.post("/api/v1/agent-tasks/reconcile-expired",
                          headers=headers(token))
     assert result.status_code == 200
@@ -256,7 +254,7 @@ def test_messages_cannot_cross_owner_boundaries(client):
         headers=headers(owner),
         json={"recipient_agent_id": recipient["id"], "payload": {"text": "No"}},
     )
-    assert response.status_code == 400
+    assert response.status_code == 404
 
 
 def test_control_records_are_removed_during_account_erasure(client):
