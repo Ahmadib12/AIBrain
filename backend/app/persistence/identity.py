@@ -247,6 +247,14 @@ class IdentityRepository:
                 (user_id,),
             )
             connection.execute(
+                "DELETE FROM learning_evaluations WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
+                "DELETE FROM learning_adaptation_events WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
                 "DELETE FROM observations WHERE user_id = ?",
                 (user_id,),
             )
