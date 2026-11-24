@@ -68,6 +68,9 @@ def verify_signed_suite(
             raise ValueError(f"Invalid signed command for conformance check: {check_id}")
     if not isinstance(signature, str) or not signature or len(signature) > 256:
         raise ValueError("Suite authority signature is invalid")
+    canonical_payload = canonical_json(payload)
+    if len(canonical_payload) > 1024 * 1024:
+        raise ValueError("Signed conformance suite payload exceeds the 1 MiB limit")
     try:
         raw = base64.b64decode(
             signature + "=" * (-len(signature) % 4),
@@ -76,11 +79,11 @@ def verify_signed_suite(
         if len(raw) != 64:
             raise ValueError("Suite authority signature length is invalid")
         Ed25519PublicKey.from_public_bytes(authority_public_key).verify(
-            raw, canonical_json(payload)
+            raw, canonical_payload
         )
     except (ValueError, binascii.Error, InvalidSignature) as exc:
         raise PermissionError("Conformance suite authority signature verification failed") from exc
-    digest = hashlib.sha256(canonical_json(payload)).hexdigest()
+    digest = hashlib.sha256(canonical_payload).hexdigest()
     if not _SHA256.fullmatch(digest):
         raise ValueError("Signed suite digest is invalid")
     return {
