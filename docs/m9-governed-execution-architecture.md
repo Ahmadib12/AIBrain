@@ -45,8 +45,8 @@ M9 establishes the execution control plane and a first read-only runtime path. I
 
 ## M9.4 — Failure and audit
 
-- Run lifecycle: `proposed → authorized → running → completed/failed`; unstarted runs may be cancelled.
-- Step outcomes and lifecycle events are persisted.
+- Run lifecycle: `proposed → authorized → running → completed/failed`; unstarted runs may be cancelled or expired through explicit reconciliation.
+- Step start, completion, failure, and skip outcomes are persisted as immutable events; step status transitions require matching events.
 - A failed step halts the run; no automatic retry is attempted.
 - Run and step state transitions require matching immutable events at the database boundary.
 - Proposed/authorized runs can be expired through owner-scoped reconciliation; running runs are not replayed automatically.
