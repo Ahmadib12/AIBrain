@@ -233,3 +233,13 @@ def test_transport_rejects_ambiguous_or_oversized_response_framing(monkeypatch, 
     FakeConnection.default_response = FakeResponse(headers=headers)
     with pytest.raises(ProviderTransportRejected):
         transport.request("https://api.example.com/")
+
+
+def test_transport_rejects_truncated_or_mismatched_declared_body(monkeypatch):
+    transport = _transport(monkeypatch, max_response_bytes=32)
+    FakeConnection.default_response = FakeResponse(
+        headers=[("Content-Length", "20")],
+        body=b"short",
+    )
+    with pytest.raises(ProviderTransportRejected, match="does not match"):
+        transport.request("https://api.example.com/")
