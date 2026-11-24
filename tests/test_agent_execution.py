@@ -427,6 +427,29 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
                 (binding_step,),
             )
 
+    # The synchronous M9 executor remains unable to execute integration runs.
+    with pytest.raises(PermissionError, match="dedicated asynchronous orchestrator"):
+        state.agent_execution.execute_run(user_id, run["id"], None, None)
+
+    class SuccessfulCatalogAdapter:
+        async def execute(self, *, user_id, connection_id, tool_id, arguments):
+            return {"items": ["bounded-result"]}
+
+    state.integration_adapters.register("catalog", SuccessfulCatalogAdapter())
+    executed = client.post(
+        f"/api/v1/agent-runs/{run['id']}/execute", headers=auth(token)
+    )
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "completed"
+    assert executed.json()["steps"][0]["status"] == "completed"
+    assert executed.json()["steps"][0]["result"] == {"items": ["bounded-result"]}
+    dispatch = state.database.connect().execute(
+        "SELECT status,outcome_json FROM agent_run_integration_dispatches WHERE run_id=?",
+        (run["id"],),
+    ).fetchone()
+    assert dispatch["status"] == "succeeded"
+    assert dispatch["outcome_json"] == '{"items":["bounded-result"]}'
+
     # A revoked owner connection invalidates the previously authorized binding.
     state.integration_connections.revoke(user_id, connection["id"])
     raw_run = state.agent_execution._raw_run(user_id, run["id"])
@@ -435,6 +458,3 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
             user_id, raw_run, state.integrations, state.integration_connections
         )
 
-    # The synchronous M9 executor must never execute integration-bound runs.
-    with pytest.raises(PermissionError, match="dedicated asynchronous orchestrator"):
-        state.agent_execution.execute_run(user_id, run["id"], None, None)
