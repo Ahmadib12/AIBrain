@@ -44,8 +44,8 @@ def create_active_agent(client: TestClient, token: str, name: str) -> dict:
     return agent
 
 
-def expiry(hours: int = 1) -> str:
-    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+def expiry(seconds: int = 3600) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
 
 def test_capability_grants_are_allowlisted_owner_scoped_and_revocable(client):
@@ -196,7 +196,7 @@ def test_expiry_reconciliation_marks_only_stale_open_tasks(client):
     agent = create_active_agent(client, token, "Expiry agent")
     task = client.post(
         f"/api/v1/agents/{agent['id']}/tasks", headers=headers(token),
-        json={"title": "Will expire", "expires_at": expiry()},
+        json={"title": "Will expire", "expires_at": expiry(seconds=1)},
     ).json()
     state = get_app_state()
     time.sleep(1.1)
