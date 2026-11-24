@@ -269,28 +269,51 @@ def test_memory_consent_revocation_locks_old_records_and_new_consent_does_not_re
     assert deleted.status_code == 200
 
 
-def test_memory_consent_purge_option_erases_existing_records(client: TestClient) -> None:
+def test_memory_consent_purge_option_erases_all_consent_generations(
+    client: TestClient,
+) -> None:
     token = register_and_login(client, "memory-purge@example.com")
     grant_memory_consent(client, token)
-    created = client.post(
+    first = client.post(
         "/api/v1/personal/memory",
         headers=auth_header(token),
         json={
             "memory_type": "context",
-            "key": "temporary",
-            "value": "remove this",
+            "key": "first-generation",
+            "value": "old locked record",
             "source": "explicit",
             "confidence": 1.0,
         },
     )
-    assert created.status_code == 200
+    assert first.status_code == 200
+
+    revoked_first = client.delete(
+        "/api/v1/personal/memory/consent",
+        headers=auth_header(token),
+    )
+    assert revoked_first.status_code == 200
+    assert revoked_first.json()["deleted_memories"] == 0
+
+    grant_memory_consent(client, token)
+    second = client.post(
+        "/api/v1/personal/memory",
+        headers=auth_header(token),
+        json={
+            "memory_type": "context",
+            "key": "second-generation",
+            "value": "new active record",
+            "source": "explicit",
+            "confidence": 1.0,
+        },
+    )
+    assert second.status_code == 200
 
     revoked = client.delete(
         "/api/v1/personal/memory/consent?purge_existing=true",
         headers=auth_header(token),
     )
     assert revoked.status_code == 200
-    assert revoked.json()["deleted_memories"] == 1
+    assert revoked.json()["deleted_memories"] == 2
     assert client.get(
         "/api/v1/personal/memory",
         headers=auth_header(token),
