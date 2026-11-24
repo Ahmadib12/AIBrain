@@ -2243,6 +2243,90 @@ class Database:
                 BEGIN SELECT RAISE(ABORT,'integration events may only be deleted during account erasure'); END;
                 """
             ),
+            (
+                29,
+                """
+                CREATE TABLE integration_secrets (
+                    secret_ref TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    integration_id TEXT NOT NULL,
+                    nonce BLOB NOT NULL CHECK (length(nonce)=12),
+                    ciphertext BLOB NOT NULL CHECK (length(ciphertext)>=16),
+                    key_version INTEGER NOT NULL CHECK (key_version>=1),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(connection_id,user_id)
+                        REFERENCES integration_connections(id,user_id) ON DELETE CASCADE,
+                    UNIQUE(connection_id)
+                );
+                CREATE INDEX idx_integration_secrets_owner
+                    ON integration_secrets(user_id,connection_id);
+
+                DROP TRIGGER IF EXISTS require_verified_integration_activation;
+                CREATE TRIGGER require_verified_integration_activation
+                BEFORE UPDATE OF status ON integration_connections
+                WHEN NEW.status='active'
+                  AND (
+                    NEW.verified_at IS NULL
+                    OR NEW.secret_ref IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1 FROM integration_secrets s
+                      WHERE s.secret_ref=NEW.secret_ref
+                        AND s.user_id=NEW.user_id
+                        AND s.connection_id=NEW.id
+                        AND s.integration_id=NEW.integration_id
+                    )
+                  )
+                BEGIN
+                    SELECT RAISE(ABORT,'integration activation requires verified vault credentials');
+                END;
+
+                CREATE TRIGGER validate_integration_secret_insert
+                BEFORE INSERT ON integration_secrets
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM integration_connections c
+                    JOIN users u ON u.id=c.user_id
+                    WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                      AND c.integration_id=NEW.integration_id
+                      AND c.status='pending_verification'
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT,'vault secret requires matching pending owner connection');
+                END;
+
+                CREATE TRIGGER prevent_integration_secret_identity_update
+                BEFORE UPDATE OF secret_ref,user_id,connection_id,integration_id,created_at
+                ON integration_secrets
+                BEGIN
+                    SELECT RAISE(ABORT,'vault secret identity is immutable');
+                END;
+
+                CREATE TRIGGER prevent_integration_secret_delete
+                BEFORE DELETE ON integration_secrets
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM integration_connections c
+                    WHERE c.id=OLD.connection_id AND c.user_id=OLD.user_id
+                      AND c.status IN ('revoked','disconnected','expired')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT,'vault secrets may only be deleted during revocation or account erasure');
+                END;
+
+                CREATE TRIGGER erase_integration_secret_on_terminal_connection
+                AFTER UPDATE OF status ON integration_connections
+                WHEN NEW.status IN ('revoked','disconnected','expired')
+                  AND OLD.status <> NEW.status
+                BEGIN
+                    DELETE FROM integration_secrets
+                    WHERE connection_id=NEW.id AND user_id=NEW.user_id;
+                END;
+                """
+            ),
         )
 
         with self._lock:
