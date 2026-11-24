@@ -30,7 +30,7 @@ class FakeVerifier:
         self, *, user_id, integration_id, connection_id,
         credential_material, requested_scopes,
     ):
-        assert credential_material["access_token"] == "never-log-this"
+        assert credential_material["access_token"] in {"never-log-this", "rotated-secret"}
         return ProviderVerification(
             granted_scopes=tuple(requested_scopes),
             provider_subject_fingerprint="a" * 64,
