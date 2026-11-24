@@ -113,7 +113,7 @@ def test_suite_version_must_match_signed_binding():
             private.sign(canonical_json(payload))
         ).decode("ascii").rstrip("="),
     }
-    with pytest.raises(PermissionError, match="suite version"):
+    with pytest.raises(PermissionError, match="identity or version"):
         verify(envelope, public)
 
 
