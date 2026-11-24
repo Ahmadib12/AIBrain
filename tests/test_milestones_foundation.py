@@ -246,10 +246,25 @@ def test_memory_consent_revocation_locks_old_records_and_new_consent_does_not_re
     assert revoked.status_code == 200
     assert revoked.json()["enabled"] is False
     assert revoked.json()["deleted_memories"] == 0
-    assert client.get(
+    # Revocation blocks assistant retrieval but does not hide owner-held data.
+    owner_list = client.get(
         "/api/v1/personal/memory",
         headers=auth_header(token),
-    ).json() == []
+    )
+    assert len(owner_list.json()) == 1
+    assert owner_list.json()[0]["id"] == memory_id
+    locked_search = client.post(
+        "/api/v1/personal/memory/search",
+        headers=auth_header(token),
+        json={"query": "language"},
+    )
+    assert locked_search.status_code == 403
+    owner_export = client.post(
+        "/api/v1/personal/memory/export",
+        headers=auth_header(token),
+    )
+    assert owner_export.status_code == 200
+    assert owner_export.json()["memories"][0]["id"] == memory_id
 
     regranted = client.post(
         "/api/v1/personal/memory/consent",
@@ -257,10 +272,19 @@ def test_memory_consent_revocation_locks_old_records_and_new_consent_does_not_re
         json={"retention_days": 365},
     )
     assert regranted.status_code == 200
-    assert client.get(
+    # A new consent does not adopt old records into model context.
+    owner_list_after_regrant = client.get(
         "/api/v1/personal/memory",
         headers=auth_header(token),
-    ).json() == []
+    )
+    assert [item["id"] for item in owner_list_after_regrant.json()] == [memory_id]
+    search_after_regrant = client.post(
+        "/api/v1/personal/memory/search",
+        headers=auth_header(token),
+        json={"query": "language"},
+    )
+    assert search_after_regrant.status_code == 200
+    assert search_after_regrant.json()["matches"] == []
 
     deleted = client.delete(
         f"/api/v1/personal/memory/{memory_id}",
