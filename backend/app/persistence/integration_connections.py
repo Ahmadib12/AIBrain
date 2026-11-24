@@ -180,3 +180,129 @@ class IntegrationConnectionRepository:
             if grant is None:
                 return False
         return True
+
+
+    def activate_verified(
+        self, user_id: str, connection_id: str, *, secret_ref: str,
+        verifier_id: str, provider_subject_fingerprint: str,
+        granted_scopes: tuple[str, ...], expires_at: str | None,
+    ) -> dict:
+        """Activate only after the trusted verifier and vault have succeeded."""
+        now = _now()
+        with self.database.transaction(immediate=True):
+            row = self.database.connect().execute(
+                """SELECT integration_id,status FROM integration_connections
+                   WHERE id=? AND user_id=?""",
+                (connection_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("Integration connection not found")
+            if row["status"] != "pending_verification":
+                raise PermissionError("Connection is no longer pending verification")
+            pending = self.database.connect().execute(
+                """SELECT scope FROM integration_connection_grants
+                   WHERE connection_id=? AND user_id=? AND status='pending'
+                   ORDER BY scope""",
+                (connection_id, user_id),
+            ).fetchall()
+            expected = tuple(item["scope"] for item in pending)
+            if tuple(sorted(granted_scopes)) != expected:
+                raise PermissionError("Provider scopes do not match owner consent")
+            self.database.connect().execute(
+                """UPDATE integration_connections
+                   SET status='active',verified_at=?,expires_at=?,secret_ref=?,updated_at=?
+                   WHERE id=? AND user_id=? AND status='pending_verification'""",
+                (now, expires_at, secret_ref, now, connection_id, user_id),
+            )
+            self.database.connect().execute(
+                """UPDATE integration_connection_grants
+                   SET status='active',expires_at=?
+                   WHERE connection_id=? AND user_id=? AND status='pending'""",
+                (expires_at, connection_id, user_id),
+            )
+            self._event(user_id, connection_id, "provider_connection_verified", {
+                "verifier_id": verifier_id,
+                "provider_subject_fingerprint": provider_subject_fingerprint,
+                "granted_scopes": list(expected),
+                "expires_at": expires_at,
+            })
+        return self.get(user_id, connection_id)
+
+    def expire_pending(self, user_id: str, connection_id: str) -> None:
+        now = _now()
+        with self.database.transaction(immediate=True):
+            row = self.database.connect().execute(
+                """SELECT status FROM integration_connections
+                   WHERE id=? AND user_id=?""",
+                (connection_id, user_id),
+            ).fetchone()
+            if row is None or row["status"] != "pending_verification":
+                return
+            self.database.connect().execute(
+                """UPDATE integration_connections SET status='expired',updated_at=?
+                   WHERE id=? AND user_id=? AND status='pending_verification'""",
+                (now, connection_id, user_id),
+            )
+            self.database.connect().execute(
+                """UPDATE integration_connection_grants SET status='expired'
+                   WHERE connection_id=? AND user_id=? AND status='pending'""",
+                (connection_id, user_id),
+            )
+            self._event(user_id, connection_id, "pending_connection_expired", {})
+
+    def expire_due(self) -> int:
+        """Expire connections and grants atomically; terminal connections lose ciphertext."""
+        now = _now()
+        changed = 0
+        rows = self.database.connect().execute(
+            """SELECT id,user_id,status FROM integration_connections
+               WHERE status IN ('pending_verification','active')
+                 AND expires_at IS NOT NULL AND expires_at<=?""",
+            (now,),
+        ).fetchall()
+        for row in rows:
+            with self.database.transaction(immediate=True):
+                current = self.database.connect().execute(
+                    """SELECT status,expires_at FROM integration_connections
+                       WHERE id=? AND user_id=?""",
+                    (row["id"], row["user_id"]),
+                ).fetchone()
+                if (
+                    current is None or current["status"] not in
+                    {"pending_verification", "active"}
+                    or current["expires_at"] is None
+                    or current["expires_at"] > now
+                ):
+                    continue
+                self.database.connect().execute(
+                    """UPDATE integration_connections SET status='expired',updated_at=?
+                       WHERE id=? AND user_id=?""",
+                    (now, row["id"], row["user_id"]),
+                )
+                self.database.connect().execute(
+                    """UPDATE integration_connection_grants
+                       SET status='expired' WHERE connection_id=? AND user_id=?
+                         AND status IN ('pending','active')""",
+                    (row["id"], row["user_id"]),
+                )
+                self._event(row["user_id"], row["id"], "connection_expired", {})
+                changed += 1
+
+        grant_rows = self.database.connect().execute(
+            """SELECT id,user_id,connection_id FROM integration_connection_grants
+               WHERE status='active' AND expires_at IS NOT NULL AND expires_at<=?""",
+            (now,),
+        ).fetchall()
+        for grant in grant_rows:
+            with self.database.transaction(immediate=True):
+                cursor = self.database.connect().execute(
+                    """UPDATE integration_connection_grants SET status='expired'
+                       WHERE id=? AND user_id=? AND status='active' AND expires_at<=?""",
+                    (grant["id"], grant["user_id"], now),
+                )
+                if cursor.rowcount:
+                    self._event(grant["user_id"], grant["connection_id"], "scope_grant_expired", {
+                        "grant_id": grant["id"],
+                    })
+                    changed += 1
+        return changed
