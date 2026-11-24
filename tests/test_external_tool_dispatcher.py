@@ -133,6 +133,10 @@ class RepositoryStub:
             },
         }
 
+    def begin_external_outcome_lookup(self, user_id, request_id, **values):
+        self.calls.append(("lookup_authorized", values["certification_id"]))
+        return {"id": "lookup-authorization-1"}
+
     def record_external_outcome_lookup(self, user_id, request_id, **values):
         self.calls.append(("lookup", values["outcome"]))
 
