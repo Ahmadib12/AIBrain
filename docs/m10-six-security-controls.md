@@ -31,8 +31,9 @@ remains disabled.
 
 ## 3. Expiry, rotation, revocation, and race safety
 
-- Connection and scope expiry are checked at runtime and can be reconciled by
-  `IntegrationConnectionRepository.expire_due()`.
+- Pending provider verification expires after 15 minutes; connection and scope
+  expiry are checked at runtime and reconciled by a managed application-lifespan
+  worker calling `IntegrationConnectionRepository.expire_due()`.
 - Revocation, disconnect, and terminal expiry destroy the encrypted vault row
   through a database trigger.
 - Provider credential rotation must pass through the trusted lifecycle service;
