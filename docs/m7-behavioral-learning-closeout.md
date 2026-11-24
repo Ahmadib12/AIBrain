@@ -45,8 +45,10 @@
 ### M7.5 — Persistence and account lifecycle
 - Migration 22 adds immutable adaptation-event and evaluation ledgers and
   proposal expiry.
-- SQLite triggers independently enforce owner matching, approved-state
-  evaluation, and immutable history.
+- SQLite triggers independently enforce owner matching, the adaptation
+  transition graph, approved-and-unexpired evaluation, and immutable history.
+- Adaptations created before M7 retain a null expiry for compatibility; only
+  new proposals receive the M7 default deadline.
 - Account erasure removes evaluations and event history as part of the
   existing user-data deletion transaction.
 
