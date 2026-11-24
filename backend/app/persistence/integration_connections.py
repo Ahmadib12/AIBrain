@@ -305,4 +305,82 @@ class IntegrationConnectionRepository:
                         "grant_id": grant["id"],
                     })
                     changed += 1
+        # If every owner-granted scope has expired, expire the connection too
+        # so the terminal-state trigger destroys its encrypted credentials.
+        inactive = self.database.connect().execute(
+            """SELECT c.id,c.user_id FROM integration_connections c
+               WHERE c.status='active'
+                 AND NOT EXISTS (
+                   SELECT 1 FROM integration_connection_grants g
+                   WHERE g.connection_id=c.id AND g.user_id=c.user_id
+                     AND g.status='active' AND g.revoked_at IS NULL
+                     AND (g.expires_at IS NULL OR g.expires_at>?)
+                 )""",
+            (now,),
+        ).fetchall()
+        for row in inactive:
+            with self.database.transaction(immediate=True):
+                cursor = self.database.connect().execute(
+                    """UPDATE integration_connections SET status='expired',updated_at=?
+                       WHERE id=? AND user_id=? AND status='active'""",
+                    (now, row["id"], row["user_id"]),
+                )
+                if cursor.rowcount:
+                    self.database.connect().execute(
+                        """UPDATE integration_connection_grants SET status='expired'
+                           WHERE connection_id=? AND user_id=? AND status='active'""",
+                        (row["id"], row["user_id"]),
+                    )
+                    self._event(row["user_id"], row["id"], "connection_expired_no_active_grants", {})
+                    changed += 1
         return changed
+
+
+    def latest_provider_subject(self, user_id: str, connection_id: str) -> str | None:
+        row = self.database.connect().execute(
+            """SELECT details_json FROM integration_connection_events
+               WHERE user_id=? AND connection_id=?
+                 AND event_type IN ('provider_connection_verified','provider_credentials_rotated')
+               ORDER BY created_at DESC,id DESC LIMIT 1""",
+            (user_id, connection_id),
+        ).fetchone()
+        if row is None:
+            return None
+        details = json.loads(row["details_json"])
+        return details.get("provider_subject_fingerprint")
+
+    def record_credential_rotation(
+        self, user_id: str, connection_id: str, *,
+        verifier_id: str, provider_subject_fingerprint: str,
+        expires_at: str | None,
+    ) -> dict:
+        now = _now()
+        with self.database.transaction(immediate=True):
+            row = self.database.connect().execute(
+                """SELECT c.integration_id,c.status,s.key_version
+                   FROM integration_connections c
+                   JOIN integration_secrets s
+                     ON s.secret_ref=c.secret_ref AND s.connection_id=c.id
+                    AND s.user_id=c.user_id AND s.integration_id=c.integration_id
+                   WHERE c.id=? AND c.user_id=?""",
+                (connection_id, user_id),
+            ).fetchone()
+            if row is None or row["status"] != "active":
+                raise PermissionError("Active verified credentials are required for rotation")
+            self.database.connect().execute(
+                """UPDATE integration_connections SET expires_at=?,updated_at=?
+                   WHERE id=? AND user_id=? AND status='active'""",
+                (expires_at, now, connection_id, user_id),
+            )
+            self.database.connect().execute(
+                """UPDATE integration_connection_grants SET expires_at=?
+                   WHERE connection_id=? AND user_id=? AND status='active'""",
+                (expires_at, connection_id, user_id),
+            )
+            self._event(user_id, connection_id, "provider_credentials_rotated", {
+                "verifier_id": verifier_id,
+                "provider_subject_fingerprint": provider_subject_fingerprint,
+                "expires_at": expires_at,
+                "key_version": row["key_version"],
+            })
+        return self.get(user_id, connection_id)
