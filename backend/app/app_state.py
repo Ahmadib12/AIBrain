@@ -20,6 +20,7 @@ from backend.app.tools.integration_runtime import (
     IntegrationAdapterRegistry,
     ReadOnlyIntegrationRuntime,
 )
+from backend.app.tools.integration_orchestrator import IntegrationAgentRunOrchestrator
 
 
 class AppState:
@@ -52,6 +53,10 @@ class AppState:
             manifests=self.integrations,
             adapters=self.integration_adapters,
             connections=self.integration_connections,
+        )
+        self.integration_orchestrator = IntegrationAgentRunOrchestrator(
+            execution=self.agent_execution,
+            runtime=self.integration_runtime,
         )
         suite_trust = None
         if settings.conformance_suite_authority_public_key_b64 is not None:
