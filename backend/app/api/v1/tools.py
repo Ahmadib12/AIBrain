@@ -170,6 +170,46 @@ def _public_execution_history_event(event: dict) -> dict:
     }
 
 
+_OPERATOR_EXECUTION_HISTORY_PUBLIC_FIELDS = {
+    "dispatch_audit": {
+        "attempt_id", "adapter_id", "adapter_version",
+        "provider_id", "provider_scope", "error_code",
+    },
+    "dispatch_recovery": {
+        "reason", "adapter_id", "adapter_version",
+        "provider_id", "provider_scope",
+    },
+    "lookup_authorization": {
+        "provider_id", "adapter_id", "adapter_version",
+        "provider_scope", "tool_id", "runner_key_id",
+        "evidence_package_id", "tool_contract_fingerprint",
+    },
+    "execution_reconciliation": {
+        "outcome", "error_code", "note", "reconciled_by",
+    },
+}
+
+
+def _operator_execution_history_event(event: dict) -> dict:
+    """Project internal history to diagnostic fields approved for operators."""
+    record_type = event["record_type"]
+    allowed = _OPERATOR_EXECUTION_HISTORY_PUBLIC_FIELDS.get(record_type, set())
+    details = event.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    return {
+        "id": event["id"],
+        "record_type": record_type,
+        "event_type": event["event_type"],
+        "action_digest": event.get("action_digest"),
+        "details": {
+            key: value for key, value in details.items() if key in allowed
+        },
+        "created_at": event["created_at"],
+        "certification_id": event.get("certification_id"),
+    }
+
+
 @router.get("")
 async def list_tools(
     user: dict = Depends(get_current_user),
@@ -446,6 +486,57 @@ async def get_tool_execution_history(
         "items": [
             _public_execution_history_event(event)
             for event in visible_events
+        ],
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": offset + limit if has_more else None,
+        },
+    }
+
+
+@router.get("/operator/requests/{request_id}/history")
+async def get_operator_tool_execution_history(
+    request_id: str,
+    reason: str = Query(..., min_length=8, max_length=500),
+    limit: int = Query(default=25, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    operator: dict = Depends(require_security_operator),
+) -> dict:
+    """Return privileged execution diagnostics and audit the read itself."""
+    try:
+        history = get_app_state().tool_requests.get_execution_history_for_operator(
+            operator,
+            request_id,
+            reason=reason,
+            limit=limit,
+            offset=offset,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "TOOL_REQUEST_NOT_FOUND",
+                "message": "Tool request not found",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_INVESTIGATION_REASON",
+                "message": "A valid bounded investigation reason is required",
+            },
+        ) from None
+
+    events = history["events"]
+    has_more = len(events) > limit
+    return {
+        "request": history["request"],
+        "items": [
+            _operator_execution_history_event(event)
+            for event in events[:limit]
         ],
         "pagination": {
             "limit": limit,
