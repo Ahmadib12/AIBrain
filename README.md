@@ -179,13 +179,13 @@ Example invocation:
 
 ```bash
 export AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64="<pinned-public-key-base64>"
+export AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID="suite-authority-2026-01"
 python -m scripts.conformance_runner \\
   --suite signed-conformance-suite.json \\
-  --authority-key-id suite-authority-2026-01 \\
   --output-dir ./conformance-output
 ```
 
-The signed suite payload schema is `aibrain-conformance-suite-v1`; its signature covers the suite identity, version, exact provider/tool binding, and every argv command. The suite-authority public key and key ID must be pinned by the runner deployment, not supplied by the suite file. The private suite-authority key is kept offline and separate from the runner attestation key. The runner records the signed suite as an evidence artifact and binds its digest, per-command digests, and execution limits into the execution report. A signature proves that the authority approved the exact commands; it does not prove that human-authored test logic correctly exercises a provider guarantee. Review and version-control suite source before signing.
+The signed suite payload schema is `aibrain-conformance-suite-v1`; its signature covers the suite identity, version, exact provider/tool binding, and every argv command. The suite-authority public key and key ID must be pinned by the runner deployment through `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64` and `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`, not supplied by the suite file or command line. The private suite-authority key is kept offline and separate from the runner attestation key. The runner records the signed suite as an evidence artifact and binds its digest, per-command digests, and execution limits into the execution report. A signature proves that the authority approved the exact commands; it does not prove that human-authored test logic correctly exercises a provider guarantee. Review and version-control suite source before signing.
 
 **Isolation limitation:** this is a bounded POSIX subprocess supervisor, not yet a hostile-code sandbox. It does not create a network namespace, enforce provider-domain egress allowlists, or isolate the child from the runner account's kernel. Deploy only inside a separately hardened ephemeral VM/container with a dedicated unprivileged account, read-only source, and externally enforced network policy and container/cgroup PID limits. Keep signing keys and ingestion credentials in a separate submission step after test execution; never mount them into the test environment. The existing evidence verifier, trusted-runner attestation, and independent operator approval remain mandatory. Production dispatch remains disabled.
 
@@ -214,6 +214,7 @@ python -m scripts.run_and_attest_conformance \
 
 Required orchestration environment variables:
 `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64`,
+`AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`,
 `AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN`, and
 `AIBRAIN_RUNNER_PRIVATE_KEY_B64`. The signing key must correspond to a
 registered, non-revoked public key scoped to the exact provider, adapter,
