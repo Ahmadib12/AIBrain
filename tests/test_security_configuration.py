@@ -20,3 +20,35 @@ def test_security_operator_uses_account_allowlist_not_shared_secret():
     assert settings.security_operator_emails == (
         "Security@example.com, reviewer@example.com"
     )
+
+
+
+def test_conformance_suite_authority_pins_must_be_configured_together():
+    with pytest.raises(ValueError, match="configured together"):
+        Settings(
+            conformance_suite_authority_key_id="suite-authority",
+        )
+
+
+def test_conformance_suite_authority_requires_raw_ed25519_public_key():
+    import base64
+
+    with pytest.raises(ValueError, match="32 bytes"):
+        Settings(
+            conformance_suite_authority_public_key_b64=base64.b64encode(b"short").decode(),
+            conformance_suite_authority_key_id="suite-authority",
+            conformance_suite_expected_id="provider-suite",
+            conformance_suite_expected_version="v1",
+        )
+
+
+def test_conformance_suite_authority_accepts_complete_deployment_pins():
+    import base64
+
+    settings = Settings(
+        conformance_suite_authority_public_key_b64=base64.b64encode(b"k" * 32).decode(),
+        conformance_suite_authority_key_id="suite-authority",
+        conformance_suite_expected_id="provider-suite",
+        conformance_suite_expected_version="v1",
+    )
+    assert settings.conformance_suite_authority_key_id == "suite-authority"
