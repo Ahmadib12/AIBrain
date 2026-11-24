@@ -36,8 +36,8 @@ async def lifespan(app: FastAPI):
     )
     integration_dispatch_recovery_worker = IntegrationDispatchRecoveryWorker(
         state.integration_orchestrator,
-        interval_seconds=settings.integration_expiry_interval_seconds,
-        stale_after_seconds=settings.tool_execution_stale_after_seconds,
+        interval_seconds=settings.integration_dispatch_recovery_interval_seconds,
+        stale_after_seconds=settings.integration_dispatch_stale_after_seconds,
     )
     try:
         await recovery_worker.start()
