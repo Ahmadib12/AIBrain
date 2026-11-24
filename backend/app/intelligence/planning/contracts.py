@@ -56,7 +56,10 @@ class IntentContract(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     confidence: float = Field(ge=0.0, le=1.0)
     ambiguities: tuple[str, ...] = Field(default_factory=tuple, max_length=10)
-    context_available: bool = False
+    context_available: bool = Field(
+        default=False,
+        description="Indicates prior turns were supplied; does not assert semantic relevance.",
+    )
 
     @field_validator("intent_id")
     @classmethod
