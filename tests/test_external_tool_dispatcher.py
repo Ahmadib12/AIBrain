@@ -955,3 +955,236 @@ def test_runner_key_revocation_racing_dispatch_is_linearized(tmp_path):
     finally:
         second_database.close()
         database.close()
+
+
+
+def _prepare_unknown_provider_outcome(repository, user_id, request_id, fingerprint, provider, snapshot):
+    repository.begin_external_dispatch(
+        user_id,
+        request_id,
+        expected_contract_fingerprint=fingerprint,
+        adapter_id=provider.capabilities.adapter_id,
+        adapter_version=provider.capabilities.adapter_version,
+        provider_id=provider.capabilities.provider_id,
+        provider_scope=provider.capabilities.provider_scope,
+        capabilities=snapshot,
+    )
+    binding = repository.get_execution_binding(user_id, request_id)
+    repository.record_external_dispatch_outcome(
+        user_id,
+        request_id,
+        outcome="unknown",
+        action_digest=binding["action_digest"],
+        error_code="provider_outcome_unknown",
+    )
+    return binding
+
+
+def _active_lookup_certification(repository, provider, user_id, request_id, fingerprint, snapshot):
+    return repository.get_active_external_adapter_certification(
+        provider_id=provider.capabilities.provider_id,
+        adapter_id=provider.capabilities.adapter_id,
+        adapter_version=provider.capabilities.adapter_version,
+        provider_scope=provider.capabilities.provider_scope,
+        tool_id=contract().tool_id,
+        tool_contract_fingerprint=fingerprint,
+        capabilities=snapshot,
+    )
+
+
+def _begin_lookup_authorization(repository, user_id, request_id, fingerprint, provider, snapshot, binding, certification):
+    return repository.begin_external_outcome_lookup(
+        user_id,
+        request_id,
+        certification_id=certification["id"],
+        provider_id=provider.capabilities.provider_id,
+        adapter_id=provider.capabilities.adapter_id,
+        adapter_version=provider.capabilities.adapter_version,
+        provider_scope=provider.capabilities.provider_scope,
+        tool_id=contract().tool_id,
+        tool_contract_fingerprint=fingerprint,
+        capabilities=snapshot,
+        action_digest=binding["action_digest"],
+    )
+
+
+def test_lookup_authorization_racing_runner_key_revocation_is_linearized(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    second_database = Database(database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    try:
+        binding = _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        certification = _active_lookup_certification(
+            repository, provider, user_id, request_id, fingerprint, snapshot
+        )
+        assert certification is not None
+        barrier = Barrier(2)
+
+        def authorize():
+            barrier.wait(timeout=10)
+            try:
+                return _begin_lookup_authorization(
+                    repository, user_id, request_id, fingerprint,
+                    provider, snapshot, binding, certification,
+                )
+            except PermissionError:
+                return None
+
+        def revoke():
+            barrier.wait(timeout=10)
+            second_repository.revoke_trusted_runner_key(
+                "dispatcher-runner-key",
+                revoked_by="concurrent-security-operator",
+                reason="Lookup authorization race test",
+            )
+            return True
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            authorization_future = executor.submit(authorize)
+            revocation_future = executor.submit(revoke)
+            authorization = authorization_future.result(timeout=20)
+            assert revocation_future.result(timeout=20) is True
+
+        count = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0]
+        assert count == (1 if authorization is not None else 0)
+        if authorization is not None:
+            assert authorization["runner_key_id"] == "dispatcher-runner-key"
+    finally:
+        second_database.close()
+        database.close()
+
+
+def test_lookup_authorization_racing_certification_revocation_is_linearized(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    second_database = Database(database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    try:
+        binding = _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        certification = _active_lookup_certification(
+            repository, provider, user_id, request_id, fingerprint, snapshot
+        )
+        assert certification is not None
+        barrier = Barrier(2)
+
+        def authorize():
+            barrier.wait(timeout=10)
+            try:
+                return _begin_lookup_authorization(
+                    repository, user_id, request_id, fingerprint,
+                    provider, snapshot, binding, certification,
+                )
+            except PermissionError:
+                return None
+
+        def revoke():
+            barrier.wait(timeout=10)
+            second_repository.revoke_external_adapter_certification(
+                certification["id"],
+                revoked_by="concurrent-security-operator",
+                reason="Lookup certification race test",
+            )
+            return True
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            authorization_future = executor.submit(authorize)
+            revocation_future = executor.submit(revoke)
+            authorization = authorization_future.result(timeout=20)
+            assert revocation_future.result(timeout=20) is True
+
+        count = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0]
+        assert count == (1 if authorization is not None else 0)
+    finally:
+        second_database.close()
+        database.close()
+
+
+def test_revocation_after_lookup_authorization_does_not_cancel_inflight_lookup(tmp_path):
+    from threading import Event
+
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    entered_provider = Event()
+    release_provider = Event()
+    original_lookup = provider.lookup
+
+    def blocked_lookup(idempotency_key):
+        entered_provider.set()
+        if not release_provider.wait(timeout=10):
+            raise TimeoutError("Test did not release provider lookup")
+        return original_lookup(idempotency_key)
+
+    provider.lookup = blocked_lookup
+    try:
+        _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            lookup_future = executor.submit(dispatcher.lookup, user_id, request_id)
+            assert entered_provider.wait(timeout=10)
+            authorization_count = database.connect().execute(
+                "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()[0]
+            assert authorization_count == 1
+
+            repository.revoke_trusted_runner_key(
+                "dispatcher-runner-key",
+                revoked_by="concurrent-security-operator",
+                reason="Revoked after lookup authorization committed",
+            )
+            release_provider.set()
+            outcome = lookup_future.result(timeout=15)
+
+        assert outcome.status is ExternalToolOutcomeStatus.SUCCEEDED
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        lookup_events = [event for event in audit if event["event_type"] == "outcome_lookup"]
+        assert len(lookup_events) == 1
+        assert lookup_events[0]["details"]["lookup_authorization_id"]
+    finally:
+        release_provider.set()
+        database.close()
+
+
+def test_provider_lookup_failure_keeps_authorization_without_success_audit(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+
+        def fail_lookup(_idempotency_key):
+            raise RuntimeError("simulated provider lookup failure")
+
+        provider.lookup = fail_lookup
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        with pytest.raises(RuntimeError, match="simulated provider lookup failure"):
+            dispatcher.lookup(user_id, request_id)
+
+        authorization_count = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_dispatch_lookup_authorizations WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0]
+        assert authorization_count == 1
+        audit = repository.get_dispatch_audit(user_id, request_id)
+        assert not any(event["event_type"] == "outcome_lookup" for event in audit)
+        assert repository.get(user_id, request_id)["status"] == "outcome_unknown"
+    finally:
+        database.close()
