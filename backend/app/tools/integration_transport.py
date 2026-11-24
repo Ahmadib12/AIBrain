@@ -142,7 +142,7 @@ class PinnedProviderHTTPTransport:
                 or name.lower() in _FORBIDDEN_HEADERS
                 or not isinstance(value, str)
                 or len(value) > 4096
-                or any(char in value for char in "\r\n")
+                or any((ord(char) < 32 and char != "\t") or ord(char) > 126 for char in value)
             ):
                 raise ProviderTransportRejected("Provider request header is prohibited")
             total_header_bytes += len(name) + len(value) + 4
@@ -179,6 +179,23 @@ class PinnedProviderHTTPTransport:
             )
             if header_bytes > self.max_response_header_bytes:
                 raise ProviderTransportRejected("Provider response headers exceed the size limit")
+            normalized_headers: dict[str, list[str]] = {}
+            for name, value in raw_headers:
+                normalized_headers.setdefault(name.lower(), []).append(value.strip())
+            if any(len(values) > 1 for name, values in normalized_headers.items() if name in {"content-length", "transfer-encoding"}):
+                raise ProviderTransportRejected("Provider response framing headers are ambiguous")
+            if "content-length" in normalized_headers:
+                try:
+                    declared_length = int(normalized_headers["content-length"][0])
+                except ValueError:
+                    raise ProviderTransportRejected("Provider response length is invalid") from None
+                if declared_length < 0 or declared_length > self.max_response_bytes:
+                    raise ProviderTransportRejected("Provider response body exceeds the size limit")
+            if "transfer-encoding" in normalized_headers and (
+                normalized_headers["transfer-encoding"] != ["chunked"]
+                or "content-length" in normalized_headers
+            ):
+                raise ProviderTransportRejected("Provider response transfer encoding is prohibited")
             if 300 <= response.status < 400:
                 raise ProviderTransportRejected("Provider redirects are prohibited")
             body_bytes = response.read(self.max_response_bytes + 1)
