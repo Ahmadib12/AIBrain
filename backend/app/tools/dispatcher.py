@@ -240,14 +240,34 @@ class ExternalToolDispatcher:
         capabilities = adapter.capabilities
         if not capabilities.supports_outcome_lookup:
             raise PermissionError("Adapter does not support outcome lookup")
+        snapshot = _capability_snapshot(adapter)
         if (
             binding["adapter_id"] != capabilities.adapter_id
             or binding["adapter_version"] != capabilities.adapter_version
             or binding["provider_id"] != capabilities.provider_id
             or binding["provider_scope"] != capabilities.provider_scope
-            or binding["capabilities"] != _capability_snapshot(adapter)
+            or binding["capabilities"] != snapshot
         ):
             raise PermissionError("Lookup adapter does not match persisted binding")
+
+        # A previously certified adapter is not trusted forever. Revalidate
+        # the complete evidence chain immediately before querying provider
+        # state, including certification expiry/revocation and runner-key
+        # revocation. Lookup is read-only, but still crosses a trust boundary.
+        certification = self.repository.get_active_external_adapter_certification(
+            provider_id=capabilities.provider_id,
+            adapter_id=capabilities.adapter_id,
+            adapter_version=capabilities.adapter_version,
+            provider_scope=capabilities.provider_scope,
+            tool_id=request["tool_id"],
+            tool_contract_fingerprint=binding["tool_contract_fingerprint"],
+            capabilities=snapshot,
+        )
+        if certification is None:
+            raise PermissionError(
+                "Outcome lookup requires an active, matching trusted certification"
+            )
+
         outcome = adapter.lookup(binding["idempotency_key"])
         if not isinstance(outcome, ExternalToolExecutionOutcome):
             raise TypeError("Adapter returned an invalid lookup outcome")
