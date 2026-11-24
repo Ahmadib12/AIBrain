@@ -1130,8 +1130,19 @@ def test_revocation_after_lookup_authorization_does_not_cancel_inflight_lookup(t
 
     provider.lookup = blocked_lookup
     try:
-        _prepare_unknown_provider_outcome(
+        binding = _prepare_unknown_provider_outcome(
             repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        # Model the ambiguous real-world case: the provider accepted the
+        # operation, but AIBrain persisted an unknown outcome after losing
+        # the response. The lookup must recover this existing provider record.
+        from backend.app.tools.external import ExternalToolAction
+        provider.execute(
+            ExternalToolAction(
+                idempotency_key=binding["idempotency_key"],
+                action_digest=binding["action_digest"],
+                payload_json=binding["payload_json"],
+            )
         )
         dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
         with ThreadPoolExecutor(max_workers=1) as executor:
