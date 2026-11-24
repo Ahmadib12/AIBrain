@@ -31,8 +31,8 @@ class IntegrationTool:
             raise TypeError("Integration tools require a ToolContract")
         if self.contract.risk is not ToolRisk.READ_ONLY:
             raise ValueError("M10 integrations accept read-only tools only")
-        if not isinstance(self.required_scopes, tuple):
-            raise ValueError("required_scopes must be a tuple")
+        if not isinstance(self.required_scopes, tuple) or not self.required_scopes:
+            raise ValueError("At least one required scope must be declared")
         if len(set(self.required_scopes)) != len(self.required_scopes):
             raise ValueError("Integration scopes must be unique")
         if any(
