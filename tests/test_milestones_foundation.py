@@ -1621,20 +1621,22 @@ def test_concurrent_file_database_writes_and_reads(tmp_path) -> None:
 def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     from backend.app.persistence.database import Database
 
+    expected_versions = list(range(1, 22))
     path = tmp_path / "migrations.db"
     first = Database(f"sqlite:///{path}")
     first.migrate()
     rows = first.connect().execute(
-        "SELECT COUNT(*) AS count FROM schema_migrations"
-    ).fetchone()
-    assert rows["count"] == 20
+        "SELECT version FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    assert [row["version"] for row in rows] == expected_versions
     first.close()
 
     second = Database(f"sqlite:///{path}")
+    second.migrate()
     rows = second.connect().execute(
-        "SELECT COUNT(*) AS count FROM schema_migrations"
-    ).fetchone()
-    assert rows["count"] == 20
+        "SELECT version FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    assert [row["version"] for row in rows] == expected_versions
     second.close()
 
 
