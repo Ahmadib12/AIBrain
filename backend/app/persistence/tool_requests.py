@@ -1504,8 +1504,27 @@ class ToolRequestRepository:
             for row in rows
         ]
 
-    def get_execution_history(self, user_id: str, request_id: str) -> list[dict]:
-        """Return owner-scoped execution history across immutable source ledgers."""
+    def get_execution_history(
+        self,
+        user_id: str,
+        request_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return owner-scoped history, optionally bounded to one page."""
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int)
+            or not 1 <= limit <= 101
+        ):
+            raise ValueError("Execution history limit must be between 1 and 101")
+        if (
+            isinstance(offset, bool) or not isinstance(offset, int)
+            or not 0 <= offset <= 100_000
+        ):
+            raise ValueError("Execution history offset is out of range")
+        if limit is None and offset != 0:
+            raise ValueError("An execution history offset requires a limit")
         connection = self.database.connect()
         request = connection.execute(
             """
@@ -1517,8 +1536,7 @@ class ToolRequestRepository:
         if request is None:
             raise LookupError("Tool request not found")
 
-        rows = connection.execute(
-            """
+        query = """
             SELECT id, record_type, event_type, action_digest,
                    details_json, created_at, certification_id,
                    outcome, error_code, note
@@ -1586,14 +1604,17 @@ class ToolRequestRepository:
                 WHERE user_id = ? AND request_id = ?
             )
             ORDER BY created_at ASC, record_type ASC, id ASC
-            """,
-            (
-                user_id, request_id,
-                user_id, request_id,
-                user_id, request_id,
-                user_id, request_id,
-            ),
-        ).fetchall()
+            """
+        parameters = (
+            user_id, request_id,
+            user_id, request_id,
+            user_id, request_id,
+            user_id, request_id,
+        )
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            parameters += (limit, offset)
+        rows = connection.execute(query, parameters).fetchall()
 
         history = []
         for row in rows:
