@@ -151,3 +151,21 @@ def test_invalid_capability_claims_rejected_before_execution(tmp_path):
     binding["capabilities"]["supports_outcome_lookup"] = "yes"
     with pytest.raises(ValueError, match="must be boolean"):
         run_suite(binding=binding, commands=commands_for(), output_dir=tmp_path / "out")
+
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Process-group cleanup requires POSIX")
+def test_runner_kills_descendants_after_command_parent_exits(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    child_script = (
+        "import subprocess,sys,pathlib; "
+        "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))"
+    )
+    commands = commands_for()
+    commands[sorted(REQUIRED_CHECKS)[0]] = [sys.executable, "-c", child_script]
+    result = run_suite(binding=BINDING, commands=commands, output_dir=tmp_path / "out")
+    assert result["status"] == "passed"
+    child_pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
