@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.api.v1.tools import tool_registry
+from backend.app.api.v1.agent_execution import _reject_unbound_integration_actions
 from backend.app.app_state import get_app_state
 from backend.app.main import app
 from backend.app.tools import ToolContract, ToolRisk
@@ -292,3 +293,21 @@ def test_expired_unstarted_runs_are_reconciled(client: TestClient, monkeypatch):
         f"/api/v1/agent-runs/{run.json()['id']}", headers=auth(token)
     )
     assert expired.json()["status"] == "expired"
+
+
+def test_m9_agent_run_rejects_registered_integration_tool_ids():
+    class IntegrationCatalog:
+        def resolve_tool(self, tool_id):
+            return ("calendar", object()) if tool_id == "calendar.events.read" else None
+
+    class State:
+        integrations = IntegrationCatalog()
+
+    with pytest.raises(PermissionError, match="bound asynchronous orchestrator"):
+        _reject_unbound_integration_actions(
+            [{"tool_id": "calendar.events.read"}], State()
+        )
+
+    _reject_unbound_integration_actions(
+        [{"tool_id": "echo"}], State()
+    )
