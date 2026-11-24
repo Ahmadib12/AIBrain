@@ -192,6 +192,14 @@ async def process_intelligence_stream(
     user: dict | None = Depends(get_optional_current_user),
 ):
     memory_context = _requested_memory_context(request, user)
+    if memory_context is not None and not isinstance(core, OrchestrationCore):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MEMORY_CONTEXT_UNAVAILABLE",
+                "message": "This intelligence core does not support approved memory context",
+            },
+        )
 
     async def event_stream():
         try:
