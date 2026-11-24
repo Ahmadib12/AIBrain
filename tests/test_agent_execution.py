@@ -119,7 +119,7 @@ def test_run_requires_explicit_owner_authorization_and_executes_read_only(
     )
     assert events.status_code == 200
     assert [item["event_type"] for item in events.json()] == [
-        "created", "authorized", "started", "step_completed", "completed"
+        "created", "authorized", "started", "step_started", "step_completed", "completed"
     ]
 
 
