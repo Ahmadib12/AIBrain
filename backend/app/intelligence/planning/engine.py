@@ -17,6 +17,7 @@ from backend.app.intelligence.planning.contracts import (
 )
 from backend.app.intelligence.schemas import (
     ClassificationStatus,
+    ContextTurn,
     TaskClassification,
     TaskType,
 )
@@ -28,6 +29,7 @@ class PlanAssessment(BaseModel):
     plan_valid: bool
     missing_capabilities: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
     requires_authorization: bool
+    requires_clarification: bool = False
     execution_permitted: bool = False
 
     @model_validator(mode="after")
@@ -54,6 +56,34 @@ class PlanningEngine:
         IntentKind.TRANSFORM: ("translate ", "rewrite ", "summarize ", "summarise "),
         IntentKind.RETRIEVE: ("find ", "search ", "look up ", "lookup "),
     }
+    _FOLLOW_UP_PREFIXES = (
+        "make it ",
+        "make this ",
+        "shorten it",
+        "expand it",
+        "rewrite it",
+        "rephrase it",
+        "continue",
+        "do the same",
+        "compare them",
+        "compare those",
+        "what about it",
+        "what about them",
+        "what about that",
+        "how about it",
+        "how about them",
+    )
+    _FOLLOW_UP_KINDS = {
+        IntentKind.TRANSFORM: (
+            "make it ", "make this ", "shorten it", "expand it",
+            "rewrite it", "rephrase it", "continue",
+        ),
+        IntentKind.ANALYZE: (
+            "compare them", "compare those", "what about it",
+            "what about them", "what about that", "how about it",
+            "how about them",
+        ),
+    }
     _CAPABILITIES = {
         TaskType.CONVERSATION: "text_generation",
         TaskType.LANGUAGE_LOOKUP: "language_lookup",
@@ -66,9 +96,22 @@ class PlanningEngine:
         classification: TaskClassification,
         *,
         available_capabilities: Iterable[str] = (),
+        conversation_history: Iterable[ContextTurn] = (),
     ) -> PlanningResult:
         normalized = text.strip().lower()
-        kind = self._infer_kind(normalized, classification)
+        history = tuple(
+            ContextTurn.model_validate(turn.model_dump())
+            for turn in conversation_history
+            if isinstance(turn, ContextTurn)
+        )[-20:]
+        is_follow_up = normalized.startswith(self._FOLLOW_UP_PREFIXES)
+        context_used = is_follow_up and bool(history)
+        requires_clarification = is_follow_up and not history
+        kind = self._infer_kind(
+            normalized,
+            classification,
+            has_context=bool(history),
+        )
         intent = IntentContract(
             kind=kind,
             summary=self._summarize(text),
@@ -78,10 +121,15 @@ class PlanningEngine:
                 else min(classification.confidence, 0.8)
             ),
             ambiguities=(
-                ("The request may need clarification before action",)
-                if kind in {IntentKind.UNKNOWN, IntentKind.CONTROL}
-                else ()
+                ("The request refers to prior context that was not provided",)
+                if requires_clarification
+                else (
+                    ("The request may need clarification before action",)
+                    if kind in {IntentKind.UNKNOWN, IntentKind.CONTROL}
+                    else ()
+                )
             ),
+            context_used=context_used,
         )
         capability_id = self._CAPABILITIES.get(classification.task_type)
         goal = GoalContract(
@@ -95,7 +143,11 @@ class PlanningEngine:
                 "Do not treat a capability reference as authorization",
             ),
         )
-        tasks = self._decompose(kind, capability_id)
+        tasks = self._decompose(
+            kind,
+            capability_id,
+            requires_clarification=requires_clarification,
+        )
         plan = TaskPlanContract(
             goal=goal,
             tasks=tasks,
@@ -111,6 +163,7 @@ class PlanningEngine:
                 kind == IntentKind.CONTROL
                 or classification.task_type == TaskType.UNSUPPORTED
             ),
+            requires_clarification=requires_clarification,
         )
         return PlanningResult(
             intent=intent,
@@ -128,9 +181,15 @@ class PlanningEngine:
         cls,
         normalized: str,
         classification: TaskClassification,
+        *,
+        has_context: bool = False,
     ) -> IntentKind:
         if classification.task_type == TaskType.UNSUPPORTED:
             return IntentKind.CONTROL
+        if has_context:
+            for kind, prefixes in cls._FOLLOW_UP_KINDS.items():
+                if normalized.startswith(prefixes):
+                    return kind
         for kind, prefixes in cls._KIND_PATTERNS.items():
             if normalized.startswith(prefixes):
                 return kind
@@ -147,7 +206,26 @@ class PlanningEngine:
     def _decompose(
         kind: IntentKind,
         capability_id: str | None,
+        *,
+        requires_clarification: bool = False,
     ) -> tuple[PlannedTask, ...]:
+        if requires_clarification:
+            return (
+                PlannedTask(
+                    task_id="clarify-context",
+                    kind=PlanTaskKind.REQUEST_INPUT,
+                    description=(
+                        "Ask the user to identify the earlier content or subject "
+                        "before interpreting this follow-up"
+                    ),
+                ),
+                PlannedTask(
+                    task_id="validate-context",
+                    kind=PlanTaskKind.VALIDATE,
+                    description="Validate the clarified reference before proceeding",
+                    depends_on=("clarify-context",),
+                ),
+            )
         if kind == IntentKind.CONTROL:
             return (
                 PlannedTask(
@@ -208,6 +286,8 @@ class PlanningEngine:
             plan_valid=True,
             missing_capabilities=missing,
             requires_authorization=requires_authorization,
+            requires_clarification=plan.tasks[0].kind == PlanTaskKind.REQUEST_INPUT
+            and plan.tasks[0].task_id == "clarify-context",
             # Planning is deliberately never an authorization decision.
             execution_permitted=False,
         )
