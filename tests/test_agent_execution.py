@@ -316,7 +316,7 @@ def test_m9_agent_run_rejects_registered_integration_tool_ids():
 def test_integration_agent_run_persists_immutable_owner_scope_binding(
     client: TestClient,
 ):
-    from backend.app.tools.integrations import IntegrationManifest, IntegrationTool
+    from backend.app.tools.integrations import IntegrationManifest, IntegrationRegistry, IntegrationTool
 
     token = owner_token(client, "m10-binding-owner@example.com")
     agent = create_agent(client, token)
@@ -391,6 +391,21 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
     assert bindings[0]["manifest_version"] == "1"
     assert bindings[0]["required_scopes"] == ["catalog.read"]
     assert bindings[0]["contract_fingerprint"] == run["steps"][0]["contract_fingerprint"]
+
+    # A trusted catalog update invalidates the old manifest-version binding.
+    drifted_catalog = IntegrationRegistry()
+    drifted_catalog.register(IntegrationManifest(
+        integration_id="catalog",
+        name="Catalog",
+        description="Updated catalog contract",
+        version="2",
+        tools=(IntegrationTool(contract, ("catalog.read",)),),
+    ))
+    with pytest.raises(PermissionError, match="manifest or contract changed"):
+        state.agent_execution._validate_integration_bindings(
+            user_id, state.agent_execution._raw_run(user_id, run["id"]),
+            drifted_catalog, state.integration_connections,
+        )
 
     authorized = state.agent_execution.authorize_run(
         user_id, run["id"], state.integrations, state.integration_connections
