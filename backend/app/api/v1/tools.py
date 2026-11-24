@@ -13,6 +13,8 @@ from backend.app.auth.operator import (
 )
 from backend.app.tools import ToolContract, ToolExecutionGateway, ToolRegistry, ToolRisk
 from backend.app.app_state import get_app_state
+from backend.app.config import get_settings
+from backend.app.tools.conformance import verify_signed_suite_artifact
 
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -446,6 +448,44 @@ async def cancel_tool(
 
 
 
+
+
+
+def _verify_server_side_suite(manifest: dict, artifacts: dict[str, bytes]) -> None:
+    """Fail closed unless the API independently trusts the signed suite."""
+    settings = get_settings()
+    required = (
+        settings.conformance_suite_authority_public_key_b64,
+        settings.conformance_suite_authority_key_id,
+        settings.conformance_suite_expected_id,
+        settings.conformance_suite_expected_version,
+    )
+    if any(not value for value in required):
+        raise PermissionError("Server-side conformance suite trust is not configured")
+    try:
+        public_key = base64.b64decode(
+            settings.conformance_suite_authority_public_key_b64,
+            validate=True,
+        )
+        verify_signed_suite_artifact(
+            manifest,
+            artifacts,
+            authority_public_key=public_key,
+            authority_key_id=settings.conformance_suite_authority_key_id,
+            expected_suite_id=settings.conformance_suite_expected_id,
+            expected_suite_version=settings.conformance_suite_expected_version,
+        )
+    except (ValueError, binascii.Error, PermissionError) as exc:
+        raise PermissionError("Server-side conformance suite verification failed") from exc
+
+
+def _verify_stored_package_suite(package_id: str) -> None:
+    package = get_app_state().tool_requests.get_external_adapter_evidence_package(package_id)
+    _verify_server_side_suite(
+        package["manifest"],
+        {name: item["content"] for name, item in package["artifacts"].items()},
+    )
+
 @router.post("/runner/evidence", status_code=201)
 async def ingest_runner_evidence(
     request: EvidencePackageIngestRequest,
@@ -464,6 +504,7 @@ async def ingest_runner_evidence(
             if total_encoded > 14_000_000:
                 raise ValueError("Evidence package encoding exceeds limit")
             artifacts[name] = base64.b64decode(encoded, validate=True)
+        _verify_server_side_suite(request.manifest, artifacts)
         package = get_app_state().tool_requests.verify_external_adapter_evidence(
             request.manifest, artifacts
         )
@@ -482,6 +523,11 @@ async def ingest_runner_evidence(
             "expires_at": package["expires_at"],
             "provenance": package["provenance"],
         }
+    except PermissionError:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "SUITE_AUTHORITY_NOT_CONFIGURED_OR_REJECTED", "message": "Server-side suite verification is unavailable or evidence was rejected"},
+        ) from None
     except (ValueError, binascii.Error):
         raise HTTPException(
             status_code=400,
@@ -497,6 +543,7 @@ async def get_runner_attestation_payload(
 ) -> dict:
     """Return the exact payload the isolated runner must sign locally."""
     try:
+        _verify_stored_package_suite(package_id)
         return get_app_state().tool_requests.build_external_adapter_evidence_attestation_payload(
             package_id,
             key_id=request.key_id,
@@ -608,6 +655,7 @@ async def attest_external_adapter_evidence(
     _runner: None = Depends(require_trusted_runner_ingest),
 ) -> dict:
     try:
+        _verify_stored_package_suite(package_id)
         attestation = get_app_state().tool_requests.attest_external_adapter_evidence(
             package_id,
             key_id=request.key_id,
@@ -648,6 +696,7 @@ async def certify_external_adapter_evidence(
     operator: dict = Depends(require_security_operator),
 ) -> dict:
     try:
+        _verify_stored_package_suite(package_id)
         certificate = get_app_state().tool_requests.certify_external_adapter(
             evidence_package_id=package_id,
             approved_by=operator["email"],
