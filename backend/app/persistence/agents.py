@@ -39,6 +39,8 @@ class AgentRepository:
             raise ValueError("Agent name must contain 1 to 100 characters")
         if not isinstance(description, str) or len(description) > 1000:
             raise ValueError("Agent description must not exceed 1000 characters")
+        validate_personal_payload(name.strip())
+        validate_personal_payload(description)
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
