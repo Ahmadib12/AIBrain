@@ -151,3 +151,35 @@ def test_runtime_rejects_unregistered_tool_and_invalid_arguments(runtime_state):
         asyncio.run(runtime.execute(owner_id, connection["id"], "catalog.unknown", {}))
     with pytest.raises(ValueError):
         asyncio.run(runtime.execute(owner_id, connection["id"], "catalog.search", {"unexpected": True}))
+
+class SlowReadAdapter:
+    async def execute(self, *, user_id, connection_id, tool_id, arguments):
+        await asyncio.sleep(0.05)
+        return {"items": ["late"]}
+
+
+def test_runtime_enforces_adapter_timeout(runtime_state):
+    _, owner_id, connection, connections, manifests, adapters = runtime_state
+    adapters.register("catalog", SlowReadAdapter())
+    runtime = ReadOnlyIntegrationRuntime(
+        manifests=manifests, adapters=adapters, connections=connections,
+        timeout_seconds=0.001,
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(runtime.execute(
+            owner_id, connection["id"], "catalog.search", {"query": "hello"}
+        ))
+
+
+def test_runtime_enforces_serialized_output_bound(runtime_state):
+    database, owner_id, connection, connections, manifests, adapters = runtime_state
+    _activate_test_connection(database, connection)
+    adapters.register("catalog", FakeReadAdapter({"items": ["x" * 5000]}))
+    runtime = ReadOnlyIntegrationRuntime(
+        manifests=manifests, adapters=adapters, connections=connections,
+        max_output_bytes=1024,
+    )
+    with pytest.raises(ValueError, match="output exceeds"):
+        asyncio.run(runtime.execute(
+            owner_id, connection["id"], "catalog.search", {"query": "hello"}
+        ))
