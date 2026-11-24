@@ -504,6 +504,93 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
     assert repeated.status_code == 409
     assert timeout_adapter.calls == 1
 
+    # Simulate a process crash after the durable dispatch-start boundary.
+    interrupted_create = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/runs",
+        headers=auth(token),
+        json={"actions": [{
+            "tool_id": "catalog.search",
+            "arguments": {"query": "interrupted"},
+            "connection_id": connection["id"],
+        }]},
+    )
+    assert interrupted_create.status_code == 201, interrupted_create.text
+    interrupted_id = interrupted_create.json()["id"]
+    assert client.post(
+        f"/api/v1/agent-runs/{interrupted_id}/authorize", headers=auth(token)
+    ).status_code == 200
+    interrupted_binding = state.agent_execution.list_integration_bindings(
+        user_id, interrupted_id
+    )[0]
+    interrupted_step = state.agent_execution.list_steps(
+        user_id, interrupted_id
+    )[0]
+    now = datetime.now(timezone.utc).isoformat()
+    with state.database.transaction(immediate=True):
+        state.agent_execution._event(user_id, interrupted_id, "started", {
+            "from_status": "authorized", "to_status": "running",
+            "plan_digest": interrupted_create.json()["plan_digest"],
+            "integration_bound": True,
+        })
+        state.database.connect().execute(
+            """UPDATE agent_runs SET status='running',started_at=?,updated_at=?
+               WHERE id=? AND user_id=? AND status='authorized'""",
+            (now, now, interrupted_id, user_id),
+        )
+        state.agent_execution._event(user_id, interrupted_id, "step_started", {
+            "step_id": interrupted_step["id"],
+            "ordinal": interrupted_step["ordinal"],
+            "tool_id": interrupted_step["tool_id"],
+        })
+        state.database.connect().execute(
+            """UPDATE agent_run_steps SET status='running',updated_at=?
+               WHERE id=? AND user_id=? AND status='pending'""",
+            (now, interrupted_step["id"], user_id),
+        )
+        state.database.connect().execute(
+            """INSERT INTO agent_run_integration_dispatches
+               (step_id,user_id,run_id,connection_id,integration_id,tool_id,
+                contract_fingerprint,status,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,'prepared',?,?)""",
+            (
+                interrupted_step["id"], user_id, interrupted_id,
+                interrupted_binding["connection_id"],
+                interrupted_binding["integration_id"],
+                interrupted_binding["tool_id"],
+                interrupted_binding["contract_fingerprint"], now, now,
+            ),
+        )
+        state.agent_execution._event(
+            user_id, interrupted_id, "integration_dispatch_started", {
+                "step_id": interrupted_step["id"],
+                "integration_id": interrupted_binding["integration_id"],
+                "tool_id": interrupted_binding["tool_id"],
+            },
+        )
+        state.database.connect().execute(
+            """UPDATE agent_run_integration_dispatches
+               SET status='dispatch_started',dispatch_started_at=?,updated_at=?
+               WHERE step_id=? AND user_id=? AND status='prepared'""",
+            (now, now, interrupted_step["id"], user_id),
+        )
+
+    recovered = state.integration_orchestrator.recover_stale_dispatches(
+        stale_before=(datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+    )
+    assert recovered == 1
+    recovered_dispatch = state.database.connect().execute(
+        """SELECT status,error_code FROM agent_run_integration_dispatches
+           WHERE run_id=?""",
+        (interrupted_id,),
+    ).fetchone()
+    assert recovered_dispatch["status"] == "outcome_unknown"
+    assert recovered_dispatch["error_code"] == "INTEGRATION_PROCESS_INTERRUPTED"
+    recovered_run = state.agent_execution.get_run(user_id, interrupted_id)
+    assert recovered_run["status"] == "failed"
+    assert recovered_run["steps"][0]["status"] == "failed"
+    # Recovery classifies the unknown outcome; it never calls the adapter.
+    assert timeout_adapter.calls == 1
+
     # A revoked owner connection invalidates the previously authorized binding.
     state.integration_connections.revoke(user_id, connection["id"])
     raw_run = state.agent_execution._raw_run(user_id, run["id"])
