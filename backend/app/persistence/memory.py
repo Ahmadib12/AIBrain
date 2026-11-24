@@ -377,14 +377,28 @@ class MemoryRepository:
         validate_personal_payload(query)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
             raise ValueError("Memory result limit must be between 1 and 10")
-        consent = self._active_consent(user_id)
-        if consent is None:
-            return ()
         query_terms = set(_TOKEN_PATTERN.findall(query.casefold()))
         if not query_terms:
             return ()
+        self._purge_expired_for_user(user_id)
+        rows = self.database.connect().execute(
+            """
+            SELECT m.* FROM memory_items AS m
+            JOIN memory_consents AS c
+              ON c.id = m.consent_id AND c.user_id = m.user_id
+            JOIN users AS u ON u.id = m.user_id
+            WHERE m.user_id = ?
+              AND m.status = 'active'
+              AND c.purpose = 'personal_memory'
+              AND c.revoked_at IS NULL
+              AND u.deleted_at IS NULL
+            ORDER BY m.updated_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
         ranked: list[tuple[float, str, dict[str, Any]]] = []
-        for memory in self._list_for_consent(user_id, consent["id"]):
+        for row in rows:
+            memory = self._to_dict(row)
             searchable = " ".join((
                 memory["memory_type"],
                 memory["key"],
