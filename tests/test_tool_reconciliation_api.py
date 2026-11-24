@@ -303,3 +303,136 @@ def test_another_user_cannot_inspect_tool_request(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "TOOL_REQUEST_NOT_FOUND"
+
+
+
+def test_execution_history_api_requires_authentication(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/api/v1/tools/requests/request-id/history",
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_owner_can_page_redacted_execution_history(
+    client: TestClient,
+) -> None:
+    state = get_app_state()
+    token = register_and_login(client, "history-page@example.com")
+    user_id = state.identity.resolve_token(token)["id"]
+    request = create_outcome_unknown_request(state, user_id)
+
+    connection = state.database.connect()
+    # These synthetic rows exercise the read projection and page boundary;
+    # production insert validation remains covered by dispatcher tests.
+    connection.execute("DROP TRIGGER validate_tool_dispatch_audit_event")
+    connection.executemany(
+        """
+        INSERT INTO tool_dispatch_audit_events (
+            id, user_id, request_id, event_type, action_digest,
+            details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "history-started",
+                user_id,
+                request["id"],
+                "dispatch_started",
+                "a" * 64,
+                (
+                    '{"attempt_id":"attempt-1","adapter_id":"adapter-a",'
+                    '"adapter_version":"1.0","provider_id":"provider-a",'
+                    '"provider_scope":"scope-a","runner_key_id":"private-key",'
+                    '"evidence_package_id":"private-package",'
+                    '"tool_contract_fingerprint":"private-fingerprint"}'
+                ),
+                "2026-11-24T10:00:00+00:00",
+            ),
+            (
+                "history-failed",
+                user_id,
+                request["id"],
+                "dispatch_failed",
+                "a" * 64,
+                (
+                    '{"error_code":"provider_timeout",'
+                    '"evidence_reference":"private-provider-reference"}'
+                ),
+                "2026-11-24T10:00:01+00:00",
+            ),
+        ],
+    )
+    connection.commit()
+
+    url = f"/api/v1/tools/requests/{request['id']}/history"
+    first = client.get(
+        url,
+        headers=auth_header(token),
+        params={"limit": 1},
+    )
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["pagination"] == {
+        "limit": 1,
+        "offset": 0,
+        "has_more": True,
+        "next_offset": 1,
+    }
+    assert len(first_body["items"]) == 1
+    assert first_body["items"][0]["event_type"] == "dispatch_started"
+    assert first_body["items"][0]["details"] == {
+        "attempt_id": "attempt-1",
+        "adapter_id": "adapter-a",
+        "adapter_version": "1.0",
+        "provider_id": "provider-a",
+        "provider_scope": "scope-a",
+    }
+
+    second = client.get(
+        url,
+        headers=auth_header(token),
+        params={"limit": 1, "offset": 1},
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["pagination"]["has_more"] is False
+    assert second_body["pagination"]["next_offset"] is None
+    assert second_body["items"][0]["event_type"] == "dispatch_failed"
+    assert second_body["items"][0]["details"] == {
+        "error_code": "provider_timeout",
+    }
+
+
+def test_another_user_cannot_read_execution_history(
+    client: TestClient,
+) -> None:
+    state = get_app_state()
+    owner_token = register_and_login(client, "history-owner@example.com")
+    other_token = register_and_login(client, "history-other@example.com")
+    owner_id = state.identity.resolve_token(owner_token)["id"]
+    request = create_outcome_unknown_request(state, owner_id)
+
+    response = client.get(
+        f"/api/v1/tools/requests/{request['id']}/history",
+        headers=auth_header(other_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TOOL_REQUEST_NOT_FOUND"
+
+
+def test_execution_history_api_bounds_pagination(
+    client: TestClient,
+) -> None:
+    token = register_and_login(client, "history-bounds@example.com")
+    url = "/api/v1/tools/requests/request-id/history"
+    for params in ({"limit": 0}, {"limit": 101}, {"offset": -1}):
+        response = client.get(
+            url,
+            headers=auth_header(token),
+            params=params,
+        )
+        assert response.status_code == 422
