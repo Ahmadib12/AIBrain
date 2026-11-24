@@ -122,17 +122,23 @@ def test_concurrent_reconciliation_allows_exactly_one_terminal_transition(
         assert persisted["status"] in ("completed", "failed")
         assert attempt["finished_at"]
 
+        history = repository_a.get_execution_history(user_id, request["id"])
+        reconciliation_events = [
+            event for event in history
+            if event["record_type"] == "execution_reconciliation"
+        ]
+        assert len(reconciliation_events) == 1
+        assert reconciliation_events[0]["details"]["outcome"] in (
+            "succeeded",
+            "failed",
+        )
+        assert reconciliation_events[0]["details"]["reconciled_by"] == user_id
+
         row = database_a.connect().execute(
             "SELECT audit_json FROM tool_requests WHERE id = ? AND user_id = ?",
             (request["id"], user_id),
         ).fetchone()
-        audit = json.loads(row["audit_json"])
-        assert audit["execution_reconciliation"]["outcome"] in (
-            "succeeded",
-            "failed",
-        )
-        assert audit["execution_reconciliation"]["reconciled_by"] == user_id
-        assert set(audit) == {"proposal", "execution_reconciliation"}
+        assert "execution_reconciliation" not in json.loads(row["audit_json"])
     finally:
         database_b.shutdown()
         database_a.shutdown()
@@ -243,11 +249,11 @@ def test_recovery_racing_with_reconciliation_never_leaves_partial_state(
             assert recovered == 1
             assert persisted["status"] == "completed"
             assert attempt["status"] == "succeeded"
-            row = database_a.connect().execute(
-                "SELECT audit_json FROM tool_requests WHERE id = ?",
-                (request["id"],),
-            ).fetchone()
-            assert "execution_reconciliation" in json.loads(row["audit_json"])
+            history = repository_a.get_execution_history(user_id, request["id"])
+            assert any(
+                event["record_type"] == "execution_reconciliation"
+                for event in history
+            )
         else:
             assert recovered == 1
             assert persisted["status"] == "outcome_unknown"
@@ -296,12 +302,11 @@ def test_reconciliation_rolls_back_request_and_audit_if_attempt_update_fails(
         assert persisted["status"] == "outcome_unknown"
         assert attempt["status"] == "outcome_unknown"
 
-        row = database_a.connect().execute(
-            "SELECT audit_json FROM tool_requests WHERE id = ?",
-            (request["id"],),
-        ).fetchone()
-        audit = json.loads(row["audit_json"])
-        assert "execution_reconciliation" not in audit
+        history = repository_a.get_execution_history(user_id, request["id"])
+        assert not any(
+            event["record_type"] == "execution_reconciliation"
+            for event in history
+        )
     finally:
         database_b.shutdown()
         database_a.shutdown()
