@@ -19,7 +19,6 @@ from scripts.submit_conformance_evidence import load_evidence, submit_evidence
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", type=Path, required=True)
-    parser.add_argument("--authority-key-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-base-url", required=True)
     parser.add_argument("--key-id", required=True)
@@ -34,8 +33,9 @@ def main() -> int:
         # required checks have completed successfully and the manifest passes
         # the same verifier used by AIBrain.
         authority_public_key_b64 = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "")
-        if not authority_public_key_b64:
-            raise ValueError("Pinned suite-authority public key is not provisioned")
+        authority_key_id = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID", "")
+        if not authority_public_key_b64 or not authority_key_id:
+            raise ValueError("Pinned suite-authority public key and key ID must be provisioned")
         try:
             authority_public_key = base64.b64decode(authority_public_key_b64, validate=True)
         except (ValueError, base64.binascii.Error) as exc:
@@ -43,7 +43,7 @@ def main() -> int:
         result = run_suite(
             suite_envelope=_load_json(args.suite),
             authority_public_key=authority_public_key,
-            authority_key_id=args.authority_key_id,
+            authority_key_id=authority_key_id,
             output_dir=args.output_dir,
             timeout_seconds=args.timeout_seconds,
             memory_mb=args.memory_mb,
