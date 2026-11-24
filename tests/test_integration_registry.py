@@ -57,7 +57,7 @@ def test_registry_lists_safe_catalog_and_resolves_tool():
     assert item.contract.tool_id == "web.search"
 
 
-def test_registry_rejects_duplicate_integration_and_tool_ids():
+def test_registry_rejects_duplicate_integration_ids_and_allows_distinct_namespaces():
     registry = IntegrationRegistry()
     registry.register(_manifest())
     with pytest.raises(ValueError):
@@ -71,15 +71,11 @@ def test_registry_rejects_duplicate_integration_and_tool_ids():
         tools=(IntegrationTool(_contract("other.search"), ()),),
     )
     registry.register(other)
-    duplicate = IntegrationManifest(
-        integration_id="other-two",
-        name="Other two",
-        description="Duplicate global tool test",
-        version="1",
-        tools=(IntegrationTool(_contract("web.search"), ()),),
-    )
-    with pytest.raises(ValueError):
-        registry.register(duplicate)
+    # Valid manifests must namespace tool IDs by integration ID, so a
+    # cross-integration collision cannot be constructed. Distinct namespaces
+    # remain independently registrable.
+    assert registry.resolve_tool("web.search") is not None
+    assert registry.resolve_tool("other.search") is not None
 
 
 def test_manifest_rejects_state_changing_and_unscoped_tool_ids():
