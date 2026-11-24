@@ -93,7 +93,10 @@ async def get_agent_run_events(
 @router.post("/agent-runs/{run_id}/authorize")
 async def authorize_agent_run(run_id: str, user: dict = Depends(get_current_user)):
     try:
-        return get_app_state().agent_execution.authorize_run(user["id"], run_id)
+        state = get_app_state()
+        return state.agent_execution.authorize_run(
+            user["id"], run_id, state.integrations, state.integration_connections
+        )
     except LookupError:
         _error(404, "AGENT_RUN_NOT_FOUND", "Agent run not found")
     except PermissionError:
