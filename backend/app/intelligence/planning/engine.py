@@ -48,7 +48,7 @@ class PlanningResult(BaseModel):
 
 
 class PlanningEngine:
-    """Builds reproducible plans from deterministic task classifications."""
+    """Builds bounded plans using deterministic classification and prior turns."""
 
     _KIND_PATTERNS = {
         IntentKind.CREATE: ("create ", "write ", "draft ", "build "),
@@ -105,7 +105,7 @@ class PlanningEngine:
             if isinstance(turn, ContextTurn)
         )[-20:]
         is_follow_up = normalized.startswith(self._FOLLOW_UP_PREFIXES)
-        context_used = is_follow_up and bool(history)
+        context_available = bool(history)
         requires_clarification = is_follow_up and not history
         kind = self._infer_kind(
             normalized,
@@ -129,7 +129,7 @@ class PlanningEngine:
                     else ()
                 )
             ),
-            context_used=context_used,
+            context_available=context_available,
         )
         capability_id = self._CAPABILITIES.get(classification.task_type)
         goal = GoalContract(
