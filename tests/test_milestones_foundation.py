@@ -221,6 +221,53 @@ def test_memory_creation_requires_explicit_consent(client: TestClient) -> None:
     ).json() == []
 
 
+
+def test_revoked_memory_consent_ledger_cannot_be_reactivated_or_rewritten(
+    client: TestClient,
+) -> None:
+    import sqlite3
+
+    token = register_and_login(client, "memory-consent-ledger@example.com")
+    grant_memory_consent(client, token)
+    state = get_app_state()
+    user = state.identity.resolve_token(token)
+    row = state.database.connect().execute(
+        """
+        SELECT id FROM memory_consents
+        WHERE user_id = ? AND revoked_at IS NULL
+        """,
+        (user["id"],),
+    ).fetchone()
+    assert row is not None
+
+    revoked = client.delete(
+        "/api/v1/personal/memory/consent",
+        headers=auth_header(token),
+    )
+    assert revoked.status_code == 200
+
+    with pytest.raises(sqlite3.IntegrityError, match="revocation is immutable"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE memory_consents SET revoked_at = NULL WHERE id = ?",
+                (row["id"],),
+            )
+
+    with pytest.raises(sqlite3.IntegrityError, match="policy is immutable"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE memory_consents SET retention_days = 30 WHERE id = ?",
+                (row["id"],),
+            )
+
+    with pytest.raises(sqlite3.IntegrityError, match="may only be deleted"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "DELETE FROM memory_consents WHERE id = ?",
+                (row["id"],),
+            )
+
+
 def test_memory_consent_revocation_locks_old_records_and_new_consent_does_not_restore_them(
     client: TestClient,
 ) -> None:
