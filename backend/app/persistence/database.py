@@ -1097,6 +1097,51 @@ class Database:
                         user_id, request_id, created_at
                     );
 
+                -- Preserve reconciliation records written by the previous
+                -- audit_json implementation before adding lifecycle triggers.
+                INSERT INTO tool_execution_reconciliation_events (
+                    id, user_id, request_id, outcome, note, error_code, created_at
+                )
+                SELECT
+                    lower(hex(randomblob(16))),
+                    r.user_id,
+                    r.id,
+                    json_extract(r.audit_json, '$.execution_reconciliation.outcome'),
+                    json_extract(r.audit_json, '$.execution_reconciliation.note'),
+                    json_extract(r.audit_json, '$.execution_reconciliation.error_code'),
+                    COALESCE(
+                        json_extract(r.audit_json, '$.execution_reconciliation.reconciled_at'),
+                        r.updated_at
+                    )
+                FROM tool_requests AS r
+                JOIN users AS u ON u.id = r.user_id
+                WHERE json_valid(COALESCE(r.audit_json, '{}'))
+                  AND json_type(
+                      r.audit_json, '$.execution_reconciliation'
+                  ) = 'object'
+                  AND json_extract(
+                      r.audit_json, '$.execution_reconciliation.outcome'
+                  ) IN ('succeeded', 'failed')
+                  AND length(trim(COALESCE(json_extract(
+                      r.audit_json, '$.execution_reconciliation.note'
+                  ), ''))) BETWEEN 1 AND 1000
+                  AND u.deleted_at IS NULL;
+
+                UPDATE tool_requests
+                SET audit_json = json_remove(
+                    audit_json, '$.execution_reconciliation'
+                )
+                WHERE json_valid(COALESCE(audit_json, '{}'))
+                  AND json_type(
+                      audit_json, '$.execution_reconciliation'
+                  ) = 'object'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tool_execution_reconciliation_events AS e
+                      WHERE e.user_id = tool_requests.user_id
+                        AND e.request_id = tool_requests.id
+                  );
+
                 CREATE TRIGGER prevent_tool_execution_reconciliation_update
                 BEFORE UPDATE ON tool_execution_reconciliation_events
                 BEGIN
