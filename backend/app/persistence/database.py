@@ -1925,6 +1925,55 @@ class Database:
                 BEGIN SELECT RAISE(ABORT, 'control event owner mismatch'); END;
                 """
             ),
+            (
+                26,
+                """
+                DROP TRIGGER IF EXISTS validate_agent_revocation_insert;
+                CREATE TRIGGER validate_agent_revocation_insert
+                BEFORE INSERT ON agent_capability_revocations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_capability_grants g
+                    JOIN users u ON u.id=g.user_id
+                    WHERE g.id=NEW.grant_id AND g.user_id=NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT, 'grant revocation owner mismatch'); END;
+
+                DROP TRIGGER IF EXISTS validate_agent_task_event_insert;
+                CREATE TRIGGER validate_agent_task_event_insert
+                BEFORE INSERT ON agent_task_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_tasks t JOIN users u ON u.id=t.user_id
+                    WHERE t.id=NEW.task_id AND t.user_id=NEW.user_id
+                      AND NEW.actor_user_id=NEW.user_id AND u.deleted_at IS NULL
+                      AND (
+                        (
+                          NEW.event_type='assigned' AND t.status='assigned'
+                          AND json_extract(NEW.details_json,'$.from_status') IS NULL
+                          AND json_extract(NEW.details_json,'$.to_status')='assigned'
+                        )
+                        OR
+                        (
+                          json_extract(NEW.details_json,'$.from_status')=t.status
+                          AND json_extract(NEW.details_json,'$.to_status')=NEW.event_type
+                          AND (
+                            (t.status='assigned' AND NEW.event_type IN
+                              ('in_progress','completed','failed','cancelled','expired'))
+                            OR
+                            (t.status='in_progress' AND NEW.event_type IN
+                              ('completed','failed','cancelled','expired'))
+                          )
+                        )
+                      )
+                )
+                BEGIN SELECT RAISE(ABORT, 'task event transition mismatch'); END;
+
+                CREATE TRIGGER prevent_agent_task_content_update
+                BEFORE UPDATE OF title, goal, context_json, capability_ceiling_json,
+                                 expires_at, agent_id, user_id, created_at ON agent_tasks
+                BEGIN SELECT RAISE(ABORT, 'task definition is immutable'); END;
+                """
+            ),
         )
 
         with self._lock:
