@@ -87,6 +87,9 @@ def test_workflow_submits_only_runner_generated_manifest_after_full_pass(
     monkeypatch.setattr(workflow, "load_evidence", fake_load_evidence)
     monkeypatch.setattr(workflow, "submit_evidence", fake_submit)
     monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "cHVibGlj")
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID", "suite-authority-1")
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID", "provider-x-safety-suite")
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION", "suite-1")
     monkeypatch.setenv("AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN", "t" * 40)
     monkeypatch.setenv("AIBRAIN_RUNNER_PRIVATE_KEY_B64", "base64-key-material")
     monkeypatch.setattr(sys, "argv", [
