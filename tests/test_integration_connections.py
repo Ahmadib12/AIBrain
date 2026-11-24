@@ -72,10 +72,11 @@ def test_revocation_blocks_grants_and_is_audited(state):
         owner_id, connection["id"], "calendar", ("calendar.events.read",)
     ) is False
     event = database.connect().execute(
-        "SELECT event_type FROM integration_connection_events WHERE connection_id=?",
+        """SELECT 1 FROM integration_connection_events
+           WHERE connection_id=? AND event_type='owner_revoked_connection'""",
         (connection["id"],),
     ).fetchone()
-    assert event["event_type"] == "owner_revoked_connection"
+    assert event is not None
 
 
 def test_disconnect_is_terminal_for_grants(state):
