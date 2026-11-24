@@ -120,19 +120,19 @@ def test_transport_rejects_request_body_and_redirects(monkeypatch):
 
 def test_transport_rejects_oversized_response_body_and_headers(monkeypatch):
     transport = _transport(monkeypatch, max_response_bytes=8)
-    FakeConnection.response = FakeResponse(body=b"0123456789")
+    FakeConnection.default_response = FakeResponse(body=b"0123456789")
     with pytest.raises(ProviderTransportRejected, match="body exceeds"):
         transport.request("https://api.example.com/")
 
     transport = _transport(monkeypatch, max_response_headers=1)
-    FakeConnection.response = FakeResponse(headers=[("A", "1"), ("B", "2")])
+    FakeConnection.default_response = FakeResponse(headers=[("A", "1"), ("B", "2")])
     with pytest.raises(ProviderTransportRejected, match="too many headers"):
         transport.request("https://api.example.com/")
 
 
 def test_transport_rejects_oversized_header_bytes(monkeypatch):
     transport = _transport(monkeypatch, max_response_header_bytes=256)
-    FakeConnection.response = FakeResponse(headers=[("X-Long", "v" * 300)])
+    FakeConnection.default_response = FakeResponse(headers=[("X-Long", "v" * 300)])
     with pytest.raises(ProviderTransportRejected, match="headers exceed"):
         transport.request("https://api.example.com/")
 
