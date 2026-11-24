@@ -1,4 +1,5 @@
 import sqlite3
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -88,4 +89,47 @@ async def list_agent_events(
         raise HTTPException(
             status_code=404,
             detail={"code": "AGENT_NOT_FOUND", "message": "Agent not found"},
+        ) from None
+
+
+class AgentLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["active", "suspended", "terminated"]
+    reason: str = Field(default="", max_length=500)
+
+
+@router.patch("/{agent_id}/lifecycle")
+async def transition_agent_lifecycle(
+    agent_id: str,
+    request: AgentLifecycleRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        return get_app_state().agents.transition(
+            user["id"],
+            agent_id,
+            target_status=request.status,
+            reason=request.reason,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "AGENT_NOT_FOUND", "message": "Agent not found"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_AGENT_TRANSITION",
+                "message": "The requested agent lifecycle transition is not allowed",
+            },
+        ) from None
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_AGENT_TRANSITION",
+                "message": "The requested agent lifecycle transition is not allowed",
+            },
         ) from None
