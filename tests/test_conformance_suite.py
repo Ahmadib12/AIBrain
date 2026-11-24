@@ -83,7 +83,7 @@ def test_modified_command_is_rejected():
 def test_modified_provider_binding_is_rejected():
     envelope, public = signed_envelope()
     envelope["payload"]["binding"]["provider_id"] = "provider-b"
-    with pytest.raises(PermissionError, match="signature verification failed"):
+    with pytest.raises(PermissionError, match="binding does not match"):
         verify(envelope, public)
 
 
