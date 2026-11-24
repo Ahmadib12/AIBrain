@@ -216,3 +216,20 @@ def test_pinned_connection_closes_socket_if_peer_does_not_match(monkeypatch):
     with pytest.raises(ProviderTransportRejected, match="pinned provider IP"):
         connection.connect()
     assert raw.closed
+
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "1"), ("Content-Length", "1")],
+        [("Content-Length", "999"),],
+        [("Transfer-Encoding", "gzip"),],
+        [("Content-Length", "1"), ("Transfer-Encoding", "chunked")],
+    ],
+)
+def test_transport_rejects_ambiguous_or_oversized_response_framing(monkeypatch, headers):
+    transport = _transport(monkeypatch, max_response_bytes=32)
+    FakeConnection.default_response = FakeResponse(headers=headers)
+    with pytest.raises(ProviderTransportRejected):
+        transport.request("https://api.example.com/")
