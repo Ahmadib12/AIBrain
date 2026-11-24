@@ -1106,25 +1106,43 @@ class Database:
                     lower(hex(randomblob(16))),
                     r.user_id,
                     r.id,
-                    json_extract(r.audit_json, '$.execution_reconciliation.outcome'),
-                    json_extract(r.audit_json, '$.execution_reconciliation.note'),
-                    json_extract(r.audit_json, '$.execution_reconciliation.error_code'),
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.outcome'
+                        ) END,
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.note'
+                        ) END,
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.error_code'
+                        ) END,
                     COALESCE(
-                        json_extract(r.audit_json, '$.execution_reconciliation.reconciled_at'),
+                        CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                            THEN json_extract(
+                                r.audit_json,
+                                '$.execution_reconciliation.reconciled_at'
+                            ) END,
                         r.updated_at
                     )
                 FROM tool_requests AS r
                 JOIN users AS u ON u.id = r.user_id
-                WHERE json_valid(COALESCE(r.audit_json, '{}'))
-                  AND json_type(
-                      r.audit_json, '$.execution_reconciliation'
-                  ) = 'object'
-                  AND json_extract(
-                      r.audit_json, '$.execution_reconciliation.outcome'
-                  ) IN ('succeeded', 'failed')
-                  AND length(trim(COALESCE(json_extract(
-                      r.audit_json, '$.execution_reconciliation.note'
-                  ), ''))) BETWEEN 1 AND 1000
+                WHERE CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                    THEN json_type(
+                        r.audit_json, '$.execution_reconciliation'
+                    ) END = 'object'
+                  AND CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                    THEN json_extract(
+                        r.audit_json, '$.execution_reconciliation.outcome'
+                    ) END IN ('succeeded', 'failed')
+                  AND length(trim(COALESCE(
+                    CASE WHEN json_valid(COALESCE(r.audit_json, '{}'))
+                        THEN json_extract(
+                            r.audit_json, '$.execution_reconciliation.note'
+                        ) END,
+                    ''
+                  ))) BETWEEN 1 AND 1000
                   AND u.deleted_at IS NULL;
 
                 UPDATE tool_requests
