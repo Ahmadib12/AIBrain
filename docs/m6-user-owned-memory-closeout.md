@@ -13,8 +13,8 @@ check pass in the Codespaces environment.
 - Memory remains account-owned and uses the existing owner-scoped repository.
 - Existing pre-M6 memory records have a null consent binding. They remain visible
   to their authenticated owner for review, export, and deletion, but are not
-  available to assistant retrieval or editing under the new consent model and
-  are never silently adopted by a later consent grant.
+  available to assistant retrieval until the owner explicitly reaffirms an
+  individual record through an authenticated update under a new active consent.
 
 ### M6.2 — Explicit consent and access control
 - Memory consent is opt-in and recorded with a policy version, grant timestamp,
@@ -24,7 +24,8 @@ check pass in the Codespaces environment.
 - Database triggers independently reject memory writes without a matching
   active consent and active owner account.
 - Revoked consent cannot be reactivated. A new grant creates a new consent
-  identity and does not make earlier records available to assistant retrieval.
+  identity and does not automatically make earlier records available to
+  assistant retrieval.
 - Revocation blocks subsequent assistant retrieval, while the owner can still
   list, inspect, export, and delete their own stored records.
 - Intelligence requests use `use_memory=false` by default. Setting it to true
@@ -33,7 +34,9 @@ check pass in the Codespaces environment.
 ### M6.3 — Memory creation and organization
 - Owner can create, inspect, list, edit, export, and delete records.
 - Supported categories: preference, goal, context, and project.
-- Owners can edit category, key, value, and confidence.
+- Owners can edit category, key, value, and confidence. An explicit update of
+  a prior-generation record under a new active consent reaffirms that individual
+  record and binds it to the new consent; other old records remain excluded.
 - Payload size, depth, collection size, JSON types, and credential-like values
   are bounded by the existing personal-data validator.
 - Saving is an explicit API operation. M6 does not automatically extract or
@@ -110,9 +113,9 @@ and active consent; it is not silently enabled for anonymous users.
   received a context snapshot cannot be made to “unsee” it; in-flight requests
   may complete with the snapshot assembled while consent was active.
 - Existing legacy memory rows have no consent binding or M6 retention deadline.
-  They remain visible only to the owner for export/deletion, are excluded from
-  assistant retrieval, and require owner deletion or account erasure; a later
-  grant never adopts them.
+  They remain visible to the owner for review/export/deletion and are excluded
+  from assistant retrieval until individually reaffirmed through an explicit
+  update under active consent. A new grant never adopts them in bulk.
 - Behavioral-learning observations and adaptation proposals remain separate
   APIs and are not automatically added to the memory context.
 - No mobile/desktop memory management interface is included in this backend
