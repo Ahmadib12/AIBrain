@@ -376,25 +376,48 @@ class MemoryRepository:
         *,
         value: object,
         confidence: float,
+        key: str | None = None,
+        memory_type: str | None = None,
     ) -> dict:
         if isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
             raise ValueError("Confidence must be between zero and one")
         validate_personal_payload(value)
+        if key is not None:
+            if not isinstance(key, str) or not key.strip() or len(key) > 200:
+                raise ValueError("Invalid memory key")
+            validate_personal_payload(key)
+        if memory_type is not None and memory_type not in {
+            "preference", "goal", "context", "project"
+        }:
+            raise ValueError("Unknown memory type")
         self._purge_expired_for_user(user_id)
         with self.database.transaction(immediate=True):
             consent = self._active_consent(user_id)
             if consent is None:
                 raise LookupError("Memory not found")
+            existing = self.database.connect().execute(
+                """
+                SELECT id, key, memory_type FROM memory_items
+                WHERE id = ? AND user_id = ? AND consent_id = ?
+                  AND status = 'active'
+                """,
+                (memory_id, user_id, consent["id"]),
+            ).fetchone()
+            if existing is None:
+                raise LookupError("Memory not found")
             cursor = self.database.connect().execute(
                 """
                 UPDATE memory_items
-                SET value_json = ?, confidence = ?, updated_at = ?
+                SET value_json = ?, confidence = ?, key = ?, memory_type = ?,
+                    updated_at = ?
                 WHERE id = ? AND user_id = ? AND consent_id = ?
                   AND status = 'active'
                 """,
                 (
                     json.dumps(value, ensure_ascii=False, allow_nan=False),
                     confidence,
+                    (key.strip() if key is not None else existing["key"]),
+                    memory_type if memory_type is not None else existing["memory_type"],
                     _utc_text(),
                     memory_id,
                     user_id,
