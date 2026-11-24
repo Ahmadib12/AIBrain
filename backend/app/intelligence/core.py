@@ -164,7 +164,13 @@ class OrchestrationCore(CentralIntelligenceCore):
 
         def finish(response: IntelligenceResponse) -> IntelligenceResponse:
             nonlocal trace_recording_failed
-            if planning_payload is not None:
+            # Planning summaries may contain user-supplied text. Preserve the
+            # established error-response sanitization boundary by exposing
+            # planning metadata only for completed or unsupported outcomes.
+            if (
+                planning_payload is not None
+                and response.status != ResponseStatus.ERROR
+            ):
                 response = response.model_copy(
                     update={"planning": planning_payload}
                 )
