@@ -313,6 +313,10 @@ class AgentExecutionRepository:
                 )
                 persisted_request = gateway._tool_requests.get(user_id, proposal["id"])
                 if persisted_request["contract_fingerprint"] != step["contract_fingerprint"]:
+                    try:
+                        gateway.cancel(user_id, proposal["id"])
+                    except (LookupError, PermissionError):
+                        pass
                     raise PermissionError("Tool contract changed while creating the tool request")
                 result = gateway.execute(proposal, user_id=user_id)
                 with self.database.transaction(immediate=True):
