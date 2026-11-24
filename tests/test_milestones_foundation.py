@@ -1167,14 +1167,14 @@ def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     rows = first.connect().execute(
         "SELECT COUNT(*) AS count FROM schema_migrations"
     ).fetchone()
-    assert rows["count"] == 17
+    assert rows["count"] == 18
     first.close()
 
     second = Database(f"sqlite:///{path}")
     rows = second.connect().execute(
         "SELECT COUNT(*) AS count FROM schema_migrations"
     ).fetchone()
-    assert rows["count"] == 17
+    assert rows["count"] == 18
     second.close()
 
 
