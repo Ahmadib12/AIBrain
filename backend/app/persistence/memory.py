@@ -345,6 +345,7 @@ class MemoryRepository:
     ) -> tuple[dict[str, Any], ...]:
         if not isinstance(query, str) or not query.strip() or len(query) > 500:
             raise ValueError("Memory search query must contain 1 to 500 characters")
+        validate_personal_payload(query)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
             raise ValueError("Memory result limit must be between 1 and 10")
         query_terms = set(_TOKEN_PATTERN.findall(query.casefold()))
