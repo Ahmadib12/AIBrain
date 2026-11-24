@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         default=15_728_640, gt=0
     )
     ai_max_concurrent_requests: int = Field(default=10, gt=0)
+    integration_vault_key_b64: SecretStr | None = Field(default=None, repr=False)
     provider_operator_token: SecretStr | None = Field(
         default=None,
         min_length=32,
@@ -49,6 +50,22 @@ class Settings(BaseSettings):
     webauthn_rp_name: str = "AIBrain"
     webauthn_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ()
     webauthn_challenge_ttl_seconds: int = Field(default=300, gt=0)
+
+    @model_validator(mode="after")
+    def validate_integration_vault_key(self):
+        if self.integration_vault_key_b64 is not None:
+            import base64
+            import binascii
+            try:
+                key = base64.b64decode(
+                    self.integration_vault_key_b64.get_secret_value(),
+                    validate=True,
+                )
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("Integration vault key must be valid base64") from exc
+            if len(key) != 32:
+                raise ValueError("Integration vault key must decode to exactly 32 bytes")
+        return self
 
     @model_validator(mode="after")
     def validate_privileged_tokens_are_separate(self):
