@@ -260,3 +260,32 @@ def test_learning_governance_history_is_immutable(client):
             "WHERE adaptation_id = ?",
             (adaptation_id,),
         )
+
+
+def test_learning_adaptation_can_be_paused_resumed_and_revoked(client):
+    token = _register(client, "m7-rollback@example.com")
+    adaptation_id = _proposal(client, token)
+    base = f"/api/v1/personal/learning/adaptations/{adaptation_id}"
+    headers = _headers(token)
+
+    for status in ("approved", "suspended", "approved", "revoked"):
+        response = client.patch(
+            base,
+            headers=headers,
+            json={"status": status, "reason": f"Owner selected {status}"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == status
+        assert response.json()["execution_permitted"] is False
+
+    terminal = client.patch(
+        base,
+        headers=headers,
+        json={"status": "approved"},
+    )
+    assert terminal.status_code == 409
+
+    events = client.get(base + "/events", headers=headers)
+    assert [item["event_type"] for item in events.json()] == [
+        "proposed", "approved", "suspended", "approved", "revoked"
+    ]
