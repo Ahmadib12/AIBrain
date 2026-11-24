@@ -123,3 +123,57 @@ class IntegrationConnectionLifecycle:
             # that destroys any newly written ciphertext.
             self.connections.expire_pending(user_id, connection_id)
             raise
+
+
+    async def rotate_verified(
+        self, user_id: str, connection_id: str,
+        credential_material: dict[str, Any],
+    ) -> dict:
+        """Verify a refreshed credential before replacing the encrypted payload."""
+        if not self.vault.available:
+            raise RuntimeError("Integration credential vault is unavailable")
+        connection = self.connections.get(user_id, connection_id)
+        if connection["status"] != "active":
+            raise PermissionError("Only active connections can rotate credentials")
+        integration_id = connection["integration_id"]
+        verifier = self.verifiers.get(integration_id)
+        if verifier is None:
+            raise PermissionError("No trusted provider verifier is configured")
+        scopes = tuple(sorted(
+            grant["scope"] for grant in connection["grants"]
+            if grant["status"] == "active" and grant["revoked_at"] is None
+        ))
+        if not scopes:
+            raise PermissionError("Connection has no active owner-approved scopes")
+        verification = await verifier.verify(
+            user_id=user_id, integration_id=integration_id,
+            connection_id=connection_id,
+            credential_material=credential_material,
+            requested_scopes=scopes,
+        )
+        previous_subject = self.connections.latest_provider_subject(
+            user_id, connection_id
+        )
+        if (
+            not isinstance(verification, ProviderVerification)
+            or not _FINGERPRINT.fullmatch(verification.provider_subject_fingerprint)
+            or verification.provider_subject_fingerprint != previous_subject
+            or tuple(sorted(verification.granted_scopes)) != scopes
+        ):
+            raise PermissionError("Rotated credential does not match the verified provider identity and scopes")
+        if verification.expires_at is not None:
+            try:
+                expiry = datetime.fromisoformat(verification.expires_at)
+            except (TypeError, ValueError):
+                raise PermissionError("Provider credential expiry is invalid") from None
+            if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
+                raise PermissionError("Rotated provider credential is expired")
+        self.vault.rotate(
+            user_id, connection_id, integration_id, credential_material
+        )
+        return self.connections.record_credential_rotation(
+            user_id, connection_id,
+            verifier_id=verifier.verifier_id,
+            provider_subject_fingerprint=verification.provider_subject_fingerprint,
+            expires_at=verification.expires_at,
+        )
