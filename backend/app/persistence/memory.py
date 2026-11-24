@@ -436,31 +436,48 @@ class MemoryRepository:
                 raise LookupError("Memory not found")
             existing = self.database.connect().execute(
                 """
-                SELECT id, key, memory_type FROM memory_items
-                WHERE id = ? AND user_id = ? AND consent_id = ?
-                  AND status = 'active'
+                SELECT id, key, memory_type, created_at, expires_at
+                FROM memory_items
+                WHERE id = ? AND user_id = ? AND status = 'active'
                 """,
-                (memory_id, user_id, consent["id"]),
+                (memory_id, user_id),
             ).fetchone()
             if existing is None:
                 raise LookupError("Memory not found")
+
+            # An explicit owner PATCH is the only path that re-adopts a record
+            # from an earlier or legacy consent generation.
+            resolved_expiry = existing["expires_at"]
+            if consent["retention_days"] is not None:
+                policy_expiry = (
+                    self._parse_timestamp(existing["created_at"])
+                    + timedelta(days=consent["retention_days"])
+                )
+                current_expiry = (
+                    self._parse_timestamp(resolved_expiry)
+                    if resolved_expiry is not None
+                    else None
+                )
+                if current_expiry is None or current_expiry > policy_expiry:
+                    resolved_expiry = _utc_text(policy_expiry)
+
             cursor = self.database.connect().execute(
                 """
                 UPDATE memory_items
                 SET value_json = ?, confidence = ?, key = ?, memory_type = ?,
-                    updated_at = ?
-                WHERE id = ? AND user_id = ? AND consent_id = ?
-                  AND status = 'active'
+                    consent_id = ?, expires_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'active'
                 """,
                 (
                     json.dumps(value, ensure_ascii=False, allow_nan=False),
                     confidence,
                     (key.strip() if key is not None else existing["key"]),
                     memory_type if memory_type is not None else existing["memory_type"],
+                    consent["id"],
+                    resolved_expiry,
                     _utc_text(),
                     memory_id,
                     user_id,
-                    consent["id"],
                 ),
             )
             if cursor.rowcount != 1:
