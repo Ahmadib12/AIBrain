@@ -9,8 +9,8 @@ This document distinguishes implemented foundations from external integrations t
 - User registration, login, logout, account deletion, and protected personal APIs.
 - User-owned memory with a versioned consent ledger, database-enforced consent gates,
   authenticated CRUD/export/search, per-request intelligence opt-in, retention,
-  revocation, and deletion controls (M6 implementation committed; local verification
-  pending).
+  revocation, and deletion controls (M6.1–M6.6 implemented and verified; 778 tests
+  passing in Codespaces on 2026-11-24).
 - Behavioral-learning observations and adaptation proposals with review status.
 - Provider timeout, fallback, health monitoring, and bounded health-check locking.
 - Safe tool contracts and a read-only echo tool.
