@@ -109,3 +109,45 @@ async def test_error_response_does_not_expose_user_text_through_planning() -> No
     assert response.planning is None
     assert "ORCHID-PRIVATE-4821" not in str(response.model_dump())
 
+
+
+
+@pytest.mark.asyncio
+async def test_core_passes_prior_turns_to_context_aware_planning() -> None:
+    adapter = RecordingAdapter()
+    core = OrchestrationCore(adapters={"text_generation": adapter})
+    request = IntelligenceRequest(
+        messages=[
+            {"role": "user", "content": "Explain how DNS works"},
+            {"role": "assistant", "content": "DNS translates domain names into IP addresses."},
+            {"role": "user", "content": "Make it shorter"},
+        ]
+    )
+
+    response = await core.process(request)
+
+    assert response.status.value == "completed"
+    assert response.planning is not None
+    assert response.planning["intent"]["kind"] == "transform"
+    assert response.planning["intent"]["context_used"] is True
+    assert response.planning["assessment"]["requires_clarification"] is False
+    assert response.planning["assessment"]["execution_permitted"] is False
+    assert adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_core_requests_clarification_for_follow_up_without_history() -> None:
+    adapter = RecordingAdapter()
+    core = OrchestrationCore(adapters={"text_generation": adapter})
+    request = IntelligenceRequest(
+        messages=[{"role": "user", "content": "Make it shorter"}]
+    )
+
+    response = await core.process(request)
+
+    assert response.status.value == "completed"
+    assert response.planning is not None
+    assert response.planning["assessment"]["requires_clarification"] is True
+    assert response.planning["plan"]["tasks"][0]["task_id"] == "clarify-context"
+    assert response.planning["assessment"]["execution_permitted"] is False
+    assert adapter.calls == 1
