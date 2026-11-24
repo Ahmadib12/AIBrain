@@ -113,8 +113,8 @@ class PinnedProviderHTTPTransport:
 
     @staticmethod
     def _request_path(url: str) -> str:
-        if any(ord(char) < 32 or ord(char) == 127 for char in url):
-            raise ProviderTransportRejected("Provider URL contains control characters")
+        if any(ord(char) < 33 or ord(char) > 126 or char == "\\\\" for char in url):
+            raise ProviderTransportRejected("Provider URL contains prohibited characters")
         try:
             parsed = urlsplit(url)
         except ValueError:
