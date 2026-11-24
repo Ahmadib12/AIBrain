@@ -398,11 +398,3 @@ class BehavioralLearningRepository:
             "details": json.loads(row["details_json"]),
             "created_at": row["created_at"],
         } for row in rows)
-
-    def delete_all(self, user_id: str) -> None:
-        with self.database.transaction():
-            connection = self.database.connect()
-            connection.execute("DELETE FROM observations WHERE user_id = ?", (user_id,))
-            connection.execute("DELETE FROM learning_evaluations WHERE user_id = ?", (user_id,))
-            connection.execute("DELETE FROM learning_adaptation_events WHERE user_id = ?", (user_id,))
-            connection.execute("DELETE FROM adaptations WHERE user_id = ?", (user_id,))
