@@ -3,7 +3,7 @@ import base64
 import binascii
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
@@ -131,6 +131,43 @@ class ToolExecutionReconciliationRequest(BaseModel):
     note: str = Field(min_length=1, max_length=1000)
     result: dict | None = None
     error_code: str | None = Field(default=None, max_length=64)
+
+
+_EXECUTION_HISTORY_PUBLIC_FIELDS = {
+    "dispatch_audit": {
+        "attempt_id", "adapter_id", "adapter_version",
+        "provider_id", "provider_scope", "error_code",
+    },
+    "dispatch_recovery": {
+        "reason", "adapter_id", "adapter_version",
+        "provider_id", "provider_scope",
+    },
+    "lookup_authorization": {
+        "provider_id", "adapter_id", "adapter_version",
+        "provider_scope", "tool_id",
+    },
+    "execution_reconciliation": {"outcome", "error_code", "note"},
+}
+
+
+def _public_execution_history_event(event: dict) -> dict:
+    """Project an internal ledger row into an owner-visible, redacted event."""
+    record_type = event["record_type"]
+    allowed = _EXECUTION_HISTORY_PUBLIC_FIELDS.get(record_type, set())
+    details = event.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    return {
+        "id": event["id"],
+        "record_type": record_type,
+        "event_type": event["event_type"],
+        "action_digest": event.get("action_digest"),
+        "details": {
+            key: value for key, value in details.items() if key in allowed
+        },
+        "created_at": event["created_at"],
+        "certification_id": event.get("certification_id"),
+    }
 
 
 @router.get("")
@@ -375,6 +412,47 @@ async def get_tool_request(
             if attempt is not None
             else None
         ),
+    }
+
+
+@router.get("/requests/{request_id}/history")
+async def get_tool_execution_history(
+    request_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Return a redacted, paginated history for a request owned by the caller."""
+    try:
+        events = get_app_state().tool_requests.get_execution_history(
+            user["id"],
+            request_id,
+            limit=limit + 1,
+            offset=offset,
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "TOOL_REQUEST_NOT_FOUND",
+                "message": "Tool request not found",
+            },
+        ) from None
+
+    has_more = len(events) > limit
+    visible_events = events[:limit]
+    return {
+        "request_id": request_id,
+        "items": [
+            _public_execution_history_event(event)
+            for event in visible_events
+        ],
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": offset + limit if has_more else None,
+        },
     }
 
 
