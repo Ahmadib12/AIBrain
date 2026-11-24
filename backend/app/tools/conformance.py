@@ -163,3 +163,50 @@ def verify_evidence_manifest(
         "expires_at": expires.astimezone(timezone.utc).isoformat(),
         "conformance_results": {name: True for name in sorted(REQUIRED_CHECKS)},
     }
+
+
+
+def verify_signed_suite_artifact(
+    manifest: dict,
+    artifacts: Mapping[str, bytes],
+    *,
+    authority_public_key: bytes,
+    authority_key_id: str,
+    expected_suite_id: str,
+    expected_suite_version: str,
+) -> dict:
+    """Independently verify the suite-authority signature on uploaded evidence."""
+    import json
+
+    from backend.app.tools.conformance_suite import (
+        canonical_json as suite_canonical_json,
+        verify_signed_suite,
+    )
+
+    suite_bytes = artifacts.get("signed-suite.json")
+    if not isinstance(suite_bytes, bytes) or not suite_bytes or len(suite_bytes) > 1024 * 1024:
+        raise ValueError("Evidence must include a bounded signed-suite.json artifact")
+    try:
+        envelope = json.loads(suite_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Signed conformance suite artifact is not valid UTF-8 JSON") from exc
+    if not isinstance(envelope, dict) or suite_canonical_json(envelope) != suite_bytes:
+        raise ValueError("Signed conformance suite artifact must use canonical JSON")
+
+    binding_fields = (
+        "provider_id", "adapter_id", "adapter_version", "provider_scope",
+        "tool_id", "tool_contract_fingerprint", "capabilities",
+        "test_suite_version", "sandbox_environment",
+    )
+    expected_binding = {field: manifest.get(field) for field in binding_fields}
+    verified = verify_signed_suite(
+        envelope=envelope,
+        authority_public_key=authority_public_key,
+        expected_authority_key_id=authority_key_id,
+        expected_suite_id=expected_suite_id,
+        expected_suite_version=expected_suite_version,
+        expected_binding=expected_binding,
+    )
+    if verified["suite_version"] != manifest.get("test_suite_version"):
+        raise PermissionError("Signed suite version does not match evidence manifest")
+    return verified
