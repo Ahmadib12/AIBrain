@@ -1400,6 +1400,24 @@ class Database:
                     );
                 END;
 
+                CREATE TRIGGER validate_learning_adaptation_transition
+                BEFORE UPDATE OF status ON adaptations
+                WHEN NOT (
+                    OLD.status = NEW.status
+                    OR (OLD.status = 'pending' AND NEW.status IN (
+                        'approved', 'rejected', 'expired'
+                    ))
+                    OR (OLD.status = 'approved' AND NEW.status IN (
+                        'suspended', 'revoked', 'expired'
+                    ))
+                    OR (OLD.status = 'suspended' AND NEW.status IN (
+                        'approved', 'revoked', 'expired'
+                    ))
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid learning adaptation transition');
+                END;
+
                 CREATE TRIGGER validate_learning_adaptation_event
                 BEFORE INSERT ON learning_adaptation_events
                 WHEN NOT EXISTS (
