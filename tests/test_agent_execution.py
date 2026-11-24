@@ -529,7 +529,7 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
     with state.database.transaction(immediate=True):
         state.agent_execution._event(user_id, interrupted_id, "started", {
             "from_status": "authorized", "to_status": "running",
-            "plan_digest": interrupted_create.json()["plan_digest"],
+            "plan_digest": state.agent_execution._raw_run(user_id, interrupted_id)["plan_digest"],
             "integration_bound": True,
         })
         state.database.connect().execute(
