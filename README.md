@@ -204,6 +204,17 @@ must never be copied to the runner, AIBrain API server, repository, or CI
 environment. Provision the corresponding raw 32-byte Ed25519 public key as
 base64 and the authority key ID to the isolated runner deployment.
 
+The AIBrain API server must independently receive the same four deployment
+pins through `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64`,
+`AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`,
+`AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID`, and
+`AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION`. Evidence ingestion, runner
+attestation-payload issuance, runner attestation acceptance, and operator
+certification fail closed when the server-side pins are absent or the uploaded
+signed-suite artifact fails verification. The API verifies the canonical
+`signed-suite.json` artifact against the evidence manifest's exact binding;
+it does not trust the runner's claim that its local verification succeeded.
+
 The signed suite payload schema is `aibrain-conformance-suite-v1`; its
 signature covers the suite identity, version, exact provider/tool binding, and
 every argv command. The authority public key and key ID are pinned through
