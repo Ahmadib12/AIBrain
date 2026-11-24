@@ -1,4 +1,11 @@
-"""Provider-independent intent, goal, and planning contracts."""
+"""Provider-independent intent, goal, planning, and evaluation APIs."""
+
+from backend.app.intelligence.planning.evaluation import (
+    PlanningCaseResult,
+    PlanningEvaluationCase,
+    PlanningEvaluationResult,
+    evaluate_planning,
+)
 
 from backend.app.intelligence.planning.engine import (
     PlanAssessment,
@@ -25,4 +32,8 @@ __all__ = [
     "PlanAssessment",
     "PlanningEngine",
     "PlanningResult",
+    "PlanningCaseResult",
+    "PlanningEvaluationCase",
+    "PlanningEvaluationResult",
+    "evaluate_planning",
 ]
