@@ -111,6 +111,7 @@ def test_run_requires_explicit_owner_authorization_and_executes_read_only(
         f"/api/v1/agent-runs/{run['id']}/execute", headers=auth(token)
     )
     assert executed.status_code == 200, executed.text
+
     result = executed.json()
     assert result["status"] == "completed"
     assert result["steps"][0]["status"] == "completed"
@@ -335,7 +336,18 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
             "required": ["query"],
             "additionalProperties": False,
         },
-        output_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 10,
+                }
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        },
     )
     state.integrations.register(IntegrationManifest(
         integration_id="catalog",
@@ -440,7 +452,8 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
         f"/api/v1/agent-runs/{run['id']}/execute", headers=auth(token)
     )
     assert executed.status_code == 200, executed.text
-    assert executed.json()["status"] == "completed"
+
+    assert executed.json()["status"] == "completed", executed.json()
     assert executed.json()["steps"][0]["status"] == "completed"
     assert executed.json()["steps"][0]["result"] == {"items": ["bounded-result"]}
     dispatch = state.database.connect().execute(
