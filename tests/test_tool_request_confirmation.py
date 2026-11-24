@@ -518,14 +518,17 @@ def test_unknown_execution_can_be_reconciled_as_succeeded(tmp_path):
         attempt = repository.get_execution_attempt(user_id, request["id"])
         assert attempt["status"] == "succeeded"
         assert attempt["error_code"] is None
-        audit = json.loads(
-            database.connect().execute(
-                "SELECT audit_json FROM tool_requests WHERE id = ?",
-                (request["id"],),
-            ).fetchone()["audit_json"]
+        history = repository.get_execution_history(user_id, request["id"])
+        reconciliation_events = [
+            event for event in history
+            if event["record_type"] == "execution_reconciliation"
+        ]
+        assert len(reconciliation_events) == 1
+        assert reconciliation_events[0]["details"]["outcome"] == "succeeded"
+        assert reconciliation_events[0]["details"]["reconciled_by"] == user_id
+        assert reconciliation_events[0]["details"]["note"] == (
+            "Verified the external read operation completed."
         )
-        assert audit["execution_reconciliation"]["outcome"] == "succeeded"
-        assert audit["execution_reconciliation"]["reconciled_by"] == user_id
     finally:
         database.shutdown()
 
