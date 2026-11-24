@@ -1470,6 +1470,102 @@ class Database:
                 END;
                 """
             ),
+            (
+                23,
+                """
+                CREATE TABLE agents (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
+                    description TEXT NOT NULL DEFAULT ''
+                        CHECK (length(description) <= 1000),
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                        CHECK (json_valid(metadata_json)),
+                    status TEXT NOT NULL DEFAULT 'draft'
+                        CHECK (status = 'draft'),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_agents_owner_created
+                    ON agents(user_id, created_at, id);
+
+                CREATE TABLE agent_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL
+                        CHECK (event_type IN ('registered')),
+                    details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+                );
+
+                CREATE INDEX idx_agent_events_owner_agent
+                    ON agent_events(user_id, agent_id, created_at, id);
+
+                CREATE TRIGGER prevent_agent_identity_update
+                BEFORE UPDATE OF id, user_id, created_at ON agents
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent identity is immutable');
+                END;
+
+                CREATE TRIGGER prevent_agent_delete
+                BEFORE DELETE ON agents
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'agents may only be deleted during account erasure');
+                END;
+
+                CREATE TRIGGER validate_agent_insert
+                BEFORE INSERT ON agents
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = NEW.user_id AND deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent owner account is not active');
+                END;
+
+                CREATE TRIGGER prevent_agent_event_update
+                BEFORE UPDATE ON agent_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_agent_event_delete
+                BEFORE DELETE ON agent_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent events may only be deleted during account erasure');
+                END;
+
+                CREATE TRIGGER validate_agent_event_insert
+                BEFORE INSERT ON agent_events
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM agents AS a
+                    JOIN users AS u ON u.id = a.user_id
+                    WHERE a.id = NEW.agent_id
+                      AND a.user_id = NEW.user_id
+                      AND NEW.actor_user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'agent event owner mismatch');
+                END;
+                """
+            ),
         )
 
         with self._lock:
