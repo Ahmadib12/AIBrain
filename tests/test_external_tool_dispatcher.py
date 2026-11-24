@@ -493,12 +493,36 @@ def test_unknown_provider_outcome_is_audited_and_not_retried(tmp_path):
                 action_digest=frozen["action_digest"],
                 result={"accepted": True},
             )
+        certification = repository.get_active_external_adapter_certification(
+            provider_id=provider.capabilities.provider_id,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_scope=provider.capabilities.provider_scope,
+            tool_id=contract().tool_id,
+            tool_contract_fingerprint=fingerprint,
+            capabilities=snapshot,
+        )
+        assert certification is not None
+        authorization = repository.begin_external_outcome_lookup(
+            user_id,
+            request_id,
+            certification_id=certification["id"],
+            provider_id=provider.capabilities.provider_id,
+            adapter_id=provider.capabilities.adapter_id,
+            adapter_version=provider.capabilities.adapter_version,
+            provider_scope=provider.capabilities.provider_scope,
+            tool_id=contract().tool_id,
+            tool_contract_fingerprint=fingerprint,
+            capabilities=snapshot,
+            action_digest=frozen["action_digest"],
+        )
         repository.record_external_outcome_lookup(
             user_id,
             request_id,
             action_digest=frozen["action_digest"],
             outcome="unknown",
             evidence_reference="provider-lookup-1",
+            lookup_authorization_id=authorization["id"],
         )
         audit = repository.get_dispatch_audit(user_id, request_id)
         assert [event["event_type"] for event in audit] == [
