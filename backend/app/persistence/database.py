@@ -1328,6 +1328,129 @@ class Database:
                 END;
                 """
             ),
+            (
+                22,
+                """
+                ALTER TABLE adaptations ADD COLUMN expires_at TEXT;
+
+                CREATE TABLE learning_adaptation_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    adaptation_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (
+                        event_type IN (
+                            'proposed', 'approved', 'rejected',
+                            'suspended', 'revoked', 'expired'
+                        )
+                    ),
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(adaptation_id) REFERENCES adaptations(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_learning_adaptation_events_owner
+                    ON learning_adaptation_events(user_id, adaptation_id, created_at);
+
+                CREATE TABLE learning_evaluations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    adaptation_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN (
+                            'improved', 'no_change', 'regressed', 'inconclusive'
+                        )
+                    ),
+                    metric TEXT NOT NULL CHECK (
+                        length(trim(metric)) BETWEEN 1 AND 120
+                    ),
+                    baseline_value REAL NOT NULL,
+                    observed_value REAL NOT NULL,
+                    confidence REAL NOT NULL CHECK (
+                        confidence >= 0.0 AND confidence <= 1.0
+                    ),
+                    evidence_json TEXT NOT NULL,
+                    source TEXT NOT NULL CHECK (source = 'user_reported'),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(adaptation_id) REFERENCES adaptations(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_learning_evaluations_owner
+                    ON learning_evaluations(user_id, adaptation_id, created_at);
+
+                CREATE TRIGGER prevent_learning_adaptation_event_update
+                BEFORE UPDATE ON learning_adaptation_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'learning adaptation events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_learning_adaptation_event_delete
+                BEFORE DELETE ON learning_adaptation_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'learning adaptation events may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER validate_learning_adaptation_event
+                BEFORE INSERT ON learning_adaptation_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM adaptations AS a
+                    JOIN users AS u ON u.id = a.user_id
+                    WHERE a.id = NEW.adaptation_id
+                      AND a.user_id = NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'learning event owner mismatch');
+                END;
+
+                CREATE TRIGGER prevent_learning_evaluation_update
+                BEFORE UPDATE ON learning_evaluations
+                BEGIN
+                    SELECT RAISE(ABORT, 'learning evaluations are immutable');
+                END;
+
+                CREATE TRIGGER prevent_learning_evaluation_delete
+                BEFORE DELETE ON learning_evaluations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'learning evaluations may only be deleted during account erasure'
+                    );
+                END;
+
+                CREATE TRIGGER validate_learning_evaluation
+                BEFORE INSERT ON learning_evaluations
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM adaptations AS a
+                    JOIN users AS u ON u.id = a.user_id
+                    WHERE a.id = NEW.adaptation_id
+                      AND a.user_id = NEW.user_id
+                      AND a.status = 'approved'
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'evaluation requires an approved owner adaptation'
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
