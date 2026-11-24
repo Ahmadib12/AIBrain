@@ -217,16 +217,23 @@ class MemoryRepository:
         except ValueError:
             return True
 
-    def _active_consent(self, user_id: str):
+    def _active_consent(
+        self,
+        user_id: str,
+        *,
+        require_active_user: bool = False,
+    ):
         connection = self.database.connect()
         user = connection.execute(
             "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL",
             (user_id,),
         ).fetchone()
         if user is None:
-            # Preserve the database-level deleted-account boundary for callers
-            # that raced with account deletion.
-            raise sqlite3.IntegrityError("user account is not active")
+            if require_active_user:
+                # Preserve the database-level deleted-account boundary for
+                # writes that raced with account deletion.
+                raise sqlite3.IntegrityError("user account is not active")
+            return None
         return connection.execute(
             """
             SELECT id, retention_days FROM memory_consents
@@ -262,7 +269,10 @@ class MemoryRepository:
         memory_id = str(uuid.uuid4())
         now = _utc_now()
         with self.database.transaction(immediate=True):
-            consent = self._active_consent(user_id)
+            consent = self._active_consent(
+                user_id,
+                require_active_user=True,
+            )
             if consent is None:
                 raise PermissionError("Explicit memory consent is required")
             policy_expiry = (
