@@ -291,6 +291,7 @@ class BehavioralLearningRepository:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError("Evaluation confidence must be between 0 and 1")
         validate_personal_payload(evidence)
+        self._expire_if_due(user_id, adaptation_id)
         adaptation = self.database.connect().execute(
             "SELECT status FROM adaptations WHERE id = ? AND user_id = ?",
             (adaptation_id, user_id),
