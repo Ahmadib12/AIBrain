@@ -6,6 +6,7 @@ from backend.app.api.v1.agent_control import router as agent_control_router
 from backend.app.api.v1.agent_execution import router as agent_execution_router
 from backend.app.api.v1.health import router as health_router
 from backend.app.api.v1.intelligence import router as intelligence_router
+from backend.app.api.v1.integrations import router as integrations_router
 from backend.app.api.v1.providers import router as providers_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.personal import router as personal_router
@@ -20,6 +21,7 @@ api_router.include_router(intelligence_router)
 api_router.include_router(auth_router)
 api_router.include_router(personal_router)
 api_router.include_router(tools_router)
+api_router.include_router(integrations_router)
 api_router.include_router(agents_router)
 api_router.include_router(agent_control_router)
 api_router.include_router(agent_execution_router)
