@@ -185,7 +185,7 @@ def test_follow_up_uses_bounded_prior_context_without_copying_it_into_summary(
     )
 
     assert result.intent.kind is IntentKind.TRANSFORM
-    assert result.intent.context_used is True
+    assert result.intent.context_available is True
     assert result.intent.summary == text
     assert "Explain how DNS works" not in str(result.model_dump())
     assert "DNS translates domain names" not in str(result.model_dump())
@@ -201,7 +201,7 @@ def test_contextual_follow_up_without_history_requests_clarification(
     text = "Make it shorter"
     result = planner.plan(text, classifier.classify(text))
 
-    assert result.intent.context_used is False
+    assert result.intent.context_available is False
     assert result.assessment.requires_clarification is True
     assert result.assessment.requires_authorization is False
     assert result.assessment.execution_permitted is False
