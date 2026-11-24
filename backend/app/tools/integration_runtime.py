@@ -11,6 +11,10 @@ from typing import Any, Protocol, runtime_checkable
 from backend.app.persistence.integration_connections import IntegrationConnectionRepository
 from backend.app.tools.contracts import ToolRisk
 from backend.app.tools.integrations import IntegrationRegistry
+from backend.app.tools.integration_provider_readiness import (
+    ProviderReadinessEvidence,
+    ProviderReadinessGate,
+)
 from backend.app.tools.validation import validate_tool_arguments
 
 
@@ -41,11 +45,21 @@ class IntegrationAdapterRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, ReadOnlyIntegrationAdapter] = {}
 
-    def register(self, integration_id: str, adapter: ReadOnlyIntegrationAdapter) -> None:
+    def register(
+        self,
+        integration_id: str,
+        adapter: ReadOnlyIntegrationAdapter,
+        *,
+        readiness: ProviderReadinessEvidence | None = None,
+    ) -> None:
         if not isinstance(integration_id, str) or not integration_id.strip():
             raise ValueError("Integration ID is invalid")
         if not isinstance(adapter, ReadOnlyIntegrationAdapter):
             raise TypeError("A conforming read-only integration adapter is required")
+        if getattr(adapter, "production_provider", False) is True:
+            ProviderReadinessGate.validate(integration_id, readiness)
+        elif readiness is not None:
+            raise ValueError("Readiness evidence is reserved for production provider adapters")
         if integration_id in self._adapters:
             raise ValueError("An adapter is already registered for this integration")
         self._adapters[integration_id] = adapter
