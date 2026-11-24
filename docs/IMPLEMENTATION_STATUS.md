@@ -11,7 +11,7 @@ This document distinguishes implemented foundations from external integrations t
   authenticated CRUD/export/search, per-request intelligence opt-in, retention,
   revocation, and deletion controls (M6.1–M6.6 implemented and verified; 778 tests
   passing in Codespaces on 2026-11-24).
-- Behavioral-learning observations and adaptation proposals with review status.
+- Behavioral-learning observations, expiring adaptation proposals, owner decisions, immutable governance events, and user-reported outcome evaluations (M7 implementation committed; local verification pending).
 - Provider timeout, fallback, health monitoring, and bounded health-check locking.
 - Safe tool contracts and a read-only echo tool.
 - Multimodal and streaming event Pydantic contracts.
@@ -23,7 +23,7 @@ This document distinguishes implemented foundations from external integrations t
 
 - Personal memory retrieval currently uses deterministic lexical ranking; semantic/vector
   retrieval, automatic memory extraction, and cross-device synchronization are not implemented.
-- Behavioral learning: observations and adaptation state exist, but outcome measurement and automated learning are not implemented.
+- Behavioral learning: evaluation evidence is currently user-reported and descriptive; automatic telemetry, causal attribution, model training, and automatic adaptation application are not implemented.
 - AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
 - Tools: contracts and a read-only echo implementation exist, but confirmation storage, consequential tools, isolation, and verification are not implemented.
 - Agents: the interface exists, but lifecycle and planning orchestration are not implemented.
