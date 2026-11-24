@@ -152,3 +152,15 @@ def test_planner_rejects_credential_content(
     text = "Explain api_key=super-secret"
     with pytest.raises(ValidationError):
         planner.plan(text, classifier.classify(text))
+
+
+
+def test_planning_assessment_cannot_grant_execution() -> None:
+    from backend.app.intelligence.planning.engine import PlanAssessment
+
+    with pytest.raises(ValidationError, match="cannot authorize"):
+        PlanAssessment(
+            plan_valid=True,
+            requires_authorization=False,
+            execution_permitted=True,
+        )
