@@ -7,6 +7,7 @@ class FakeAppState:
     tool_requests = object()
     memory = object()
     integration_connections = object()
+    integration_orchestrator = object()
 
 
 def install_lifecycle_fakes(monkeypatch, *, start_error=None, stop_error=None):
@@ -66,6 +67,23 @@ def install_lifecycle_fakes(monkeypatch, *, start_error=None, stop_error=None):
         "IntegrationConnectionExpiryWorker",
         FakeIntegrationExpiryWorker,
     )
+
+    class FakeIntegrationDispatchRecoveryWorker:
+        def __init__(self, orchestrator, *, interval_seconds, stale_after_seconds):
+            assert orchestrator is state.integration_orchestrator
+            events.append(("construct-dispatch-recovery", interval_seconds, stale_after_seconds))
+
+        async def start(self):
+            events.append("dispatch-recovery-start")
+
+        async def stop(self):
+            events.append("dispatch-recovery-stop")
+
+    monkeypatch.setattr(
+        main_module,
+        "IntegrationDispatchRecoveryWorker",
+        FakeIntegrationDispatchRecoveryWorker,
+    )
     monkeypatch.setattr(
         main_module,
         "reset_app_state",
@@ -87,13 +105,20 @@ async def test_application_lifespan_starts_and_stops_recovery_worker(monkeypatch
             ),
             ("construct-memory", main_module.settings.memory_retention_interval_seconds),
             ("construct-integration-expiry", main_module.settings.integration_expiry_interval_seconds),
+            (
+                "construct-dispatch-recovery",
+                main_module.settings.integration_dispatch_recovery_interval_seconds,
+                main_module.settings.integration_dispatch_stale_after_seconds,
+            ),
             "start",
             "memory-start",
             "integration-expiry-start",
+            "dispatch-recovery-start",
         ]
 
-    assert events[-4:] == [
-        "integration-expiry-stop", "memory-stop", "stop", "reset"
+    assert events[-5:] == [
+        "dispatch-recovery-stop", "integration-expiry-stop",
+        "memory-stop", "stop", "reset",
     ]
 
 
