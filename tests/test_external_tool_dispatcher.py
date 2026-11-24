@@ -1365,3 +1365,68 @@ def test_dispatch_recovery_events_are_retained_until_account_erasure(tmp_path):
         ).fetchone()[0] == 0
     finally:
         database.close()
+
+
+
+def test_execution_history_combines_dispatch_lookup_and_authorization_records(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        outcome = dispatcher.lookup(user_id, request_id)
+        assert outcome.status is ExternalToolOutcomeStatus.UNKNOWN
+
+        history = repository.get_execution_history(user_id, request_id)
+        assert [item["record_type"] for item in history] == [
+            "dispatch_audit",
+            "dispatch_audit",
+            "lookup_authorization",
+            "dispatch_audit",
+        ]
+        assert [item["event_type"] for item in history] == [
+            "dispatch_started",
+            "dispatch_unknown",
+            "lookup_authorized",
+            "outcome_lookup",
+        ]
+        authorization = history[2]
+        lookup_result = history[3]
+        assert authorization["certification_id"]
+        assert authorization["details"]["runner_key_id"] == "dispatcher-runner-key"
+        assert (
+            lookup_result["details"]["lookup_authorization_id"]
+            == authorization["id"]
+        )
+        assert all(item["action_digest"] for item in history)
+
+        # The history reader must enforce the same owner boundary as request reads.
+        with pytest.raises(LookupError, match="Tool request not found"):
+            repository.get_execution_history("another-user", request_id)
+    finally:
+        database.close()
+
+
+def test_execution_history_includes_pre_dispatch_recovery_record(tmp_path):
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        stale_before = (
+            datetime.now(timezone.utc) + timedelta(minutes=5)
+        ).isoformat()
+        assert repository.recover_stale_execution_attempts(
+            stale_before=stale_before
+        ) == 1
+
+        history = repository.get_execution_history(user_id, request_id)
+        assert len(history) == 1
+        assert history[0]["record_type"] == "dispatch_recovery"
+        assert history[0]["event_type"] == "dispatch_not_started"
+        assert history[0]["details"]["reason"] == "stale_claim_before_provider_dispatch"
+        assert repository.get(user_id, request_id)["status"] == "failed"
+    finally:
+        database.close()
