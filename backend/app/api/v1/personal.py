@@ -1,3 +1,5 @@
+import sqlite3
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -95,6 +97,11 @@ async def grant_memory_consent(
             status_code=400,
             detail={"code": "INVALID_MEMORY_POLICY", "message": "Invalid memory policy"},
         ) from None
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED", "message": "The account is not active"},
+        ) from None
     return {
         "consent": consent,
         "notice": (
@@ -172,6 +179,11 @@ async def create_memory(
         raise HTTPException(
             status_code=400,
             detail={"code": "INVALID_MEMORY", "message": "Invalid memory"},
+        ) from None
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED", "message": "The account is not active"},
         ) from None
 
 
