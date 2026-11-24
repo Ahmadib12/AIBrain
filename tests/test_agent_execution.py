@@ -450,6 +450,47 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
     assert dispatch["status"] == "succeeded"
     assert dispatch["outcome_json"] == '{"items":["bounded-result"]}'
 
+    class TimeoutCatalogAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, *, user_id, connection_id, tool_id, arguments):
+            self.calls += 1
+            raise TimeoutError("provider response timed out")
+
+    timeout_adapter = TimeoutCatalogAdapter()
+    state.integration_adapters._adapters["catalog"] = timeout_adapter
+    uncertain_create = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/runs",
+        headers=auth(token),
+        json={"actions": [{
+            "tool_id": "catalog.search",
+            "arguments": {"query": "uncertain"},
+            "connection_id": connection["id"],
+        }]},
+    )
+    assert uncertain_create.status_code == 201, uncertain_create.text
+    uncertain_id = uncertain_create.json()["id"]
+    assert client.post(
+        f"/api/v1/agent-runs/{uncertain_id}/authorize", headers=auth(token)
+    ).status_code == 200
+    uncertain = client.post(
+        f"/api/v1/agent-runs/{uncertain_id}/execute", headers=auth(token)
+    )
+    assert uncertain.status_code == 200, uncertain.text
+    assert uncertain.json()["status"] == "failed"
+    uncertain_dispatch = state.database.connect().execute(
+        "SELECT status,error_code FROM agent_run_integration_dispatches WHERE run_id=?",
+        (uncertain_id,),
+    ).fetchone()
+    assert uncertain_dispatch["status"] == "outcome_unknown"
+    assert uncertain_dispatch["error_code"] == "INTEGRATION_OUTCOME_UNKNOWN"
+    repeated = client.post(
+        f"/api/v1/agent-runs/{uncertain_id}/execute", headers=auth(token)
+    )
+    assert repeated.status_code == 409
+    assert timeout_adapter.calls == 1
+
     # A revoked owner connection invalidates the previously authorized binding.
     state.integration_connections.revoke(user_id, connection["id"])
     raw_run = state.agent_execution._raw_run(user_id, run["id"])
