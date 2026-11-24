@@ -26,7 +26,7 @@ This document distinguishes implemented foundations from external integrations t
 - Behavioral learning: evaluation evidence is currently user-reported and descriptive; automatic telemetry, causal attribution, model training, and automatic adaptation application are not implemented.
 - AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
 - Tools: contracts and a read-only echo implementation exist, but confirmation storage, consequential tools, isolation, and verification are not implemented.
-- Agents: M8.1 identity/ownership and M8.2 lifecycle controls implemented and verified in Codespaces on 2026-11-24; M8.2 verification recorded 805 passing tests, successful compilation, and clean dependency check. M8.3–M8.6 integrated control-plane implementation is committed on `dev/tool-authorization-lifecycle` and awaits Codespaces verification: owner-issued allow-listed capability grants with expiry/revocation; grant-ceiling-bound task assignment and explicit lifecycle; same-owner informational agent messages; immutable control/task event ledgers; expired-task reconciliation; and account-erasure safeguards. No agent runtime, provider invocation, tool execution, autonomous coordination, or permission delegation is enabled.
+- Agents: M8.1–M8.6 identity, lifecycle, capability governance, task control, same-owner coordination, audit, and recovery are implemented and verified in Codespaces on 2026-11-24 (816 full-suite tests passed; compilation and dependency checks clean). M9 governed execution implementation is committed on `dev/tool-authorization-lifecycle` and awaits Codespaces verification: digest-bound run proposals, explicit owner authorization, live grant/task/agent revalidation, read-only-only execution through the existing ToolExecutionGateway, immutable run definitions, and append-only run events. Current runtime supports only the registered read-only echo tool; no state-changing or consequential agent action is enabled.
 - Android and desktop: no application projects are present; only backend contracts can support future clients.
 - Multimodal: typed media and event contracts exist, but image/document processing and real-time voice are not implemented.
 - Providers: the deterministic mock provider exists; no external provider credentials or local runtime are active.
@@ -52,13 +52,13 @@ The following require user-supplied credentials or unavailable infrastructure:
   saved records are framed as untrusted context, not policy or authorization.
 - Learning observations do not grant permissions or automatically apply adaptations.
 - Agent registration creates draft identities only. Agent existence and metadata do not grant capabilities or authorize execution; registration event history is append-only outside account erasure.
-- Tool execution is limited to a read-only echo tool in the current implementation.
+- Tool execution is limited to a read-only echo tool. M9 agent runs must be explicitly owner-authorized and may invoke only registered READ_ONLY contracts through the existing gateway; state-changing and consequential agent actions are rejected.
 - Provider and adapter exceptions are sanitized through existing public error mappings.
 - Decision traces contain counters and safe categories rather than raw provider or request data.
 
 ## Persistence and security remediation
 
-- Account deletion removes memory, observations, adaptations, tool requests, agent identities, and agent event history transactionally, revokes sessions, and anonymizes audit records.
+- Account deletion removes memory, observations, adaptations, tool requests, agent identities, agent control records, and agent run/step/event records transactionally after owner tombstoning, revokes sessions, and anonymizes audit records.
 - Memory listing, retrieval, update, and export exclude expired records.
 - Memory writes require an active owner consent at both repository and database-trigger
   boundaries; revocation blocks retrieval and supports optional physical purge.
