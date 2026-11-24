@@ -94,16 +94,25 @@ def test_signed_binding_must_match_expected_binding():
 
 
 def test_suite_version_must_match_signed_binding():
-    envelope, public = signed_envelope()
-    envelope["payload"]["suite_version"] = "v2"
-    envelope["payload"]["binding"]["test_suite_version"] = "v2"
     private = Ed25519PrivateKey.generate()
-    envelope["signature"] = base64.urlsafe_b64encode(
-        private.sign(canonical_json(envelope["payload"]))
-    ).decode("ascii").rstrip("=")
-    other_public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    with pytest.raises(PermissionError, match="pinned authority"):
-        verify(envelope, other_public)
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    payload = {
+        "schema": "aibrain-conformance-suite-v1",
+        "suite_id": "provider-a-contract-suite",
+        "suite_version": "v2",
+        "authority_key_id": "authority-1",
+        "binding": BINDING,
+        "commands": {name: ["/usr/bin/python3", "-m", "suite.tests", name]
+                     for name in REQUIRED_CHECKS},
+    }
+    envelope = {
+        "payload": payload,
+        "signature": base64.urlsafe_b64encode(
+            private.sign(canonical_json(payload))
+        ).decode("ascii").rstrip("="),
+    }
+    with pytest.raises(PermissionError, match="suite version"):
+        verify(envelope, public)
 
 
 def test_unknown_suite_fields_and_missing_checks_fail_closed():
