@@ -71,6 +71,12 @@ class IntegrationConnectionLifecycle:
         connection = self.connections.get(user_id, connection_id)
         if connection["status"] != "pending_verification":
             raise PermissionError("Only pending connections can be verified")
+        if (
+            connection["expires_at"] is None
+            or datetime.fromisoformat(connection["expires_at"]) <= datetime.now(timezone.utc)
+        ):
+            self.connections.expire_pending(user_id, connection_id)
+            raise PermissionError("Pending provider verification has expired")
         integration_id = connection["integration_id"]
         verifier = self.verifiers.get(integration_id)
         if verifier is None:
