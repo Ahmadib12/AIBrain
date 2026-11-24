@@ -5,7 +5,7 @@ permissions, or treats capability availability as user authorization.
 """
 from collections.abc import Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.intelligence.planning.contracts import (
     GoalContract,
@@ -29,6 +29,12 @@ class PlanAssessment(BaseModel):
     missing_capabilities: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
     requires_authorization: bool
     execution_permitted: bool = False
+
+    @model_validator(mode="after")
+    def enforce_planning_boundary(self) -> "PlanAssessment":
+        if self.execution_permitted:
+            raise ValueError("Planning cannot authorize or permit execution")
+        return self
 
 
 class PlanningResult(BaseModel):
