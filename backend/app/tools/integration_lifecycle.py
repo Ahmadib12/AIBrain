@@ -116,6 +116,7 @@ class IntegrationConnectionLifecycle:
                 raise PermissionError("Provider credential expiry is invalid") from None
             if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
                 raise PermissionError("Provider credential is expired or has invalid timezone")
+            verified_expiry = expiry.astimezone(timezone.utc).isoformat()
 
         secret_ref = self.vault.store(
             user_id, connection_id, integration_id, credential_material
@@ -126,7 +127,7 @@ class IntegrationConnectionLifecycle:
                 verifier_id=verifier.verifier_id,
                 provider_subject_fingerprint=verification.provider_subject_fingerprint,
                 granted_scopes=verification.granted_scopes,
-                expires_at=verification.expires_at,
+                expires_at=verified_expiry,
             )
         except Exception:
             # Marking the pending record expired also invokes the DB trigger
@@ -185,6 +186,7 @@ class IntegrationConnectionLifecycle:
                 raise PermissionError("Provider credential expiry is invalid") from None
             if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
                 raise PermissionError("Rotated provider credential is expired")
+            verified_expiry = expiry.astimezone(timezone.utc).isoformat()
         self.vault.rotate(
             user_id, connection_id, integration_id, credential_material
         )
@@ -192,5 +194,5 @@ class IntegrationConnectionLifecycle:
             user_id, connection_id,
             verifier_id=verifier.verifier_id,
             provider_subject_fingerprint=verification.provider_subject_fingerprint,
-            expires_at=verification.expires_at,
+            expires_at=verified_expiry,
         )
