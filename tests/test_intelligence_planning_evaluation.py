@@ -115,6 +115,9 @@ def test_planning_evaluation_rejects_inconsistent_metrics() -> None:
             matched_cases=1,
             accuracy=0.5,
             safety_invariant_holds=True,
+            context_accuracy=0.5,
+            clarification_accuracy=0.5,
+            privacy_invariant_holds=True,
             cases=(case,),
         )
 
