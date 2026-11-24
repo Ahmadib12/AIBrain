@@ -218,6 +218,12 @@ def run_suite(
                         process.wait(timeout=timeout_seconds)
                         return_code = process.returncode
                         status = "passed" if return_code == 0 else "failed"
+                        # A command may exit while leaving descendants running.
+                        # Reap the entire process group before the next check.
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                     except subprocess.TimeoutExpired:
                         _terminate_process(process)
                         status = "unknown"
