@@ -201,6 +201,8 @@ class PinnedProviderHTTPTransport:
             body_bytes = response.read(self.max_response_bytes + 1)
             if len(body_bytes) > self.max_response_bytes:
                 raise ProviderTransportRejected("Provider response body exceeds the size limit")
+            if method == "GET" and "content-length" in normalized_headers and len(body_bytes) != declared_length:
+                raise ProviderTransportRejected("Provider response body length does not match its declaration")
             safe_headers = tuple(
                 (name.lower(), value)
                 for name, value in raw_headers
