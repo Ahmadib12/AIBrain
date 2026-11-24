@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from backend.app.api.v1.agli import router as agli_router
+from backend.app.api.v1.agents import router as agents_router
 from backend.app.api.v1.health import router as health_router
 from backend.app.api.v1.intelligence import router as intelligence_router
 from backend.app.api.v1.providers import router as providers_router
@@ -17,3 +18,4 @@ api_router.include_router(intelligence_router)
 api_router.include_router(auth_router)
 api_router.include_router(personal_router)
 api_router.include_router(tools_router)
+api_router.include_router(agents_router)
