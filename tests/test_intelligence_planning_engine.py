@@ -187,6 +187,8 @@ def test_follow_up_uses_bounded_prior_context_without_copying_it_into_summary(
     assert result.intent.kind is IntentKind.TRANSFORM
     assert result.intent.context_used is True
     assert result.intent.summary == text
+    assert "Explain how DNS works" not in str(result.model_dump())
+    assert "DNS translates domain names" not in str(result.model_dump())
     assert result.assessment.requires_clarification is False
     assert result.assessment.execution_permitted is False
     assert result.plan.tasks[0].kind is PlanTaskKind.GENERATE
