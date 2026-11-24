@@ -1742,6 +1742,7 @@ class ToolRequestRepository:
         from backend.app.tools.conformance import verify_evidence_manifest
 
         package = self.get_external_adapter_evidence_package(package_id)
+        self._verify_conformance_suite_package(package)
         key = self.get_trusted_runner_key(key_id)
         now = datetime.now(timezone.utc)
         if key["revocation"] is not None:
