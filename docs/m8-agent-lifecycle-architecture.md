@@ -1,6 +1,6 @@
 # M8 — Agent Lifecycle and Controlled Orchestration
 
-**Status:** Architecture contract approved. M8.1 is implemented and verified in Codespaces (795 tests passed; compilation and dependency checks passed), pushed as `b9e9243`. M8.2 lifecycle controls have been implemented on the development branch; Codespaces verification is pending. M8.3–M8.6 remain unimplemented.
+**Status:** M8.1 and M8.2 are implemented and verified in Codespaces. M8.2 verification: 805 tests passed, compilation passed, and `pip check` reported no broken requirements (2026-11-24). M8.3–M8.6 control-plane implementation is committed to `dev/tool-authorization-lifecycle`; the new focused tests and full suite still require Codespaces verification.
 
 ## Objective
 
