@@ -1264,9 +1264,16 @@ class Database:
 
                 CREATE TRIGGER prevent_memory_consent_reactivation
                 BEFORE UPDATE OF revoked_at ON memory_consents
-                WHEN OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL
+                WHEN OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
                 BEGIN
-                    SELECT RAISE(ABORT, 'revoked memory consent cannot be reactivated');
+                    SELECT RAISE(ABORT, 'memory consent revocation is immutable');
+                END;
+
+                CREATE TRIGGER prevent_memory_consent_policy_update_after_revoke
+                BEFORE UPDATE OF retention_days ON memory_consents
+                WHEN OLD.revoked_at IS NOT NULL
+                BEGIN
+                    SELECT RAISE(ABORT, 'revoked memory consent policy is immutable');
                 END;
 
                 CREATE TRIGGER prevent_memory_consent_delete
