@@ -50,7 +50,7 @@ def test_workflow_never_reads_or_submits_credentials_after_incomplete_run(
 def test_workflow_submits_only_runner_generated_manifest_after_full_pass(
     tmp_path, monkeypatch, capsys
 ):
-    binding, commands = _write_inputs(tmp_path)
+    suite = _write_inputs(tmp_path)
     output = tmp_path / "out"
     output.mkdir()
     calls = []
