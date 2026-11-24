@@ -32,6 +32,14 @@ class AgentRunCreateRequest(BaseModel):
     actions: list[AgentRunActionRequest] = Field(min_length=1, max_length=10)
 
 
+def _reject_unbound_integration_actions(actions, state) -> None:
+    for action in actions:
+        if state.integrations.resolve_tool(action["tool_id"]) is not None:
+            raise PermissionError(
+                "Integration tools require the dedicated bound asynchronous orchestrator"
+            )
+
+
 def _runtime():
     # Import lazily to avoid coupling router registration to the tools API.
     from backend.app.api.v1.tools import _get_tool_gateway, tool_registry
@@ -45,9 +53,11 @@ async def create_agent_run(
     user: dict = Depends(get_current_user),
 ):
     try:
-        registry, _ = _runtime()
+        state = get_app_state()
         actions = [item.model_dump() for item in request.actions]
-        return get_app_state().agent_execution.create_run(
+        _reject_unbound_integration_actions(actions, state)
+        registry, _ = _runtime()
+        return state.agent_execution.create_run(
             user["id"], task_id, actions, registry
         )
     except LookupError:
