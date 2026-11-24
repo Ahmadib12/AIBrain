@@ -111,7 +111,9 @@ The record types remain explicit: `dispatch_audit`, `dispatch_recovery`, `lookup
 
 Rows are ordered by timestamp, then record type and ID as deterministic tie-breakers. Timestamps are application-generated UTC ISO strings; equal timestamps do not establish causal order. Where transaction races matter, the database transaction/commit boundary—not lexical ordering of timestamps or UUIDs—defines which authorization or revocation won.
 
-This is an internal repository method. There is not yet a user-facing or operator-facing HTTP history endpoint, pagination contract, export format, or retention-management API.
+The owner-facing HTTP endpoint is `GET /api/v1/tools/requests/{request_id}/history`. It uses the authenticated account and returns 404 for a request owned by another account. Pages use bounded `limit` (default 50, maximum 100) and `offset` (maximum 100,000), with `has_more` and `next_offset` metadata. The API does not return a total count, avoiding an extra count query on every page.
+
+The HTTP response is a redacted projection, not the raw repository row: it exposes lifecycle identifiers and event types, the action digest, timestamps, and a small record-type-specific allowlist of details. It omits runner key IDs, evidence package IDs, contract fingerprints, provider evidence references, and other unapproved detail fields. Reconciliation notes remain visible to the request owner. There is not yet an operator-facing investigation endpoint, export format, or retention-management API.
 
 ## 5. Integrity and deletion behavior
 
@@ -159,7 +161,7 @@ An `outcome_unknown` state must remain uncertain until evidence supports reconci
 ## 8. Known gaps and follow-up requirements
 
 1. **Immutable reconciliation history:** implemented in migration 20 and included in the unified history model. Legacy `audit_json.execution_reconciliation` values are backfilled and removed from the mutable request JSON during migration.
-2. **Access surface:** design an authenticated, owner-scoped API and operator-only investigation surface with redaction, authorization, pagination, and export limits.
+2. **Access surface:** the authenticated, owner-scoped, redacted history API with bounded offset pagination is implemented. An operator-only investigation surface with separate authorization, redaction, pagination, and export limits remains future work.
 3. **External tamper evidence:** evaluate signed checkpoints or an external append-only audit sink for production deployments where database-operator tampering is in scope.
 4. **Backup and provider erasure:** define backup retention, legal-hold behavior, provider-side deletion requests, and verifiable erasure outcomes.
 5. **Retention policy:** approve retention by data class and jurisdiction before adding automatic expiration or archival.
