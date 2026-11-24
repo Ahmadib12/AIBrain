@@ -59,6 +59,7 @@ M9 establishes the execution control plane and a first read-only runtime path. I
 - `POST /api/v1/agent-runs/{run_id}/authorize`
 - `POST /api/v1/agent-runs/{run_id}/execute`
 - `POST /api/v1/agent-runs/{run_id}/cancel`
+- `POST /api/v1/agent-runs/reconcile-expired` (owner-scoped expiry reconciliation for unstarted runs)
 
 ## Current runtime limits
 
