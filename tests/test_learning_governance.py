@@ -94,6 +94,9 @@ def test_learning_adaptation_approval_evaluation_and_audit_trail(client):
     assert [item["event_type"] for item in events.json()] == [
         "proposed", "approved", "evaluated"
     ]
+    proposal_details = events.json()[0]["details"]
+    assert proposal_details["source"] == "user_submitted"
+    assert len(proposal_details["proposal_sha256"]) == 64
 
 
 def test_learning_adaptation_terminal_decisions_cannot_be_reversed(client):
@@ -132,6 +135,12 @@ def test_learning_records_are_owner_scoped(client):
 def test_learning_adaptation_expires_and_is_audited(client):
     token = _register(client, "m7-expiry@example.com")
     adaptation_id = _proposal(client, token)
+    approved = client.patch(
+        f"/api/v1/personal/learning/adaptations/{adaptation_id}",
+        headers=_headers(token),
+        json={"status": "approved"},
+    )
+    assert approved.status_code == 200
     state = get_app_state()
 
     with state.database.transaction():
@@ -147,11 +156,27 @@ def test_learning_adaptation_expires_and_is_audited(client):
     assert response.status_code == 200
     assert response.json()["status"] == "expired"
 
+    evaluation = client.post(
+        f"/api/v1/personal/learning/adaptations/{adaptation_id}/evaluations",
+        headers=_headers(token),
+        json={
+            "outcome": "improved",
+            "metric": "latency",
+            "baseline_value": 10.0,
+            "observed_value": 8.0,
+            "confidence": 0.8,
+            "evidence": {"source": "manual"},
+        },
+    )
+    assert evaluation.status_code == 400
+
     events = client.get(
         f"/api/v1/personal/learning/adaptations/{adaptation_id}/events",
         headers=_headers(token),
     )
-    assert [item["event_type"] for item in events.json()] == ["proposed", "expired"]
+    assert [item["event_type"] for item in events.json()] == [
+        "proposed", "approved", "expired"
+    ]
 
 
 def test_learning_evaluations_require_approved_adaptation(client):
