@@ -1022,6 +1022,8 @@ def test_deleted_user_cannot_create_sessions_or_personal_records(
         "memory_items",
         "memory_consents",
         "observations",
+        "learning_evaluations",
+        "learning_adaptation_events",
         "adaptations",
         "tool_requests",
     ):
