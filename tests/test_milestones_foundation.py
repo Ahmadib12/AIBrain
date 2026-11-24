@@ -813,7 +813,7 @@ def test_database_migrations_are_versioned_and_persisted(client: TestClient) -> 
     rows = database.connect().execute(
         "SELECT version FROM schema_migrations ORDER BY version"
     ).fetchall()
-    assert [row["version"] for row in rows] == list(range(1, 31))
+    assert [row["version"] for row in rows] == list(range(1, 32))
 
 
 def test_streaming_intelligence_endpoint_is_available(client: TestClient) -> None:
