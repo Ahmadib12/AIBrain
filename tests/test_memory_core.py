@@ -193,3 +193,31 @@ def test_account_deletion_removes_memory_consent_history(client: TestClient) -> 
         (user_id,),
     ).fetchone()[0]
     assert count == 0
+
+
+def test_memory_context_respects_provider_message_count_limit(client_for_core):
+    adapter = MemoryContextAdapter()
+    core = OrchestrationCore(adapters={"text_generation": adapter})
+
+    with client_for_core(core) as client:
+        token = _register_and_login(client, "memory-message-limit@example.com")
+        consent = client.post(
+            "/api/v1/personal/memory/consent",
+            headers=_headers(token),
+            json={"retention_days": 365},
+        )
+        assert consent.status_code == 200
+
+        messages = [
+            {"role": "user", "content": f"Message {index}"}
+            for index in range(100)
+        ]
+        response = client.post(
+            "/api/v1/intelligence/process",
+            headers=_headers(token),
+            json={"messages": messages, "use_memory": True},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "MEMORY_CONTEXT_MESSAGE_LIMIT"
+    assert adapter.memory_contexts == []
