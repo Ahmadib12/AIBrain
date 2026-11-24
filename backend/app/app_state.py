@@ -2,6 +2,7 @@ from backend.app.config import Settings, get_settings
 from backend.app.auth.webauthn_service import WebAuthnService
 from backend.app.persistence.database import Database
 from backend.app.persistence.agents import AgentRepository
+from backend.app.persistence.agent_control import AgentControlRepository
 from backend.app.persistence.identity import IdentityRepository
 from backend.app.persistence.learning import BehavioralLearningRepository
 from backend.app.persistence.memory import MemoryRepository
@@ -19,6 +20,7 @@ class AppState:
         self.memory = MemoryRepository(self.database)
         self.learning = BehavioralLearningRepository(self.database)
         self.agents = AgentRepository(self.database)
+        self.agent_control = AgentControlRepository(self.database)
         suite_trust = None
         if settings.conformance_suite_authority_public_key_b64 is not None:
             import base64
