@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.34,<1",
-  "pydantic>=2.10,<3",
+  "pydantic>=2.14.4,<3",
   "pydantic-settings>=2.7,<3",
   "webauthn==3.0.1",
   "cryptography>=49,<51",
