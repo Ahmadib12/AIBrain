@@ -1434,6 +1434,8 @@ class ToolRequestRepository:
     ) -> None:
         if outcome not in ("succeeded", "failed", "unknown"):
             raise ValueError("Lookup outcome is invalid")
+        if not isinstance(lookup_authorization_id, str) or not lookup_authorization_id:
+            raise ValueError("Lookup authorization ID is required")
         if evidence_reference is not None and (
             not isinstance(evidence_reference, str)
             or not evidence_reference.strip()
@@ -1453,6 +1455,16 @@ class ToolRequestRepository:
             ).fetchone()
             if started is None or started["action_digest"] != action_digest:
                 raise PermissionError("No matching dispatch exists for lookup")
+            authorization = connection.execute(
+                """
+                SELECT 1 FROM tool_dispatch_lookup_authorizations
+                WHERE id = ? AND user_id = ? AND request_id = ?
+                  AND action_digest = ?
+                """,
+                (lookup_authorization_id, user_id, request_id, action_digest),
+            ).fetchone()
+            if authorization is None:
+                raise PermissionError("No matching lookup authorization exists")
             connection.execute(
                 """
                 INSERT INTO tool_dispatch_audit_events
