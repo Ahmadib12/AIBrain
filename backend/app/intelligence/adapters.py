@@ -58,10 +58,16 @@ class ProviderRoutingAdapter(CapabilityAdapter):
         request: IntelligenceRequest,
         context: RequestContext,
     ) -> AdapterResult:
-        messages = [
+        messages = []
+        if context.memory_context is not None:
+            messages.append(ChatMessage(
+                role="system",
+                content=context.memory_context,
+            ))
+        messages.extend(
             ChatMessage(role=message.role.value, content=message.content)
             for message in request.messages
-        ]
+        )
         provider_request = ChatRequest(
             messages=messages,
             task_type="general",
