@@ -1,6 +1,6 @@
 # M10 — Governed Tool Integration and Real-World Agent Operations
 
-**Status:** M10.1 is implemented and verified. M10.2 has a first persistence/API foundation for owner consent, pending grants, revocation, disconnection, and account erasure. M10 remains incomplete: connections cannot be activated, no encrypted credential vault or trusted provider verifier exists, no real adapter is enabled, and agent-run integration/provider conformance remain gated.
+**Status:** M10.1 is implemented and verified. M10.2 has a first persistence/API foundation for owner consent, pending grants, revocation, disconnection, and account erasure. M10.3 now has a bounded asynchronous read-only runtime and trusted adapter registry with exact-scope checks, schema validation, timeout/output bounds, and credential-field rejection. M10 remains incomplete: connections cannot be activated, no encrypted credential vault or trusted provider verifier exists, no real adapter is enabled, and agent-run integration/provider conformance remain gated.
 
 ## Objective
 
@@ -91,7 +91,7 @@ These are target boundaries, not claims that any integration is currently implem
 ## Current implementation boundary
 
 - M9 remains the only active agent-run execution path and currently supports registered read-only `echo`.
-- M10's integration catalog is a validated registry foundation; it does not yet load provider adapters or make network requests.
+- M10.3's generic async runtime and trusted adapter registry are implemented, but no provider adapter is registered and the runtime does not make arbitrary network requests.
 - No OAuth flow, secret vault, browser/search/calendar/notes/files/email/filesystem/device provider, or credential is enabled by this commit.
 - Existing external state-changing dispatcher remains separately governed by signed conformance evidence and proposal-bound passkey authorization; M10 must not bypass it.
 - Production deployment, managed secret storage, outbound egress controls, and provider accounts are prerequisites for real integrations.
