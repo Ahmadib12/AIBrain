@@ -6,17 +6,15 @@ from scripts import run_and_attest_conformance as workflow
 
 
 def _write_inputs(tmp_path):
-    binding = tmp_path / "binding.json"
-    commands = tmp_path / "commands.json"
-    binding.write_text(json.dumps({"provider_id": "example"}))
-    commands.write_text(json.dumps({"check": ["python", "-c", "pass"]}))
-    return binding, commands
+    suite = tmp_path / "suite.json"
+    suite.write_text(json.dumps({"payload": {"binding": {}}, "signature": "signature"}))
+    return suite
 
 
 def test_workflow_never_reads_or_submits_credentials_after_incomplete_run(
     tmp_path, monkeypatch, capsys
 ):
-    binding, commands = _write_inputs(tmp_path)
+    suite = _write_inputs(tmp_path)
     calls = []
 
     def fake_run_suite(**kwargs):
@@ -35,8 +33,8 @@ def test_workflow_never_reads_or_submits_credentials_after_incomplete_run(
     monkeypatch.setattr(workflow, "submit_evidence", forbidden)
     monkeypatch.setattr(sys, "argv", [
         "run_and_attest_conformance",
-        "--binding", str(binding),
-        "--commands", str(commands),
+        "--suite", str(suite),
+        "--authority-key-id", "suite-authority-1",
         "--output-dir", str(tmp_path / "out"),
         "--api-base-url", "https://aibrain.example",
         "--key-id", "runner-key",
@@ -85,6 +83,7 @@ def test_workflow_submits_only_runner_generated_manifest_after_full_pass(
     monkeypatch.setattr(workflow, "run_suite", fake_run_suite)
     monkeypatch.setattr(workflow, "load_evidence", fake_load_evidence)
     monkeypatch.setattr(workflow, "submit_evidence", fake_submit)
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "cHVibGlj")
     monkeypatch.setenv("AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN", "t" * 40)
     monkeypatch.setenv("AIBRAIN_RUNNER_PRIVATE_KEY_B64", "base64-key-material")
     monkeypatch.setattr(sys, "argv", [
