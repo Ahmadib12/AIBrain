@@ -1,4 +1,10 @@
-"""Provider-independent planning contracts."""
+"""Provider-independent intent, goal, and planning contracts."""
+
+from backend.app.intelligence.planning.engine import (
+    PlanAssessment,
+    PlanningEngine,
+    PlanningResult,
+)
 
 from backend.app.intelligence.planning.contracts import (
     GoalContract,
@@ -16,4 +22,7 @@ __all__ = [
     "PlanTaskKind",
     "PlannedTask",
     "TaskPlanContract",
+    "PlanAssessment",
+    "PlanningEngine",
+    "PlanningResult",
 ]
