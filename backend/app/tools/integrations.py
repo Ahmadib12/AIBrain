@@ -66,6 +66,7 @@ class IntegrationManifest:
         tool_ids = [item.contract.tool_id for item in self.tools]
         if len(set(tool_ids)) != len(tool_ids):
             raise ValueError("Integration tool IDs must be unique")
+        for item in self.tools:
             if not item.contract.tool_id.startswith(self.integration_id + "."):
                 raise ValueError("Tool IDs must be namespaced by integration ID")
 
