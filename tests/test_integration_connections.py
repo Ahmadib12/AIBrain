@@ -115,3 +115,26 @@ def test_account_erasure_removes_integration_consent_and_audit_state(state):
             (owner_id,),
         ).fetchone()[0]
         assert count == 0
+
+def test_database_rejects_unverified_connection_activation(state):
+    database, _, owner_id, _, repository = state
+    connection = repository.create_pending(
+        owner_id, "calendar", ["calendar.events.read"], consent_version="v1"
+    )
+    with pytest.raises(Exception, match="trusted verification"):
+        database.connect().execute(
+            "UPDATE integration_connections SET status='active' WHERE id=?",
+            (connection["id"],),
+        )
+
+
+def test_database_rejects_active_grant_without_active_connection(state):
+    database, _, owner_id, _, repository = state
+    connection = repository.create_pending(
+        owner_id, "calendar", ["calendar.events.read"], consent_version="v1"
+    )
+    with pytest.raises(Exception, match="active integration connection"):
+        database.connect().execute(
+            "UPDATE integration_connection_grants SET status='active' WHERE connection_id=? AND user_id=?",
+            (connection["id"], owner_id),
+        )
