@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import uuid
@@ -137,12 +138,19 @@ class BehavioralLearningRepository:
                     now, now, expires_at,
                 ),
             )
+            proposal_json = json.dumps(proposal, ensure_ascii=False, sort_keys=True)
             _event(
                 connection,
                 user_id=user_id,
                 adaptation_id=adaptation_id,
                 event_type="proposed",
-                details={"expires_at": expires_at},
+                details={
+                    "expires_at": expires_at,
+                    "source": "user_submitted",
+                    "proposal_sha256": hashlib.sha256(
+                        proposal_json.encode("utf-8")
+                    ).hexdigest(),
+                },
                 created_at=now,
             )
         return self.get_adaptation(user_id, adaptation_id)
@@ -283,6 +291,14 @@ class BehavioralLearningRepository:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError("Evaluation confidence must be between 0 and 1")
         validate_personal_payload(evidence)
+        adaptation = self.database.connect().execute(
+            "SELECT status FROM adaptations WHERE id = ? AND user_id = ?",
+            (adaptation_id, user_id),
+        ).fetchone()
+        if adaptation is None:
+            raise LookupError("Adaptation not found")
+        if adaptation["status"] != "approved":
+            raise ValueError("Evaluation requires an approved adaptation")
         evaluation_id = str(uuid.uuid4())
         now = _utc_now()
         with self.database.transaction():
