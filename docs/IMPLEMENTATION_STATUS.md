@@ -7,7 +7,9 @@ This document distinguishes implemented foundations from external integrations t
 - SQLite migrations and versioned persistence.
 - PBKDF2-SHA256 password hashes and bearer sessions.
 - User registration, login, logout, account deletion, and protected personal APIs.
-- Tenant-isolated memory repositories with create, read, update, delete, export, and retention fields.
+- User-owned memory with a versioned consent ledger, database-enforced consent gates,
+  authenticated CRUD/export/search, per-request intelligence opt-in, retention,
+  revocation, and deletion controls.
 - Behavioral-learning observations and adaptation proposals with review status.
 - Provider timeout, fallback, health monitoring, and bounded health-check locking.
 - Safe tool contracts and a read-only echo tool.
@@ -18,7 +20,8 @@ This document distinguishes implemented foundations from external integrations t
 
 ## Partial
 
-- Personal memory: durable API and repository foundations exist, but synchronization and retrieval ranking are not implemented.
+- Personal memory retrieval currently uses deterministic lexical ranking; semantic/vector
+  retrieval, automatic memory extraction, and cross-device synchronization are not implemented.
 - Behavioral learning: observations and adaptation state exist, but outcome measurement and automated learning are not implemented.
 - AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
 - Tools: contracts and a read-only echo implementation exist, but confirmation storage, consequential tools, isolation, and verification are not implemented.
@@ -42,7 +45,9 @@ The following require user-supplied credentials or unavailable infrastructure:
 ## Safety boundaries
 
 - User access is enforced by bearer sessions on personal, memory, learning, and tool APIs.
-- Memory operations are filtered by the authenticated user ID.
+- Memory operations are scoped to the authenticated user ID and active consent identity.
+- Memory is not sent to an intelligence provider unless the authenticated request opts in;
+  saved records are framed as untrusted context, not policy or authorization.
 - Learning observations do not grant permissions or automatically apply adaptations.
 - Tool execution is limited to a read-only echo tool in the current implementation.
 - Provider and adapter exceptions are sanitized through existing public error mappings.
@@ -54,6 +59,9 @@ The following require user-supplied credentials or unavailable infrastructure:
   other user-owned records transactionally, revokes sessions, and anonymizes audit
   records.
 - Memory listing, retrieval, update, and export exclude expired records.
+- Memory writes require an active owner consent at both repository and database-trigger
+  boundaries; revocation blocks retrieval and supports optional physical purge.
+- Account deletion removes memory items and memory-consent history.
 - Personal memory, observation, adaptation, and tool payloads have serialized-size,
   nesting, collection, JSON, and credential-like-value limits.
 - Tool requests persist their owner, status, deadline, and consumed state.
