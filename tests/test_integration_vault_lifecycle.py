@@ -123,8 +123,8 @@ def test_revocation_destroys_encrypted_credentials(integration_state):
         "SELECT COUNT(*) FROM integration_secrets WHERE connection_id=?",
         (connection["id"],),
     ).fetchone()[0] == 0
-    with pytest.raises(LookupError):
-        vault.load(owner_id, connection["id"], "calendar")
+    with pytest.raises(PermissionError):
+        vault.load(owner_id, connection["id"], "calendar", ("calendar.events.read",))
 
 
 def test_expiry_destroys_vault_credentials_and_grants(integration_state):
@@ -135,6 +135,7 @@ def test_expiry_destroys_vault_credentials_and_grants(integration_state):
         "UPDATE integration_connections SET expires_at=? WHERE id=?",
         (past, connection["id"]),
     )
+    database.connect().commit()
     assert connections.expire_due() >= 1
     expired = connections.get(owner_id, connection["id"])
     assert expired["status"] == "expired"
@@ -152,8 +153,9 @@ def test_vault_authentication_detects_ciphertext_tampering(integration_state):
         "UPDATE integration_secrets SET ciphertext=? WHERE connection_id=?",
         (b"x" * 64, connection["id"]),
     )
+    database.connect().commit()
     with pytest.raises(IntegrationVaultUnavailable):
-        vault.load(owner_id, connection["id"], "calendar")
+        vault.load(owner_id, connection["id"], "calendar", ("calendar.events.read",))
 
 
 def test_provider_egress_requires_allowlisted_https_and_public_dns():
@@ -193,7 +195,7 @@ def test_verified_credential_rotation_replaces_ciphertext_and_is_audited(integra
     ).fetchone()
     assert after["key_version"] == before["key_version"] + 1
     assert after["ciphertext"] != before["ciphertext"]
-    assert vault.load(owner_id, connection["id"], "calendar") == {
+    assert vault.load(owner_id, connection["id"], "calendar", ("calendar.events.read",)) == {
         "access_token": "rotated-secret"
     }
     event = database.connect().execute(
@@ -214,6 +216,7 @@ def test_expired_scope_expires_connection_when_no_scopes_remain(integration_stat
            WHERE connection_id=?""",
         (past, connection["id"]),
     )
+    database.connect().commit()
     assert connections.expire_due() >= 2
     expired = connections.get(owner_id, connection["id"])
     assert expired["status"] == "expired"
