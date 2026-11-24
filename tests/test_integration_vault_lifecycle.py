@@ -83,7 +83,7 @@ def test_vault_encrypts_credentials_and_trusted_verifier_activates(integration_s
     ).fetchone()
     assert row is not None
     assert b"never-log-this" not in row["ciphertext"]
-    assert vault.load(owner_id, connection["id"], "calendar") == {
+    assert vault.load(owner_id, connection["id"], "calendar", ("calendar.events.read",)) == {
         "access_token": "never-log-this"
     }
     assert "secret_ref" not in connections.get(owner_id, connection["id"])
