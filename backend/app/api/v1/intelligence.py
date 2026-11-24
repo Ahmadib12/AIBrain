@@ -41,6 +41,14 @@ def _requested_memory_context(request: IntelligenceRequest, user: dict | None) -
                 "message": "Sign in to use your saved memory",
             },
         )
+    if len(request.messages) >= 100:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "MEMORY_CONTEXT_MESSAGE_LIMIT",
+                "message": "Memory context requires one available provider-message slot",
+            },
+        )
     latest_user_message = next(
         (
             message.content
