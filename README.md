@@ -190,6 +190,39 @@ The command map must contain every required check ID, with each command expresse
 
 Runner tests: `pytest -q tests/test_conformance_runner.py`.
 
+
+The execute-then-attest orchestration entry point is
+`scripts/run_and_attest_conformance.py`. It runs the conformance suite first;
+only a complete passing result permits evidence loading and submission. The
+runner ingestion token and Ed25519 private key are read from the parent
+environment only after test subprocesses have exited and the manifest has been
+generated and verified. Provision these credentials only to the trusted
+orchestration process, never to the test subprocess environment.
+
+Example:
+
+```bash
+python -m scripts.run_and_attest_conformance \
+  --binding runner-binding.json \
+  --commands conformance-commands.json \
+  --output-dir ./conformance-output \
+  --api-base-url https://aibrain.example \
+  --key-id registered-runner-key \
+  --runner-id isolated-runner-01
+```
+
+Required orchestration environment variables:
+`AIBRAIN_TRUSTED_RUNNER_INGEST_TOKEN` and
+`AIBRAIN_RUNNER_PRIVATE_KEY_B64`. The signing key must correspond to a
+registered, non-revoked public key scoped to the exact provider, adapter,
+version, provider account, tool, and contract fingerprint in the binding.
+
+This orchestration does not create the required OS-level sandbox. Use an
+ephemeral hardened VM/container with externally enforced egress policy,
+read-only source, an unprivileged identity, and cgroup/container resource
+limits. A reviewed, pinned command map and provider test suite remain part of
+the trust boundary. The workflow does not enable production dispatch.
+
 ### Inspecting and reconciling uncertain tool executions
 
 Authenticated users can inspect their own persisted tool request and execution-attempt state:
