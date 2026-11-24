@@ -19,7 +19,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.app.tools.conformance import (\n    REQUIRED_CHECKS, canonical_json, verify_evidence_manifest,\n)
+from backend.app.tools.conformance import (
+    REQUIRED_CHECKS, canonical_json, verify_evidence_manifest,
+)
 
 MAX_COMMANDS = 64
 MAX_OUTPUT_BYTES = 256 * 1024
