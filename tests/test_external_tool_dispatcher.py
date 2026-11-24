@@ -1430,3 +1430,134 @@ def test_execution_history_includes_pre_dispatch_recovery_record(tmp_path):
         assert repository.get(user_id, request_id)["status"] == "failed"
     finally:
         database.close()
+
+
+
+def test_manual_reconciliation_is_an_immutable_execution_history_event(tmp_path):
+    import sqlite3
+
+    from backend.app.persistence.identity import IdentityRepository
+
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    try:
+        _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
+        observed = dispatcher.lookup(user_id, request_id)
+        assert observed.status is ExternalToolOutcomeStatus.UNKNOWN
+
+        reconciled = repository.reconcile_execution_attempt(
+            user_id,
+            request_id,
+            outcome="succeeded",
+            note="Confirmed independently against the provider's operation history",
+            result={"confirmed": True},
+        )
+        assert reconciled["status"] == "completed"
+        assert repository.get_execution_attempt(user_id, request_id)["status"] == "succeeded"
+
+        raw_request = database.connect().execute(
+            "SELECT audit_json FROM tool_requests WHERE id = ? AND user_id = ?",
+            (request_id, user_id),
+        ).fetchone()
+        assert raw_request is not None
+        assert "execution_reconciliation" not in (raw_request["audit_json"] or "")
+
+        history = repository.get_execution_history(user_id, request_id)
+        reconciliation = history[-1]
+        assert reconciliation["record_type"] == "execution_reconciliation"
+        assert reconciliation["event_type"] == "execution_reconciled"
+        assert reconciliation["details"] == {
+            "outcome": "succeeded",
+            "error_code": None,
+            "note": "Confirmed independently against the provider's operation history",
+            "reconciled_by": user_id,
+        }
+
+        reconciliation_id = reconciliation["id"]
+        with pytest.raises(sqlite3.IntegrityError, match="are immutable"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "UPDATE tool_execution_reconciliation_events "
+                    "SET note = 'rewritten' WHERE id = ?",
+                    (reconciliation_id,),
+                )
+        with pytest.raises(sqlite3.IntegrityError, match="only be deleted during account erasure"):
+            with database.transaction(immediate=True):
+                database.connect().execute(
+                    "DELETE FROM tool_execution_reconciliation_events WHERE id = ?",
+                    (reconciliation_id,),
+                )
+
+        with pytest.raises(PermissionError, match="not awaiting reconciliation"):
+            repository.reconcile_execution_attempt(
+                user_id,
+                request_id,
+                outcome="failed",
+                note="A second conflicting resolution must not be accepted",
+                error_code="reconciled_failure",
+            )
+
+        identity = IdentityRepository(database, session_ttl_seconds=86400)
+        identity.delete_user(user_id)
+        assert database.connect().execute(
+            "SELECT COUNT(*) FROM tool_execution_reconciliation_events WHERE id = ?",
+            (reconciliation_id,),
+        ).fetchone()[0] == 0
+    finally:
+        database.close()
+
+
+def test_concurrent_manual_reconciliation_is_single_use_across_connections(tmp_path):
+    from threading import Barrier
+
+    from backend.app.persistence.identity import IdentityRepository
+
+    (
+        database, repository, user_id, request_id, fingerprint, provider, snapshot
+    ) = claimed_passkey_dispatch(tmp_path)
+    second_database = Database(database.database_url)
+    second_repository = ToolRequestRepository(second_database)
+    try:
+        _prepare_unknown_provider_outcome(
+            repository, user_id, request_id, fingerprint, provider, snapshot
+        )
+        barrier = Barrier(2)
+
+        def reconcile(candidate, note):
+            barrier.wait(timeout=10)
+            try:
+                candidate.reconcile_execution_attempt(
+                    user_id,
+                    request_id,
+                    outcome="failed",
+                    note=note,
+                    error_code="reconciled_failure",
+                )
+            except PermissionError:
+                return "rejected"
+            return "accepted"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(
+                lambda item: reconcile(*item),
+                (
+                    (repository, "First independent verification"),
+                    (second_repository, "Competing verification"),
+                ),
+            ))
+
+        assert sorted(outcomes) == ["accepted", "rejected"]
+        rows = database.connect().execute(
+            "SELECT COUNT(*) FROM tool_execution_reconciliation_events "
+            "WHERE user_id = ? AND request_id = ?",
+            (user_id, request_id),
+        ).fetchone()[0]
+        assert rows == 1
+        assert repository.get(user_id, request_id)["status"] == "failed"
+    finally:
+        second_database.close()
+        database.close()
