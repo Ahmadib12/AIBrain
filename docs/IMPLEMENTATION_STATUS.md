@@ -27,7 +27,7 @@ This document distinguishes implemented foundations from external integrations t
 - AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
 - Tools: contracts, persistent request/attempt lifecycle, proposal-bound passkey approval, external adapter certification, and a read-only echo implementation exist. No production provider adapter is enabled.
 - Agents: M8.1–M8.6 identity, lifecycle, capability governance, task control, same-owner coordination, audit, and recovery are implemented and verified. M9 governed execution is verified in Codespaces on 2026-11-24: 823 full-suite tests passed, compilation passed, and dependency checks were clean. M9 supports digest-bound run proposals, explicit owner authorization, live grant/task/agent revalidation, read-only-only execution through the existing ToolExecutionGateway, immutable run definitions, and append-only run events. Current runtime supports only the registered read-only echo tool; no state-changing or consequential agent action is enabled.
-- M10: governed integration catalog foundation is implemented on `dev/tool-authorization-lifecycle` (`IntegrationManifest`, `IntegrationTool`, `IntegrationRegistry`) with read-only risk enforcement, namespaced tool IDs, exact required-scope declarations, duplicate protection, and defensive copies. M10 is in progress; no real external provider adapter, OAuth connection, credential vault, or network integration is active. See `docs/m10-governed-integration-architecture.md`.
+- M10.1 is implemented and verified. M10.2 now has owner-scoped pending connection and exact-scope consent persistence, authenticated catalog/connection APIs, revocation/disconnection, immutable lifecycle events, database owner checks, and account-erasure cleanup. Connections cannot be activated by API input and pending grants are unusable. M10.3–M10.6 remain incomplete: there is no trusted provider verifier, encrypted credential vault, production adapter runtime, M9 connection binding, or M10-specific provider conformance. No real external integration is active. See `docs/m10-governed-integration-architecture.md`.
 - Android and desktop: no application projects are present; only backend contracts can support future clients.
 - Multimodal: typed media and event contracts exist, but image/document processing and real-time voice are not implemented.
 - Providers: the deterministic mock provider exists; no external provider credentials or local runtime are active.
@@ -54,7 +54,7 @@ The following require user-supplied credentials or unavailable infrastructure:
 - Learning observations do not grant permissions or automatically apply adaptations.
 - Agent registration creates draft identities only. Agent existence and metadata do not grant capabilities or authorize execution; registration event history is append-only outside account erasure.
 - M9 agent runs must be explicitly owner-authorized and may invoke only registered READ_ONLY contracts through the existing gateway; state-changing and consequential agent actions are rejected.
-- M10 integration manifests are trusted application configuration, not user-supplied runtime plugins. The catalog rejects non-read-only tools and declares required scopes, but does not itself grant account access or execute adapters.
+- M10 integration manifests are trusted application configuration, not user-supplied runtime plugins. The catalog rejects non-read-only tools and declares required scopes. Owner consent creates only pending grants; no connection can become active without a trusted provider-verification and encrypted-secret-store implementation.
 - Provider and adapter exceptions are sanitized through existing public error mappings.
 - Decision traces contain counters and safe categories rather than raw provider or request data.
 
@@ -64,7 +64,7 @@ The following require user-supplied credentials or unavailable infrastructure:
 - Memory listing, retrieval, update, and export exclude expired records.
 - Memory writes require an active owner consent at both repository and database-trigger
   boundaries; revocation blocks retrieval and supports optional physical purge.
-- Account deletion removes memory items and memory-consent history.
+- Account deletion removes memory items and memory-consent history, plus integration connection metadata, scope grants, and connection lifecycle events.
 - Personal memory, observation, adaptation, and tool payloads have serialized-size,
   nesting, collection, JSON, and credential-like-value limits.
 - Tool requests persist their owner, status, deadline, and consumed state.
