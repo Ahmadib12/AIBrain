@@ -768,18 +768,28 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
         build_attestation_payload, generate_test_keypair,
         sign_attestation_for_runner,
     )
-    from backend.app.tools.conformance import REQUIRED_CHECKS
+    from backend.app.tools.conformance import REQUIRED_CHECKS, canonical_json
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    from backend.app.api.v1 import tools as tools_api
 
     provider_token = "provider-operator-secret-" + "p" * 32
     runner_token = "runner-ingest-secret-" + "b" * 32
-    monkeypatch.setattr(
-        operator_module, "get_settings",
-        lambda: Settings(
-            provider_operator_token=provider_token,
-            security_operator_emails="security-reviewer@example.com",
-            trusted_runner_ingest_token=runner_token,
-        ),
+    suite_authority_private = Ed25519PrivateKey.generate()
+    suite_authority_public_b64 = base64.b64encode(
+        suite_authority_private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    ).decode("ascii")
+    suite_settings = Settings(
+        provider_operator_token=provider_token,
+        security_operator_emails="security-reviewer@example.com",
+        trusted_runner_ingest_token=runner_token,
+        conformance_suite_authority_public_key_b64=suite_authority_public_b64,
+        conformance_suite_authority_key_id="api-suite-authority",
+        conformance_suite_expected_id="api-conformance-suite",
+        conformance_suite_expected_version="conformance-v1",
     )
+    monkeypatch.setattr(operator_module, "get_settings", lambda: suite_settings)
+    monkeypatch.setattr(tools_api, "get_settings", lambda: suite_settings)
     security_operator_token = register_and_login(client, "security-reviewer@example.com")
     now = datetime.now(timezone.utc)
     public_key, private_key = generate_test_keypair()
@@ -844,7 +854,6 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     assert registered.status_code == 201
 
     report = b"trusted runner integration test report"
-    artifacts = {"sandbox-report.bin": report}
     manifest = {
         "schema_version": "aibrain-conformance-evidence-v1",
         "provider_id": "api-provider",
@@ -869,9 +878,39 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
             name: {"status": "passed", "artifact": "sandbox-report.bin"}
             for name in REQUIRED_CHECKS
         },
-        "artifacts": {
-            "sandbox-report.bin": hashlib.sha256(report).hexdigest()
+        "artifacts": {},
+    }
+    suite_binding = {
+        field: manifest[field] for field in (
+            "provider_id", "adapter_id", "adapter_version", "provider_scope",
+            "tool_id", "tool_contract_fingerprint", "capabilities",
+            "test_suite_version", "sandbox_environment",
+        )
+    }
+    suite_payload = {
+        "schema": "aibrain-conformance-suite-v1",
+        "suite_id": "api-conformance-suite",
+        "suite_version": "conformance-v1",
+        "authority_key_id": "api-suite-authority",
+        "binding": suite_binding,
+        "commands": {
+            name: ["/usr/bin/python3", "-c", "raise SystemExit(0)"]
+            for name in REQUIRED_CHECKS
         },
+    }
+    suite_envelope = {
+        "payload": suite_payload,
+        "signature": base64.urlsafe_b64encode(
+            suite_authority_private.sign(canonical_json(suite_payload))
+        ).decode("ascii").rstrip("="),
+    }
+    artifacts = {
+        "sandbox-report.bin": report,
+        "signed-suite.json": canonical_json(suite_envelope),
+    }
+    manifest["artifacts"] = {
+        name: hashlib.sha256(content).hexdigest()
+        for name, content in artifacts.items()
     }
 
     # Operator credentials cannot ingest/sign on behalf of the runner.
@@ -887,13 +926,29 @@ def test_runner_ingestion_and_operator_approval_are_separate_privileges(
     )
     assert operator_cannot_ingest.status_code == 401
 
+    tampered_artifacts = dict(artifacts)
+    tampered_artifacts["signed-suite.json"] = tampered_artifacts["signed-suite.json"][:-1] + b"x"
+    rejected_upload = client.post(
+        "/api/v1/tools/runner/evidence",
+        headers={"X-AIBrain-Runner-Token": runner_token},
+        json={
+            "manifest": manifest,
+            "artifacts_base64": {
+                name: base64.b64encode(content).decode("ascii")
+                for name, content in tampered_artifacts.items()
+            },
+        },
+    )
+    assert rejected_upload.status_code == 503
+
     upload = client.post(
         "/api/v1/tools/runner/evidence",
         headers={"X-AIBrain-Runner-Token": runner_token},
         json={
             "manifest": manifest,
             "artifacts_base64": {
-                "sandbox-report.bin": base64.b64encode(report).decode("ascii")
+                name: base64.b64encode(content).decode("ascii")
+                for name, content in artifacts.items()
             },
         },
     )
