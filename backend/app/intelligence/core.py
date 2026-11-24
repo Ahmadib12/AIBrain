@@ -225,6 +225,7 @@ class OrchestrationCore(CentralIntelligenceCore):
                 available_capabilities=(
                     capability.capability_id
                     for capability in self.capability_registry.available()
+                    if capability.capability_id in self.adapters
                 ),
             )
             planning_payload = planning.model_dump(mode="json")
