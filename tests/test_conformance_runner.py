@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import os
 import sys
@@ -9,6 +11,9 @@ import pytest
 
 from backend.app.tools.conformance import REQUIRED_CHECKS, verify_evidence_manifest
 from scripts.conformance_runner import run_suite
+from backend.app.tools.conformance import canonical_json
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 BINDING = {
@@ -41,9 +46,38 @@ def commands_for(code="pass"):
     return {name: [sys.executable, "-c", script] for name in REQUIRED_CHECKS}
 
 
+
+def signed_suite(binding, commands):
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    payload = {
+        "schema": "aibrain-conformance-suite-v1",
+        "suite_id": "provider-x-safety-suite",
+        "suite_version": binding["test_suite_version"],
+        "authority_key_id": "suite-authority-1",
+        "binding": binding,
+        "commands": commands,
+    }
+    envelope = {
+        "payload": payload,
+        "signature": base64.urlsafe_b64encode(private.sign(canonical_json(payload))).decode("ascii").rstrip("="),
+    }
+    return envelope, public
+
+
+def execute(binding, commands, output_dir, **kwargs):
+    envelope, public = signed_suite(binding, commands)
+    return run_suite(
+        suite_envelope=envelope,
+        authority_public_key=public,
+        authority_key_id="suite-authority-1",
+        output_dir=output_dir,
+        **kwargs,
+    )
+
 def test_runner_executes_exact_suite_and_builds_verifiable_manifest(tmp_path):
     output = tmp_path / "artifacts"
-    result = run_suite(binding=BINDING, commands=commands_for(), output_dir=output)
+    result = execute(BINDING, commands_for(), output)
     assert result["status"] == "passed"
     assert set(result["results"]) == REQUIRED_CHECKS
     manifest = json.loads((output / "manifest.json").read_text())
@@ -59,7 +93,7 @@ def test_failed_child_is_recorded_and_no_certifiable_manifest_is_created(tmp_pat
     commands = commands_for()
     commands[sorted(REQUIRED_CHECKS)[0]] = [sys.executable, "-c", "raise SystemExit(7)"]
     output = tmp_path / "artifacts"
-    result = run_suite(binding=BINDING, commands=commands, output_dir=output)
+    result = execute(BINDING, commands, output)
     assert result["status"] == "incomplete"
     assert result["results"][sorted(REQUIRED_CHECKS)[0]]["status"] == "failed"
     assert result["manifest"] is None
@@ -72,8 +106,8 @@ def test_timeout_is_unknown_and_never_passes(tmp_path):
         sys.executable, "-c", "import time; time.sleep(10)"
     ]
     output = tmp_path / "artifacts"
-    result = run_suite(
-        binding=BINDING, commands=commands, output_dir=output,
+    result = execute(
+        BINDING, commands, output,
         timeout_seconds=1,
     )
     assert result["status"] == "incomplete"
@@ -120,7 +154,7 @@ def test_manifest_builder_rejects_invalid_binding(tmp_path):
     binding = dict(BINDING)
     binding["tool_contract_fingerprint"] = "not-a-digest"
     with pytest.raises(ValueError, match="fingerprint"):
-        run_suite(binding=binding, commands=commands_for(), output_dir=tmp_path / "out")
+        execute(binding, commands_for(), tmp_path / "out")
 
 
 
@@ -151,7 +185,7 @@ def test_invalid_capability_claims_rejected_before_execution(tmp_path):
     binding["capabilities"] = dict(BINDING["capabilities"])
     binding["capabilities"]["supports_outcome_lookup"] = "yes"
     with pytest.raises(ValueError, match="must be boolean"):
-        run_suite(binding=binding, commands=commands_for(), output_dir=tmp_path / "out")
+        execute(binding, commands_for(), tmp_path / "out")
 
 
 
@@ -172,3 +206,53 @@ def test_runner_kills_descendants_after_command_parent_exits(tmp_path):
     assert result["status"] == "passed"
     time.sleep(0.7)
     assert not marker.exists()
+
+
+def test_unsigned_suite_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="signed conformance suite"):
+        run_suite(
+            suite_envelope={"payload": {"binding": BINDING}, "signature": ""},
+            authority_public_key=b"x" * 32,
+            authority_key_id="suite-authority-1",
+            output_dir=tmp_path / "out",
+        )
+
+
+def test_command_substitution_invalidates_suite_signature(tmp_path):
+    envelope, public = signed_suite(BINDING, commands_for())
+    envelope["payload"]["commands"][sorted(REQUIRED_CHECKS)[0]] = [
+        sys.executable, "-c", "pass"
+    ]
+    with pytest.raises(PermissionError, match="signature verification failed"):
+        run_suite(
+            suite_envelope=envelope,
+            authority_public_key=public,
+            authority_key_id="suite-authority-1",
+            output_dir=tmp_path / "out",
+        )
+
+
+def test_wrong_suite_authority_key_id_is_rejected(tmp_path):
+    envelope, public = signed_suite(BINDING, commands_for())
+    with pytest.raises(PermissionError, match="pinned authority"):
+        run_suite(
+            suite_envelope=envelope,
+            authority_public_key=public,
+            authority_key_id="attacker-key",
+            output_dir=tmp_path / "out",
+        )
+
+
+def test_signed_suite_digest_and_commands_are_recorded(tmp_path):
+    envelope, public = signed_suite(BINDING, commands_for())
+    output = tmp_path / "out"
+    result = run_suite(
+        suite_envelope=envelope, authority_public_key=public,
+        authority_key_id="suite-authority-1", output_dir=output,
+    )
+    report = json.loads((output / result["report"]).read_text())
+    expected = hashlib.sha256(canonical_json(envelope["payload"])).hexdigest()
+    assert report["suite_sha256"] == expected
+    assert report["suite_authority_key_id"] == "suite-authority-1"
+    assert set(report["command_sha256"]) == REQUIRED_CHECKS
+    assert "signed-suite.json" in json.loads((output / "manifest.json").read_text())["artifacts"]
