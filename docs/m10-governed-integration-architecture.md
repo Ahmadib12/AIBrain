@@ -1,6 +1,6 @@
 # M10 — Governed Tool Integration and Real-World Agent Operations
 
-**Status:** M10 foundation committed on `dev/tool-authorization-lifecycle`. The integration catalog and its read-only/risk/scope invariants are implemented. M10 is not complete: no real external provider adapter is enabled, and owner integration grants, credential lifecycle, execution wiring, and provider-specific conformance remain verification gates.
+**Status:** M10.1 is implemented and verified. M10.2 has a first persistence/API foundation for owner consent, pending grants, revocation, disconnection, and account erasure. M10 remains incomplete: connections cannot be activated, no encrypted credential vault or trusted provider verifier exists, no real adapter is enabled, and agent-run integration/provider conformance remain gated.
 
 ## Objective
 
