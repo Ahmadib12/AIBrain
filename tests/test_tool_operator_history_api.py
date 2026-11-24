@@ -102,9 +102,7 @@ def test_operator_history_requires_bounded_investigation_reason(
         headers=auth_header(token),
         params={"reason": "        "},
     )
-    assert whitespace_reason.status_code == 404 or (
-        whitespace_reason.status_code == 400
-    )
+    assert whitespace_reason.status_code == 400
 
 
 def test_security_operator_history_read_is_redacted_and_audited(
