@@ -118,6 +118,13 @@ def test_learning_adaptation_terminal_decisions_cannot_be_reversed(client):
     assert reapproved.status_code == 409
     assert reapproved.json()["detail"]["code"] == "INVALID_ADAPTATION_TRANSITION"
 
+    state = get_app_state()
+    with pytest.raises(sqlite3.IntegrityError):
+        state.database.connect().execute(
+            "UPDATE adaptations SET status = 'approved' WHERE id = ?",
+            (adaptation_id,),
+        )
+
 
 def test_learning_records_are_owner_scoped(client):
     owner_token = _register(client, "m7-owner@example.com")
