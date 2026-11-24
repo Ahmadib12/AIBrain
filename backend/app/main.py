@@ -52,13 +52,13 @@ async def lifespan(app: FastAPI):
             try:
                 await integration_expiry_worker.stop()
             finally:
-            try:
-                await memory_retention_worker.stop()
-            finally:
                 try:
-                    await recovery_worker.stop()
+                    await memory_retention_worker.stop()
                 finally:
-                    reset_app_state()
+                    try:
+                        await recovery_worker.stop()
+                    finally:
+                        reset_app_state()
 
 
 app = FastAPI(
