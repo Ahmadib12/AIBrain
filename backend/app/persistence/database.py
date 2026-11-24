@@ -2328,6 +2328,191 @@ class Database:
                 """
             ),
             (
+                31,
+                """
+                CREATE TABLE agent_run_integration_dispatches (
+                    step_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    integration_id TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    contract_fingerprint TEXT NOT NULL
+                        CHECK (length(contract_fingerprint)=64),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'prepared','dispatch_started','succeeded','failed',
+                        'outcome_unknown'
+                    )),
+                    dispatch_started_at TEXT,
+                    finished_at TEXT,
+                    outcome_json TEXT
+                        CHECK (outcome_json IS NULL OR json_valid(outcome_json)),
+                    error_code TEXT CHECK (
+                        error_code IS NULL OR (
+                            length(error_code) BETWEEN 1 AND 64
+                            AND error_code NOT GLOB '*[^A-Z0-9_]*'
+                        )
+                    ),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(step_id) REFERENCES agent_run_steps(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(connection_id,user_id)
+                        REFERENCES integration_connections(id,user_id)
+                        ON DELETE CASCADE,
+                    CHECK (
+                        (status='prepared' AND dispatch_started_at IS NULL
+                            AND finished_at IS NULL AND outcome_json IS NULL
+                            AND error_code IS NULL)
+                        OR
+                        (status='dispatch_started' AND dispatch_started_at IS NOT NULL
+                            AND finished_at IS NULL AND outcome_json IS NULL
+                            AND error_code IS NULL)
+                        OR
+                        (status='succeeded' AND dispatch_started_at IS NOT NULL
+                            AND finished_at IS NOT NULL AND outcome_json IS NOT NULL
+                            AND error_code IS NULL)
+                        OR
+                        (status IN ('failed','outcome_unknown')
+                            AND dispatch_started_at IS NOT NULL
+                            AND finished_at IS NOT NULL AND outcome_json IS NULL
+                            AND error_code IS NOT NULL)
+                    )
+                );
+                CREATE INDEX idx_agent_run_integration_dispatches_owner
+                    ON agent_run_integration_dispatches(user_id,run_id,status);
+
+                CREATE TRIGGER validate_agent_run_integration_dispatch_insert
+                BEFORE INSERT ON agent_run_integration_dispatches
+                WHEN NEW.status <> 'prepared'
+                  OR NOT EXISTS (
+                    SELECT 1
+                    FROM agent_run_integration_bindings b
+                    JOIN agent_run_steps s
+                      ON s.id=b.step_id AND s.user_id=b.user_id
+                    JOIN agent_runs r
+                      ON r.id=b.run_id AND r.user_id=b.user_id
+                    JOIN integration_connections c
+                      ON c.id=b.connection_id AND c.user_id=b.user_id
+                    JOIN users u ON u.id=b.user_id
+                    WHERE b.step_id=NEW.step_id
+                      AND b.user_id=NEW.user_id
+                      AND b.run_id=NEW.run_id
+                      AND b.connection_id=NEW.connection_id
+                      AND b.integration_id=NEW.integration_id
+                      AND b.tool_id=NEW.tool_id
+                      AND b.contract_fingerprint=NEW.contract_fingerprint
+                      AND s.status='running'
+                      AND r.status='running'
+                      AND u.deleted_at IS NULL
+                      AND c.integration_id=b.integration_id
+                      AND c.status='active'
+                      AND (c.expires_at IS NULL OR c.expires_at>NEW.created_at)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM json_each(b.required_scopes_json) requested
+                        WHERE NOT EXISTS (
+                          SELECT 1 FROM integration_connection_grants g
+                          WHERE g.user_id=b.user_id
+                            AND g.connection_id=b.connection_id
+                            AND g.scope=requested.value
+                            AND g.status='active' AND g.revoked_at IS NULL
+                            AND (g.expires_at IS NULL OR g.expires_at>NEW.created_at)
+                        )
+                      )
+                  )
+                BEGIN
+                    SELECT RAISE(ABORT,'integration dispatch requires a running bound step and live owner authority');
+                END;
+
+                CREATE TRIGGER validate_agent_run_integration_dispatch_transition
+                BEFORE UPDATE OF status ON agent_run_integration_dispatches
+                WHEN OLD.status <> NEW.status
+                  AND NOT (
+                    (OLD.status='prepared' AND NEW.status='dispatch_started'
+                      AND NEW.dispatch_started_at IS NOT NULL
+                      AND NEW.finished_at IS NULL
+                      AND NEW.outcome_json IS NULL AND NEW.error_code IS NULL
+                      AND EXISTS (
+                        SELECT 1
+                        FROM agent_run_integration_bindings b
+                        JOIN integration_connections c
+                          ON c.id=b.connection_id AND c.user_id=b.user_id
+                        JOIN users u ON u.id=b.user_id
+                        WHERE b.step_id=OLD.step_id
+                          AND b.user_id=OLD.user_id
+                          AND b.run_id=OLD.run_id
+                          AND b.connection_id=OLD.connection_id
+                          AND c.status='active'
+                          AND (c.expires_at IS NULL OR c.expires_at>NEW.dispatch_started_at)
+                          AND u.deleted_at IS NULL
+                          AND NOT EXISTS (
+                            SELECT 1 FROM json_each(b.required_scopes_json) requested
+                            WHERE NOT EXISTS (
+                              SELECT 1 FROM integration_connection_grants g
+                              WHERE g.user_id=b.user_id
+                                AND g.connection_id=b.connection_id
+                                AND g.scope=requested.value
+                                AND g.status='active' AND g.revoked_at IS NULL
+                                AND (g.expires_at IS NULL OR g.expires_at>NEW.dispatch_started_at)
+                            )
+                          )
+                      )
+                      AND EXISTS (
+                        SELECT 1 FROM agent_run_events e
+                        WHERE e.run_id=OLD.run_id AND e.user_id=OLD.user_id
+                          AND e.event_type='integration_dispatch_started'
+                          AND json_extract(e.details_json,'$.step_id')=OLD.step_id
+                      ))
+                    OR
+                    (OLD.status='dispatch_started'
+                      AND NEW.status IN ('succeeded','failed','outcome_unknown')
+                      AND NEW.dispatch_started_at=OLD.dispatch_started_at
+                      AND NEW.finished_at IS NOT NULL
+                      AND NEW.finished_at>=OLD.dispatch_started_at
+                      AND EXISTS (
+                        SELECT 1 FROM agent_run_events e
+                        WHERE e.run_id=OLD.run_id AND e.user_id=OLD.user_id
+                          AND json_extract(e.details_json,'$.step_id')=OLD.step_id
+                          AND (
+                            (NEW.status='succeeded'
+                              AND e.event_type='integration_dispatch_succeeded')
+                            OR (NEW.status='failed'
+                              AND e.event_type='integration_dispatch_failed')
+                            OR (NEW.status='outcome_unknown'
+                              AND e.event_type='integration_dispatch_outcome_unknown')
+                          )
+                      ))
+                  )
+                BEGIN
+                    SELECT RAISE(ABORT,'invalid integration dispatch lifecycle transition');
+                END;
+
+                CREATE TRIGGER prevent_agent_run_integration_dispatch_identity_update
+                BEFORE UPDATE OF step_id,user_id,run_id,connection_id,integration_id,
+                                 tool_id,contract_fingerprint,created_at
+                ON agent_run_integration_dispatches
+                BEGIN
+                    SELECT RAISE(ABORT,'integration dispatch identity is immutable');
+                END;
+
+                CREATE TRIGGER prevent_agent_run_integration_dispatch_terminal_update
+                BEFORE UPDATE ON agent_run_integration_dispatches
+                WHEN OLD.status IN ('succeeded','failed','outcome_unknown')
+                BEGIN
+                    SELECT RAISE(ABORT,'terminal integration dispatches are immutable');
+                END;
+
+                CREATE TRIGGER prevent_agent_run_integration_dispatch_delete
+                BEFORE DELETE ON agent_run_integration_dispatches
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT,'integration dispatches may only be deleted during account erasure');
+                END;
+                """
+            ),
+            (
                 30,
                 """
                 CREATE TABLE agent_run_integration_bindings (
