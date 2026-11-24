@@ -34,8 +34,10 @@ def main() -> int:
         # the same verifier used by AIBrain.
         authority_public_key_b64 = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "")
         authority_key_id = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID", "")
-        if not authority_public_key_b64 or not authority_key_id:
-            raise ValueError("Pinned suite-authority public key and key ID must be provisioned")
+        expected_suite_id = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID", "")
+        expected_suite_version = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION", "")
+        if not all((authority_public_key_b64, authority_key_id, expected_suite_id, expected_suite_version)):
+            raise ValueError("Pinned suite authority and approved suite identity/version must be provisioned")
         try:
             authority_public_key = base64.b64decode(authority_public_key_b64, validate=True)
         except (ValueError, base64.binascii.Error) as exc:
@@ -44,6 +46,8 @@ def main() -> int:
             suite_envelope=_load_json(args.suite),
             authority_public_key=authority_public_key,
             authority_key_id=authority_key_id,
+            expected_suite_id=expected_suite_id,
+            expected_suite_version=expected_suite_version,
             output_dir=args.output_dir,
             timeout_seconds=args.timeout_seconds,
             memory_mb=args.memory_mb,
