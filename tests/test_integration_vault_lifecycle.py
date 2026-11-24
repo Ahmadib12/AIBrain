@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -100,7 +101,7 @@ def test_missing_vault_key_fails_closed():
 
 def test_database_rejects_activation_without_real_vault_record(integration_state):
     database, _, connection, _, _, _ = integration_state
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         database.connect().execute(
             """UPDATE integration_connections
                SET status='active',verified_at=?,secret_ref='vault:forged'
@@ -219,3 +220,18 @@ def test_expired_scope_expires_connection_when_no_scopes_remain(integration_stat
     assert expired["grants"][0]["status"] == "expired"
     with pytest.raises(LookupError):
         vault.load(owner_id, connection["id"], "calendar")
+
+
+def test_account_erasure_removes_encrypted_integration_credentials(integration_state):
+    database, owner_id, connection, _, _, _ = integration_state
+    _activate(integration_state)
+    identity = IdentityRepository(database, session_ttl_seconds=3600)
+    assert database.connect().execute(
+        "SELECT COUNT(*) FROM integration_secrets WHERE connection_id=?",
+        (connection["id"],),
+    ).fetchone()[0] == 1
+    identity.delete_user(owner_id)
+    assert database.connect().execute(
+        "SELECT COUNT(*) FROM integration_secrets WHERE user_id=?",
+        (owner_id,),
+    ).fetchone()[0] == 0
