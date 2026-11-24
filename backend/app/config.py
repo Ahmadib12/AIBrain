@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     tool_execution_recovery_interval_seconds: int = Field(default=60, gt=0)
     tool_execution_stale_after_seconds: int = Field(default=300, gt=0)
     memory_retention_interval_seconds: int = Field(default=3_600, gt=0)
+    integration_expiry_interval_seconds: int = Field(default=60, gt=0)
 
     webauthn_enabled: bool = False
     webauthn_rp_id: str | None = None
