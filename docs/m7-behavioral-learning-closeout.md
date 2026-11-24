@@ -1,7 +1,7 @@
 # M7 — Behavioral Learning and Adaptation Governance
 
-**Implementation status:** M7.1–M7.6 implementation is committed on
-`dev/tool-authorization-lifecycle`; Codespaces verification is pending.
+**Implementation status:** M7.1–M7.6 implementation is committed and verified on
+`dev/tool-authorization-lifecycle` in Codespaces on 2026-11-24.
 
 ## Delivered scope
 
@@ -93,6 +93,9 @@ pytest -q
 python -m pip check
 ```
 
-Do not close M7 until the focused and full suites, compilation, and dependency
-check pass. Do not merge this development branch into `main` without explicit
-approval.
+**Verified result (2026-11-24):** focused tests `62 passed, 1 warning`; full
+suite `785 passed, 1 warning`; `python -m compileall -q backend tests scripts`
+passed; `python -m pip check` reported no broken requirements. The remaining
+warning is Starlette's deprecation notice for using `httpx` with
+`starlette.testclient`. Do not merge this development branch into `main`
+without explicit approval.
