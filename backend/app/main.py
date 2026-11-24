@@ -10,6 +10,7 @@ from backend.app.middleware import RequestBodyLimitMiddleware, SecurityHeadersMi
 from backend.app.app_state import get_app_state, reset_app_state
 from backend.app.tools.recovery import ToolExecutionRecoveryWorker
 from backend.app.persistence.memory_retention import MemoryRetentionWorker
+from backend.app.persistence.integration_expiry import IntegrationConnectionExpiryWorker
 
 
 settings = get_settings()
@@ -28,18 +29,26 @@ async def lifespan(app: FastAPI):
         state.memory,
         interval_seconds=settings.memory_retention_interval_seconds,
     )
+    integration_expiry_worker = IntegrationConnectionExpiryWorker(
+        state.integration_connections,
+        interval_seconds=settings.integration_expiry_interval_seconds,
+    )
     try:
         await recovery_worker.start()
         await memory_retention_worker.start()
+        await integration_expiry_worker.start()
         yield
     finally:
         try:
-            await memory_retention_worker.stop()
+            await integration_expiry_worker.stop()
         finally:
             try:
-                await recovery_worker.stop()
+                await memory_retention_worker.stop()
             finally:
-                reset_app_state()
+                try:
+                    await recovery_worker.stop()
+                finally:
+                    reset_app_state()
 
 
 app = FastAPI(
