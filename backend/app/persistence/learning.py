@@ -118,7 +118,11 @@ class BehavioralLearningRepository:
         expires_in_days: int = 30,
     ) -> dict:
         validate_personal_payload(proposal)
-        if not isinstance(expires_in_days, int) or not 1 <= expires_in_days <= 365:
+        if (
+            isinstance(expires_in_days, bool)
+            or not isinstance(expires_in_days, int)
+            or not 1 <= expires_in_days <= 365
+        ):
             raise ValueError("Adaptation expiry must be between 1 and 365 days")
         adaptation_id = str(uuid.uuid4())
         now = _utc_now()
@@ -286,7 +290,11 @@ class BehavioralLearningRepository:
         numeric = (baseline_value, observed_value, confidence)
         if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numeric):
             raise ValueError("Evaluation values must be numeric")
-        if not all(math.isfinite(float(value)) for value in numeric):
+        try:
+            finite_values = all(math.isfinite(float(value)) for value in numeric)
+        except (OverflowError, ValueError):
+            finite_values = False
+        if not finite_values:
             raise ValueError("Evaluation values must be finite")
         if not 0.0 <= confidence <= 1.0:
             raise ValueError("Evaluation confidence must be between 0 and 1")
