@@ -1656,9 +1656,9 @@ class ToolRequestRepository:
             raise ValueError("Investigation reason must be 8 to 500 characters")
         if (
             isinstance(limit, bool) or not isinstance(limit, int)
-            or not 1 <= limit <= 51
+            or not 1 <= limit <= 50
         ):
-            raise ValueError("Execution history limit must be between 1 and 51")
+            raise ValueError("Execution history limit must be between 1 and 50")
         if (
             isinstance(offset, bool) or not isinstance(offset, int)
             or not 0 <= offset <= 100_000
@@ -1689,7 +1689,7 @@ class ToolRequestRepository:
             events = self.get_execution_history(
                 request["user_id"],
                 request_id,
-                limit=limit,
+                limit=limit + 1,
                 offset=offset,
             )
             _insert_security_operator_audit(
