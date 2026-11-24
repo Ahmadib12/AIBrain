@@ -70,6 +70,8 @@ def execute(binding, commands, output_dir, **kwargs):
         suite_envelope=envelope,
         authority_public_key=public,
         authority_key_id="suite-authority-1",
+        expected_suite_id="provider-x-safety-suite",
+        expected_suite_version="suite-1",
         output_dir=output_dir,
         **kwargs,
     )
@@ -238,6 +240,8 @@ def test_wrong_suite_authority_key_id_is_rejected(tmp_path):
             suite_envelope=envelope,
             authority_public_key=public,
             authority_key_id="attacker-key",
+            expected_suite_id="provider-x-safety-suite",
+            expected_suite_version="suite-1",
             output_dir=tmp_path / "out",
         )
 
