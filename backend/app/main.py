@@ -9,6 +9,7 @@ from backend.app.logging import configure_logging
 from backend.app.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from backend.app.app_state import get_app_state, reset_app_state
 from backend.app.tools.recovery import ToolExecutionRecoveryWorker
+from backend.app.persistence.memory_retention import MemoryRetentionWorker
 
 
 settings = get_settings()
@@ -23,14 +24,22 @@ async def lifespan(app: FastAPI):
         interval_seconds=settings.tool_execution_recovery_interval_seconds,
         stale_after_seconds=settings.tool_execution_stale_after_seconds,
     )
+    memory_retention_worker = MemoryRetentionWorker(
+        state.memory,
+        interval_seconds=settings.memory_retention_interval_seconds,
+    )
     try:
         await recovery_worker.start()
+        await memory_retention_worker.start()
         yield
     finally:
         try:
-            await recovery_worker.stop()
+            await memory_retention_worker.stop()
         finally:
-            reset_app_state()
+            try:
+                await recovery_worker.stop()
+            finally:
+                reset_app_state()
 
 
 app = FastAPI(
