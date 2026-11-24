@@ -46,7 +46,8 @@ The following require user-supplied credentials or unavailable infrastructure:
 ## Safety boundaries
 
 - User access is enforced by bearer sessions on personal, memory, learning, and tool APIs.
-- Memory operations are scoped to the authenticated user ID and active consent identity.
+- Memory is scoped to the authenticated user ID; writes and assistant retrieval require
+  active consent, while owner review, export, and deletion remain available after revocation.
 - Memory is not sent to an intelligence provider unless the authenticated request opts in;
   saved records are framed as untrusted context, not policy or authorization.
 - Learning observations do not grant permissions or automatically apply adaptations.
