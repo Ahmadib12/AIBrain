@@ -195,7 +195,7 @@ class IntegrationConnectionRepository:
         now = _now()
         with self.database.transaction(immediate=True):
             row = self.database.connect().execute(
-                """SELECT integration_id,status FROM integration_connections
+                """SELECT integration_id,status,expires_at FROM integration_connections
                    WHERE id=? AND user_id=?""",
                 (connection_id, user_id),
             ).fetchone()
@@ -203,6 +203,8 @@ class IntegrationConnectionRepository:
                 raise LookupError("Integration connection not found")
             if row["status"] != "pending_verification":
                 raise PermissionError("Connection is no longer pending verification")
+            if row["expires_at"] is None or row["expires_at"] <= now:
+                raise PermissionError("Pending provider verification has expired")
             pending = self.database.connect().execute(
                 """SELECT scope FROM integration_connection_grants
                    WHERE connection_id=? AND user_id=? AND status='pending'
