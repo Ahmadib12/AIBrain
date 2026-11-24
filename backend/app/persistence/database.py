@@ -2133,6 +2133,95 @@ class Database:
                 BEGIN SELECT RAISE(ABORT,'agent run events may only be deleted during account erasure'); END;
                 """
             ),
+            (
+                28,
+                """
+                CREATE TABLE integration_connections (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    integration_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'pending_verification','active','revoked','expired','disconnected'
+                    )),
+                    consent_version TEXT NOT NULL,
+                    consented_at TEXT NOT NULL,
+                    verified_at TEXT,
+                    expires_at TEXT,
+                    secret_ref TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(id,user_id)
+                );
+                CREATE INDEX idx_integration_connections_owner
+                    ON integration_connections(user_id,status,created_at);
+                CREATE TABLE integration_connection_grants (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending','active','revoked','expired')),
+                    expires_at TEXT,
+                    revoked_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(connection_id,user_id)
+                        REFERENCES integration_connections(id,user_id) ON DELETE CASCADE,
+                    UNIQUE(connection_id,scope)
+                );
+                CREATE INDEX idx_integration_grants_owner
+                    ON integration_connection_grants(user_id,connection_id,status,scope);
+                CREATE TABLE integration_connection_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(connection_id,user_id)
+                        REFERENCES integration_connections(id,user_id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_integration_connection_events_owner
+                    ON integration_connection_events(user_id,connection_id,created_at,id);
+
+                CREATE TRIGGER validate_integration_connection_insert
+                BEFORE INSERT ON integration_connections
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users u
+                    WHERE u.id=NEW.user_id AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'integration connection requires active owner'); END;
+
+                CREATE TRIGGER validate_integration_grant_insert
+                BEFORE INSERT ON integration_connection_grants
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM integration_connections c JOIN users u ON u.id=c.user_id
+                    WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'integration grant owner mismatch'); END;
+
+                CREATE TRIGGER validate_integration_connection_event_insert
+                BEFORE INSERT ON integration_connection_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM integration_connections c JOIN users u ON u.id=c.user_id
+                    WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'integration connection event owner mismatch'); END;
+
+                CREATE TRIGGER prevent_integration_connection_event_update
+                BEFORE UPDATE ON integration_connection_events
+                BEGIN SELECT RAISE(ABORT,'integration connection events are immutable'); END;
+                CREATE TRIGGER prevent_integration_connection_event_delete
+                BEFORE DELETE ON integration_connection_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'integration events may only be deleted during account erasure'); END;
+                """
+            ),
         )
 
         with self._lock:
