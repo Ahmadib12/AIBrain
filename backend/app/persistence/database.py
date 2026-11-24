@@ -1709,6 +1709,222 @@ class Database:
                 END;
                 """
             ),
+            (
+                25,
+                """
+                CREATE TABLE agent_capability_grants (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    capability TEXT NOT NULL CHECK (capability IN (
+                        'research.read', 'notes.read', 'notes.write',
+                        'calendar.read', 'calendar.write', 'web.search',
+                        'files.read'
+                    )),
+                    expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_grants_owner_agent
+                    ON agent_capability_grants(user_id, agent_id, created_at);
+                CREATE TABLE agent_capability_revocations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    grant_id TEXT NOT NULL UNIQUE,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(grant_id) REFERENCES agent_capability_grants(id) ON DELETE CASCADE
+                );
+                CREATE TABLE agent_tasks (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 160),
+                    goal TEXT NOT NULL CHECK (length(goal) <= 4000),
+                    context_json TEXT NOT NULL CHECK (json_valid(context_json)),
+                    capability_ceiling_json TEXT NOT NULL CHECK (json_valid(capability_ceiling_json)),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'assigned', 'in_progress', 'completed', 'failed',
+                        'cancelled', 'expired'
+                    )),
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_tasks_owner_agent
+                    ON agent_tasks(user_id, agent_id, status, expires_at);
+                CREATE TABLE agent_task_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+                );
+                CREATE INDEX idx_agent_task_events_owner_task
+                    ON agent_task_events(user_id, task_id, created_at, id);
+                CREATE TABLE agent_messages (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    sender_agent_id TEXT NOT NULL,
+                    recipient_agent_id TEXT NOT NULL,
+                    task_id TEXT,
+                    payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(sender_agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    FOREIGN KEY(recipient_agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_messages_owner_recipient
+                    ON agent_messages(user_id, recipient_agent_id, created_at, id);
+                CREATE TABLE agent_control_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_control_events_owner_agent
+                    ON agent_control_events(user_id, agent_id, created_at, id);
+
+                CREATE TRIGGER validate_agent_grant_insert
+                BEFORE INSERT ON agent_capability_grants
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents a JOIN users u ON u.id = a.user_id
+                    WHERE a.id = NEW.agent_id AND a.user_id = NEW.user_id
+                      AND a.status = 'active' AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT, 'grant requires active owned agent'); END;
+                CREATE TRIGGER prevent_agent_grant_update
+                BEFORE UPDATE ON agent_capability_grants
+                BEGIN SELECT RAISE(ABORT, 'capability grants are immutable'); END;
+                CREATE TRIGGER prevent_agent_grant_delete
+                BEFORE DELETE ON agent_capability_grants
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT, 'grants may only be deleted during account erasure'); END;
+                CREATE TRIGGER validate_agent_revocation_insert
+                BEFORE INSERT ON agent_capability_revocations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_capability_grants g
+                    JOIN agents a ON a.id=g.agent_id
+                    JOIN users u ON u.id=g.user_id
+                    WHERE g.id=NEW.grant_id AND g.user_id=NEW.user_id
+                      AND a.status <> 'terminated' AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT, 'grant revocation owner mismatch'); END;
+                CREATE TRIGGER prevent_agent_revocation_update
+                BEFORE UPDATE ON agent_capability_revocations
+                BEGIN SELECT RAISE(ABORT, 'grant revocations are immutable'); END;
+                CREATE TRIGGER prevent_agent_revocation_delete
+                BEFORE DELETE ON agent_capability_revocations
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT, 'revocations may only be deleted during account erasure'); END;
+
+                CREATE TRIGGER validate_agent_task_insert
+                BEFORE INSERT ON agent_tasks
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                    WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                      AND a.status='active' AND u.deleted_at IS NULL
+                )
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.capability_ceiling_json) c
+                    WHERE c.type <> 'text' OR NOT EXISTS (
+                        SELECT 1 FROM agent_capability_grants g
+                        WHERE g.user_id=NEW.user_id AND g.agent_id=NEW.agent_id
+                          AND g.capability=c.value
+                          AND (g.expires_at IS NULL OR g.expires_at > NEW.created_at)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM agent_capability_revocations r
+                              WHERE r.grant_id=g.id
+                          )
+                    )
+                )
+                BEGIN SELECT RAISE(ABORT, 'task requires active agent and granted capability ceiling'); END;
+                CREATE TRIGGER prevent_agent_task_identity_update
+                BEFORE UPDATE OF id, user_id, agent_id, created_at ON agent_tasks
+                BEGIN SELECT RAISE(ABORT, 'task identity is immutable'); END;
+                CREATE TRIGGER prevent_agent_task_delete
+                BEFORE DELETE ON agent_tasks
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT, 'tasks may only be deleted during account erasure'); END;
+                CREATE TRIGGER validate_agent_task_transition
+                BEFORE UPDATE OF status ON agent_tasks
+                WHEN OLD.status <> NEW.status AND NOT EXISTS (
+                    SELECT 1 FROM agent_task_events e
+                    WHERE e.task_id=OLD.id AND e.user_id=OLD.user_id
+                      AND json_extract(e.details_json, '$.from_status')=OLD.status
+                      AND json_extract(e.details_json, '$.to_status')=NEW.status
+                )
+                BEGIN SELECT RAISE(ABORT, 'task status change requires matching event'); END;
+                CREATE TRIGGER prevent_agent_task_event_update
+                BEFORE UPDATE ON agent_task_events
+                BEGIN SELECT RAISE(ABORT, 'task events are immutable'); END;
+                CREATE TRIGGER prevent_agent_task_event_delete
+                BEFORE DELETE ON agent_task_events
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT, 'task events may only be deleted during account erasure'); END;
+                CREATE TRIGGER validate_agent_task_event_insert
+                BEFORE INSERT ON agent_task_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_tasks t JOIN users u ON u.id=t.user_id
+                    WHERE t.id=NEW.task_id AND t.user_id=NEW.user_id
+                      AND NEW.actor_user_id=NEW.user_id AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT, 'task event owner mismatch'); END;
+
+                CREATE TRIGGER validate_agent_message_insert
+                BEFORE INSERT ON agent_messages
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents s JOIN agents r ON r.id=NEW.recipient_agent_id
+                    JOIN users u ON u.id=s.user_id
+                    WHERE s.id=NEW.sender_agent_id AND s.user_id=NEW.user_id
+                      AND r.user_id=NEW.user_id AND s.status='active'
+                      AND r.status='active' AND u.deleted_at IS NULL
+                )
+                OR (NEW.task_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM agent_tasks t
+                    WHERE t.id=NEW.task_id AND t.user_id=NEW.user_id
+                      AND t.agent_id=NEW.recipient_agent_id
+                ))
+                BEGIN SELECT RAISE(ABORT, 'message requires same-owner active agents and matching task'); END;
+                CREATE TRIGGER prevent_agent_message_update
+                BEFORE UPDATE ON agent_messages
+                BEGIN SELECT RAISE(ABORT, 'agent messages are immutable'); END;
+                CREATE TRIGGER prevent_agent_message_delete
+                BEFORE DELETE ON agent_messages
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT, 'messages may only be deleted during account erasure'); END;
+                CREATE TRIGGER prevent_agent_control_event_update
+                BEFORE UPDATE ON agent_control_events
+                BEGIN SELECT RAISE(ABORT, 'agent control events are immutable'); END;
+                CREATE TRIGGER prevent_agent_control_event_delete
+                BEFORE DELETE ON agent_control_events
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT, 'control events may only be deleted during account erasure'); END;
+                CREATE TRIGGER validate_agent_control_event_insert
+                BEFORE INSERT ON agent_control_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                    WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT, 'control event owner mismatch'); END;
+                """
+            ),
         )
 
         with self._lock:
