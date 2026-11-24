@@ -53,6 +53,11 @@ def test_integration_dispatch_ledger_migration_is_applied_after_bindings():
 def test_integration_dispatch_ledger_rejects_unknown_status_values():
     database = Database("sqlite:///:memory:")
     connection = database.connect()
+    # Isolate the table CHECK from the BEFORE INSERT authority trigger, which
+    # otherwise rejects this deliberately incomplete row first.
+    connection.execute(
+        "DROP TRIGGER validate_agent_run_integration_dispatch_insert"
+    )
 
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         connection.execute(
