@@ -113,7 +113,11 @@ Rows are ordered by timestamp, then record type and ID as deterministic tie-brea
 
 The owner-facing HTTP endpoint is `GET /api/v1/tools/requests/{request_id}/history`. It uses the authenticated account and returns 404 for a request owned by another account. Pages use bounded `limit` (default 50, maximum 100) and `offset` (maximum 100,000), with `has_more` and `next_offset` metadata. The API does not return a total count, avoiding an extra count query on every page.
 
-The HTTP response is a redacted projection, not the raw repository row: it exposes lifecycle identifiers and event types, the action digest, timestamps, and a small record-type-specific allowlist of details. It omits runner key IDs, evidence package IDs, contract fingerprints, provider evidence references, and other unapproved detail fields. Reconciliation notes remain visible to the request owner. There is not yet an operator-facing investigation endpoint, export format, or retention-management API.
+The owner HTTP response is a redacted projection, not the raw repository row: it exposes lifecycle identifiers and event types, the action digest, timestamps, and a small record-type-specific allowlist of details. It omits runner key IDs, evidence package IDs, contract fingerprints, provider evidence references, and other unapproved detail fields. Reconciliation notes remain visible to the request owner.
+
+The security-operator investigation endpoint is `GET /api/v1/tools/operator/requests/{request_id}/history`. It requires an authenticated account on the `AIBRAIN_SECURITY_OPERATOR_EMAILS` allowlist and a non-empty investigation reason (8–500 characters). Pages are bounded to 50 events with offset capped at 100,000. The response includes request and attempt status plus an operator-specific allowlist of diagnostic metadata; it deliberately excludes tool arguments and result payloads. Lookup authorization records may expose the runner key ID, evidence package ID, and contract fingerprint to an allowlisted operator because these identifiers support trust-chain investigation. The reason, operator identity, target request, and page parameters are written to `security_operator_audit_events` in the same immediate transaction as the history read. Thus a successful response cannot be returned unless the access-audit insert commits. Failed authentication/authorization and unknown request IDs do not create successful-read audit entries. Operators should record a concise business reason, not secrets or unnecessary personal data.
+
+There is not yet an operator export format or retention-management API.
 
 ## 5. Integrity and deletion behavior
 
@@ -161,7 +165,7 @@ An `outcome_unknown` state must remain uncertain until evidence supports reconci
 ## 8. Known gaps and follow-up requirements
 
 1. **Immutable reconciliation history:** implemented in migration 20 and included in the unified history model. Legacy `audit_json.execution_reconciliation` values are backfilled and removed from the mutable request JSON during migration.
-2. **Access surface:** the authenticated, owner-scoped, redacted history API with bounded offset pagination is implemented. An operator-only investigation surface with separate authorization, redaction, pagination, and export limits remains future work.
+2. **Access surface:** authenticated owner history and allowlisted operator investigation APIs are implemented with separate redaction rules, bounded offset pagination, and immutable access auditing for successful operator reads. Export formats and retention-management APIs remain future work.
 3. **External tamper evidence:** evaluate signed checkpoints or an external append-only audit sink for production deployments where database-operator tampering is in scope.
 4. **Backup and provider erasure:** define backup retention, legal-hold behavior, provider-side deletion requests, and verifiable erasure outcomes.
 5. **Retention policy:** approve retention by data class and jurisdiction before adding automatic expiration or archival.
