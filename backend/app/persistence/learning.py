@@ -157,7 +157,7 @@ class BehavioralLearningRepository:
 
     def _expire_if_due(self, user_id: str, adaptation_id: str) -> None:
         now = _utc_now()
-        with self.database.transaction():
+        with self.database.transaction(immediate=True):
             connection = self.database.connect()
             row = connection.execute(
                 """
@@ -241,7 +241,7 @@ class BehavioralLearningRepository:
             raise ValueError("Invalid adaptation decision reason")
         self._expire_if_due(user_id, adaptation_id)
         now = _utc_now()
-        with self.database.transaction():
+        with self.database.transaction(immediate=True):
             connection = self.database.connect()
             row = connection.execute(
                 "SELECT status FROM adaptations WHERE id = ? AND user_id = ?",
@@ -387,7 +387,7 @@ class BehavioralLearningRepository:
             """
             SELECT * FROM learning_adaptation_events
             WHERE user_id = ? AND adaptation_id = ?
-            ORDER BY created_at, id
+            ORDER BY rowid
             """,
             (user_id, adaptation_id),
         ).fetchall()
