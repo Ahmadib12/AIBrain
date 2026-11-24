@@ -167,6 +167,7 @@ class IntelligenceRequest(BaseModel):
     provider: str | None = Field(default=None, max_length=100)
     model: str | None = Field(default=None, max_length=200)
     allow_fallback: bool = False
+    use_memory: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict, max_length=20)
 
     @field_validator("context_id")
