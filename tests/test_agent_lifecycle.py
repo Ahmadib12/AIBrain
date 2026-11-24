@@ -93,7 +93,6 @@ def test_agent_lifecycle_supports_explicit_activation_suspension_and_resume(
     ("initial_status", "requested_status"),
     [
         ("draft", "suspended"),
-        ("draft", "active"),  # covered by the explicit valid path, then repeated below
         ("active", "draft"),
         ("suspended", "suspended"),
         ("terminated", "active"),
