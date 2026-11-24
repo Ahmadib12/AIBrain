@@ -119,14 +119,14 @@ def test_missing_check_command_is_rejected(tmp_path):
     commands = commands_for()
     commands.pop(sorted(REQUIRED_CHECKS)[0])
     with pytest.raises(ValueError, match="exact required checks"):
-        run_suite(binding=BINDING, commands=commands, output_dir=tmp_path / "out")
+        execute(BINDING, commands, tmp_path / "out")
 
 
 def test_shell_string_is_not_accepted_as_command(tmp_path):
     commands = commands_for()
     commands[sorted(REQUIRED_CHECKS)[0]] = "echo unsafe"
     with pytest.raises(ValueError, match="Invalid argv"):
-        run_suite(binding=BINDING, commands=commands, output_dir=tmp_path / "out")
+        execute(BINDING, commands, tmp_path / "out")
 
 
 def test_nonempty_output_directory_is_rejected(tmp_path):
@@ -134,7 +134,7 @@ def test_nonempty_output_directory_is_rejected(tmp_path):
     output.mkdir()
     (output / "forged.log").write_text("forged")
     with pytest.raises(ValueError, match="must be empty"):
-        run_suite(binding=BINDING, commands=commands_for(), output_dir=output)
+        execute(BINDING, commands_for(), output)
 
 
 def test_runner_does_not_inherit_parent_secrets(tmp_path, monkeypatch):
@@ -145,7 +145,7 @@ def test_runner_does_not_inherit_parent_secrets(tmp_path, monkeypatch):
         f"pathlib.Path({str(marker)!r}).write_text(os.getenv('AIBRAIN_RUNNER_PRIVATE_KEY_B64','missing'))"
     )
     commands = {name: [sys.executable, "-c", script] for name in REQUIRED_CHECKS}
-    result = run_suite(binding=BINDING, commands=commands, output_dir=tmp_path / "out")
+    result = execute(BINDING, commands, tmp_path / "out")
     assert result["status"] == "passed"
     assert marker.read_text() == "missing"
 
@@ -162,7 +162,7 @@ def test_process_that_cannot_start_is_not_run_and_not_certifiable(tmp_path):
     commands = commands_for()
     commands[sorted(REQUIRED_CHECKS)[0]] = ["/definitely/not/a/real/executable"]
     output = tmp_path / "out"
-    result = run_suite(binding=BINDING, commands=commands, output_dir=output)
+    result = execute(BINDING, commands, output)
     assert result["status"] == "incomplete"
     assert result["results"][sorted(REQUIRED_CHECKS)[0]]["status"] == "not_run"
     assert result["manifest"] is None
@@ -174,7 +174,7 @@ def test_output_flood_is_bounded_by_child_file_size_limit(tmp_path):
         sys.executable, "-c", "import sys; sys.stdout.write('x' * 2_000_000)"
     ]
     output = tmp_path / "out"
-    result = run_suite(binding=BINDING, commands=commands, output_dir=output)
+    result = execute(BINDING, commands, output)
     assert result["status"] == "incomplete"
     assert result["results"][sorted(REQUIRED_CHECKS)[0]]["status"] == "failed"
     assert (output / f"{sorted(REQUIRED_CHECKS)[0]}.log").stat().st_size <= 256 * 1024
@@ -202,7 +202,7 @@ def test_runner_kills_descendants_after_command_parent_exits(tmp_path):
     )
     commands = commands_for()
     commands[sorted(REQUIRED_CHECKS)[0]] = [sys.executable, "-c", child_script]
-    result = run_suite(binding=BINDING, commands=commands, output_dir=tmp_path / "out")
+    result = execute(BINDING, commands, tmp_path / "out")
     assert result["status"] == "passed"
     time.sleep(0.7)
     assert not marker.exists()
