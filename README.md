@@ -168,6 +168,28 @@ existing state-changing execution path remains disabled. Tests are in
 `tests/test_tool_execution_bindings.py` and
 `tests/test_external_tool_dispatcher.py`.
 
+
+### Provider-neutral bounded conformance process runner
+
+The first provider-neutral runner implementation is `scripts/conformance_runner.py`. It requires a binding JSON file and an exact command map containing all ten required conformance checks. Each check runs as a separate subprocess with a clean environment, stdin closed, no shell, a fresh temporary working directory, bounded wall time, POSIX CPU/address-space/file-size/open-file/process limits, and bounded captured output. The test subprocesses do not inherit the runner API token or signing-key environment variables.
+
+The runner records each check as `passed`, `failed`, `unknown` (timeout), or `not_run` (process could not start). It always emits an execution report. It creates a certifiable evidence manifest only when every required check exits successfully; manifest and artifact digests are generated from the runner's execution output, not accepted as caller-supplied pass claims.
+
+Example invocation:
+
+```bash
+python -m scripts.conformance_runner \\
+  --binding runner-binding.json \\
+  --commands conformance-commands.json \\
+  --output-dir ./conformance-output
+```
+
+The command map must contain every required check ID, with each command expressed as an argv array (not a shell string). Pin and review the command map and suite source. A zero exit code proves only that the configured command exited successfully; it does not prove that arbitrary test code correctly exercises a provider guarantee.
+
+**Isolation limitation:** this is a bounded POSIX subprocess supervisor, not yet a hostile-code sandbox. It does not create a network namespace, enforce provider-domain egress allowlists, or isolate the child from the runner account's kernel. Deploy only inside a separately hardened ephemeral VM/container with a dedicated unprivileged account, read-only source, and externally enforced network policy. Keep signing keys and ingestion credentials in a separate submission step after test execution; never mount them into the test environment. The existing evidence verifier, trusted-runner attestation, and independent operator approval remain mandatory. Production dispatch remains disabled.
+
+Runner tests: `pytest -q tests/test_conformance_runner.py`.
+
 ### Inspecting and reconciling uncertain tool executions
 
 Authenticated users can inspect their own persisted tool request and execution-attempt state:
