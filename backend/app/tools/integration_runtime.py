@@ -17,6 +17,7 @@ from backend.app.tools.validation import validate_tool_arguments
 _SENSITIVE_KEYS = {
     "access_token", "refresh_token", "authorization", "password",
     "client_secret", "private_key", "api_key", "credential", "secret",
+    "token", "id_token", "cookie", "set_cookie",
 }
 
 
