@@ -205,6 +205,8 @@ class IntegrationConnectionRepository:
                 raise PermissionError("Connection is no longer pending verification")
             if row["expires_at"] is None or row["expires_at"] <= now:
                 raise PermissionError("Pending provider verification has expired")
+            if expires_at is None or expires_at <= now:
+                raise PermissionError("Verified provider credentials are expired")
             pending = self.database.connect().execute(
                 """SELECT scope FROM integration_connection_grants
                    WHERE connection_id=? AND user_id=? AND status='pending'
@@ -373,6 +375,8 @@ class IntegrationConnectionRepository:
             ).fetchone()
             if row is None or row["status"] != "active":
                 raise PermissionError("Active verified credentials are required for rotation")
+            if expires_at is None or expires_at <= now:
+                raise PermissionError("Rotated provider credentials are expired")
             self.database.connect().execute(
                 """UPDATE integration_connections SET expires_at=?,updated_at=?
                    WHERE id=? AND user_id=? AND status='active'""",
