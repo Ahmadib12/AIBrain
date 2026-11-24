@@ -39,6 +39,8 @@ BINDING_FIELDS = {
 
 
 def _load_json(path: Path) -> dict:
+    if path.stat().st_size > 1024 * 1024:
+        raise ValueError("Signed suite file exceeds the 1 MiB limit")
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a JSON object")
