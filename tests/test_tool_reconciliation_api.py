@@ -358,8 +358,8 @@ def test_owner_can_page_redacted_execution_history(
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
-            (
-                "history-started",
+                (
+                    "history-started",
                 user_id,
                 request["id"],
                 "dispatch_started",
@@ -371,10 +371,10 @@ def test_owner_can_page_redacted_execution_history(
                     '"evidence_package_id":"private-package",'
                     '"tool_contract_fingerprint":"private-fingerprint"}'
                 ),
-                "2026-11-24T10:00:00+00:00",
-            ),
-            (
-                "history-failed",
+                    "2026-11-24T10:00:00+00:00",
+                ),
+                (
+                    "history-failed",
                 user_id,
                 request["id"],
                 "dispatch_failed",
@@ -383,8 +383,8 @@ def test_owner_can_page_redacted_execution_history(
                     '{"error_code":"provider_timeout",'
                     '"evidence_reference":"private-provider-reference"}'
                 ),
-                "2026-11-24T10:00:01+00:00",
-            ),
+                    "2026-11-24T10:00:01+00:00",
+                ),
             ],
         )
     finally:
