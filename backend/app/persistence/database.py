@@ -1441,6 +1441,7 @@ class Database:
                     WHERE a.id = NEW.adaptation_id
                       AND a.user_id = NEW.user_id
                       AND a.status = 'approved'
+                      AND (a.expires_at IS NULL OR a.expires_at > NEW.created_at)
                       AND u.deleted_at IS NULL
                 )
                 BEGIN
