@@ -846,7 +846,9 @@ class ToolRequestRepository:
                     ),
                 )
                 if attempt.rowcount != 1:
-                    continue
+                    raise PermissionError(
+                        "Tool execution attempt is no longer awaiting recovery"
+                    )
 
                 request_update = connection.execute(
                     """
