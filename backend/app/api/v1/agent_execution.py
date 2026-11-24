@@ -121,3 +121,10 @@ async def cancel_agent_run(run_id: str, user: dict = Depends(get_current_user)):
         _error(409, "AGENT_RUN_NOT_CANCELLABLE", "Only unstarted runs can be cancelled")
     except sqlite3.IntegrityError:
         _error(409, "AGENT_RUN_CONFLICT", "Run cancellation conflicted with persisted state")
+
+
+@router.post("/agent-runs/reconcile-expired")
+async def reconcile_expired_agent_runs(user: dict = Depends(get_current_user)):
+    return {
+        "expired": get_app_state().agent_execution.reconcile_expired_runs(user["id"])
+    }
