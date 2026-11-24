@@ -135,6 +135,7 @@ class PinnedProviderHTTPTransport:
         if not isinstance(headers, Mapping) or len(headers) > 24:
             raise ProviderTransportRejected("Provider request headers are invalid")
         checked: dict[str, str] = {}
+        total_header_bytes = 0
         for name, value in headers.items():
             if (
                 not isinstance(name, str) or not _TOKEN.fullmatch(name)
@@ -144,6 +145,9 @@ class PinnedProviderHTTPTransport:
                 or any(char in value for char in "\r\n")
             ):
                 raise ProviderTransportRejected("Provider request header is prohibited")
+            total_header_bytes += len(name) + len(value) + 4
+            if total_header_bytes > 16_384:
+                raise ProviderTransportRejected("Provider request headers exceed the size limit")
             checked[name] = value
         return checked
 
