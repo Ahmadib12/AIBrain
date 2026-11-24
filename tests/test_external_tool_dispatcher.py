@@ -1138,10 +1138,10 @@ def test_revocation_after_lookup_authorization_does_not_cancel_inflight_lookup(t
         # the response. The lookup must recover this existing provider record.
         from backend.app.tools.external import ExternalToolAction
         provider.execute(
-            ExternalToolAction(
+            ExternalToolAction.from_payload(
                 idempotency_key=binding["idempotency_key"],
                 action_digest=binding["action_digest"],
-                payload_json=binding["payload_json"],
+                payload=binding["payload"],
             )
         )
         dispatcher = ExternalToolDispatcher(repository, registry_for(provider))
