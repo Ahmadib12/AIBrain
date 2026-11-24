@@ -9,7 +9,7 @@ from backend.app.persistence.database import Database
 from backend.app.persistence.validation import validate_personal_payload
 
 
-_TOKEN_PATTERN = re.compile(r"[\w-]{2,}", re.UNICODE)
+_TOKEN_PATTERN = re.compile(r"[^\W_]{2,}", re.UNICODE)
 
 
 def _utc_now() -> datetime:
