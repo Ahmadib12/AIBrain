@@ -10,6 +10,11 @@ from backend.app.persistence.learning import BehavioralLearningRepository
 from backend.app.persistence.memory import MemoryRepository
 from backend.app.persistence.tool_requests import ToolRequestRepository
 from backend.app.persistence.webauthn import WebAuthnRepository
+from backend.app.tools.integrations import IntegrationRegistry
+from backend.app.tools.integration_runtime import (
+    IntegrationAdapterRegistry,
+    ReadOnlyIntegrationRuntime,
+)
 
 
 class AppState:
@@ -25,6 +30,13 @@ class AppState:
         self.agent_control = AgentControlRepository(self.database)
         self.agent_execution = AgentExecutionRepository(self.database)
         self.integration_connections = IntegrationConnectionRepository(self.database)
+        self.integrations = IntegrationRegistry()
+        self.integration_adapters = IntegrationAdapterRegistry()
+        self.integration_runtime = ReadOnlyIntegrationRuntime(
+            manifests=self.integrations,
+            adapters=self.integration_adapters,
+            connections=self.integration_connections,
+        )
         suite_trust = None
         if settings.conformance_suite_authority_public_key_b64 is not None:
             import base64
