@@ -16,9 +16,17 @@ Only READ_ONLY integration contracts are executable. State-changing and conseque
 
 ## M10.8 — Provider transport and egress
 
-ProviderEgressPolicy enforces HTTPS, a lowercase exact-host allowlist, port 443, no userinfo/fragments/IP-literal hosts, and rejects every DNS answer that is not globally routable. resolve_target returns an immutable DNS snapshot (PinnedProviderTarget) for a transport to pin.
+The original `ProviderEgressPolicy` validates HTTPS, exact lowercase host
+allowlists, port 443, and public DNS answers. M10.11–M10.13 now add
+`PinnedProviderHTTPTransport`: it dials a validated IP directly, preserves the
+DNS hostname for TLS SNI/certificate validation, enforces TLS 1.2+ with
+certificate and hostname verification, disables redirects and proxies by using
+a direct `http.client` connection, and applies strict request/response bounds.
+See [M10.11–M10.14](integration-security-phases-m10-11-to-m10-14.md) for its
+limits and conformance boundary.
 
-A production transport must connect directly to one of the returned IP addresses, preserve the original DNS hostname for TLS SNI and certificate verification, disable redirects and ambient proxy configuration, apply strict connect/read/total timeouts, and bound response headers and body size. It must not perform a second DNS lookup. The helper alone is not an HTTP transport and does not prove socket-level pinning. No production provider adapter is enabled.
+This transport is a reusable security primitive, not a production provider
+adapter. No provider-specific verifier or adapter is included or activated.
 
 ## M10.9 — Trusted provider verification
 
