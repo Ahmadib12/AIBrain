@@ -1,6 +1,6 @@
 # M8 — Agent Lifecycle and Controlled Orchestration
 
-**Status:** Architecture contract approved for implementation; no agent lifecycle runtime is claimed yet.
+**Status:** Architecture contract approved. M8.1 owner-scoped identity registration is implemented on the development branch; Codespaces verification is pending. M8.2–M8.6 remain unimplemented.
 
 ## Objective
 
