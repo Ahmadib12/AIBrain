@@ -93,8 +93,10 @@ class IntegrationConnectionLifecycle:
         if not isinstance(verification, ProviderVerification):
             raise PermissionError("Provider verifier returned an invalid result")
         if (
-            not _FINGERPRINT.fullmatch(verification.provider_subject_fingerprint)
+            not isinstance(verification.provider_subject_fingerprint, str)
+            or not _FINGERPRINT.fullmatch(verification.provider_subject_fingerprint)
             or not isinstance(verification.granted_scopes, tuple)
+            or any(not isinstance(scope, str) for scope in verification.granted_scopes)
             or len(set(verification.granted_scopes)) != len(verification.granted_scopes)
             or set(verification.granted_scopes) != set(requested)
         ):
@@ -143,7 +145,9 @@ class IntegrationConnectionLifecycle:
             grant["scope"] for grant in connection["grants"]
             if grant["status"] == "active" and grant["revoked_at"] is None
         ))
-        if not scopes:
+        if not scopes or not self.connections.has_active_grants(
+            user_id, connection_id, integration_id, scopes
+        ):
             raise PermissionError("Connection has no active owner-approved scopes")
         verification = await verifier.verify(
             user_id=user_id, integration_id=integration_id,
@@ -156,8 +160,11 @@ class IntegrationConnectionLifecycle:
         )
         if (
             not isinstance(verification, ProviderVerification)
+            or not isinstance(verification.provider_subject_fingerprint, str)
             or not _FINGERPRINT.fullmatch(verification.provider_subject_fingerprint)
             or verification.provider_subject_fingerprint != previous_subject
+            or not isinstance(verification.granted_scopes, tuple)
+            or any(not isinstance(scope, str) for scope in verification.granted_scopes)
             or tuple(sorted(verification.granted_scopes)) != scopes
         ):
             raise PermissionError("Rotated credential does not match the verified provider identity and scopes")
