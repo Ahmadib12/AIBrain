@@ -27,13 +27,14 @@ class FakeResponse:
 
 class FakeConnection:
     instances = []
+    default_response = FakeResponse()
 
     def __init__(self, target, address, *, timeout_seconds, context):
         self.target = target
         self.address = address
         self.timeout_seconds = timeout_seconds
         self.context = context
-        self.response = FakeResponse()
+        self.response = type(self).default_response
         self.request_args = None
         self.closed = False
         self.instances.append(self)
@@ -50,6 +51,7 @@ class FakeConnection:
 
 def _transport(monkeypatch, *, response=None, **kwargs):
     FakeConnection.instances.clear()
+    FakeConnection.default_response = FakeResponse()
     monkeypatch.setattr(
         "backend.app.tools.integration_transport._PinnedHTTPSConnection",
         FakeConnection,
@@ -60,7 +62,7 @@ def _transport(monkeypatch, *, response=None, **kwargs):
         **kwargs,
     )
     if response is not None:
-        FakeConnection.response = response
+        FakeConnection.default_response = response
     return transport
 
 
@@ -111,7 +113,7 @@ def test_transport_rejects_request_body_and_redirects(monkeypatch):
         transport.request("https://api.example.com/", body=b"payload")
 
     transport = _transport(monkeypatch)
-    FakeConnection.response = FakeResponse(status=302, headers=[("Location", "https://evil.example/")])
+    FakeConnection.default_response = FakeResponse(status=302, headers=[("Location", "https://evil.example/")])
     with pytest.raises(ProviderTransportRejected, match="redirects"):
         transport.request("https://api.example.com/")
 
