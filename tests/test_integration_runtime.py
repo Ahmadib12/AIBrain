@@ -159,7 +159,8 @@ class SlowReadAdapter:
 
 
 def test_runtime_enforces_adapter_timeout(runtime_state):
-    _, owner_id, connection, connections, manifests, adapters = runtime_state
+    database, owner_id, connection, connections, manifests, adapters = runtime_state
+    _activate_test_connection(database, connection)
     adapters.register("catalog", SlowReadAdapter())
     runtime = ReadOnlyIntegrationRuntime(
         manifests=manifests, adapters=adapters, connections=connections,
