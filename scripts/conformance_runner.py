@@ -123,8 +123,8 @@ def _resource_limiter(memory_mb: int, cpu_seconds: int):
             resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
         resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES))
         resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
-        if hasattr(resource, "RLIMIT_NPROC"):
-            resource.setrlimit(resource.RLIMIT_NPROC, (16, 16))
+        if hasattr(resource, "RLIMIT_CORE"):
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     return apply
 
 
