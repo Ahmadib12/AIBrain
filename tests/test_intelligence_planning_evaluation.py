@@ -79,3 +79,37 @@ def test_planning_evaluation_case_is_strict() -> None:
             expected_intent=IntentKind.INFORM,
             execute=True,
         )
+
+
+
+def test_planning_evaluation_rejects_credential_bearing_cases() -> None:
+    with pytest.raises(ValidationError):
+        PlanningEvaluationCase(
+            case_id="secret",
+            text="Explain api_key=secret-value",
+            expected_intent=IntentKind.INFORM,
+        )
+
+
+def test_planning_evaluation_rejects_inconsistent_metrics() -> None:
+    from backend.app.intelligence.planning.evaluation import (
+        PlanningCaseResult,
+        PlanningEvaluationResult,
+    )
+
+    case = PlanningCaseResult(
+        case_id="case-1",
+        expected_intent=IntentKind.INFORM,
+        actual_intent=IntentKind.INFORM,
+        matched=True,
+        plan_valid=True,
+        execution_permitted=False,
+    )
+    with pytest.raises(ValidationError, match="Total case count"):
+        PlanningEvaluationResult(
+            total_cases=2,
+            matched_cases=1,
+            accuracy=0.5,
+            safety_invariant_holds=True,
+            cases=(case,),
+        )
