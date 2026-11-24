@@ -334,3 +334,18 @@ def test_database_rejects_grant_mutation_and_unrecorded_task_transition(client):
                 "UPDATE agent_tasks SET status='completed' WHERE id=?",
                 (task["id"],),
             )
+    with pytest.raises(sqlite3.IntegrityError, match="task definition is immutable"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE agent_tasks SET title='Changed' WHERE id=?",
+                (task["id"],),
+            )
+    event = state.database.connect().execute(
+        "SELECT id FROM agent_task_events WHERE task_id=?", (task["id"],)
+    ).fetchone()
+    with pytest.raises(sqlite3.IntegrityError, match="task events are immutable"):
+        with state.database.transaction():
+            state.database.connect().execute(
+                "UPDATE agent_task_events SET event_type='failed' WHERE id=?",
+                (event["id"],),
+            )
