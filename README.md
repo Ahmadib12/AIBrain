@@ -185,6 +185,23 @@ python -m scripts.conformance_runner \\
   --output-dir ./conformance-output
 ```
 
+Before deployment, prepare a reviewed payload containing `schema`,
+`suite_id`, `suite_version`, `authority_key_id`, the exact `binding`
+object, and a `commands` object with one argv array for each required check.
+On a separate offline authority machine, provision
+`AIBRAIN_SUITE_AUTHORITY_PRIVATE_KEY_B64` and sign the payload:
+
+```bash
+python -m scripts.sign_conformance_suite \
+  --payload reviewed-suite-payload.json \
+  --output signed-conformance-suite.json
+```
+
+The offline signing utility writes only the signed envelope. The private key
+must never be copied to the runner, AIBrain API server, repository, or CI
+environment. Provision the corresponding raw 32-byte Ed25519 public key as
+base64 and the authority key ID to the isolated runner deployment.
+
 The signed suite payload schema is `aibrain-conformance-suite-v1`; its signature covers the suite identity, version, exact provider/tool binding, and every argv command. The suite-authority public key and key ID must be pinned by the runner deployment through `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64` and `AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID`, not supplied by the suite file or command line. The private suite-authority key is kept offline and separate from the runner attestation key. The runner records the signed suite as an evidence artifact and binds its digest, per-command digests, and execution limits into the execution report. A signature proves that the authority approved the exact commands; it does not prove that human-authored test logic correctly exercises a provider guarantee. Review and version-control suite source before signing.
 
 **Isolation limitation:** this is a bounded POSIX subprocess supervisor, not yet a hostile-code sandbox. It does not create a network namespace, enforce provider-domain egress allowlists, or isolate the child from the runner account's kernel. Deploy only inside a separately hardened ephemeral VM/container with a dedicated unprivileged account, read-only source, and externally enforced network policy and container/cgroup PID limits. Keep signing keys and ingestion credentials in a separate submission step after test execution; never mount them into the test environment. The existing evidence verifier, trusted-runner attestation, and independent operator approval remain mandatory. Production dispatch remains disabled.
