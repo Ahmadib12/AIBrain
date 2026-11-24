@@ -46,11 +46,13 @@ def signed_envelope():
     return {"payload": payload, "signature": signature}, public
 
 
-def verify(envelope, public, binding=BINDING, key_id="authority-1"):
+def verify(envelope, public, binding=BINDING, key_id="authority-1", suite_id="provider-a-contract-suite", suite_version="v1"):
     return verify_signed_suite(
         envelope=envelope,
         authority_public_key=public,
         expected_authority_key_id=key_id,
+        expected_suite_id=suite_id,
+        expected_suite_version=suite_version,
         expected_binding=binding,
     )
 
