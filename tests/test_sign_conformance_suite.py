@@ -43,6 +43,8 @@ def test_offline_signer_produces_suite_verifiable_by_pinned_public_key():
         envelope=envelope,
         authority_public_key=public,
         expected_authority_key_id="authority",
+        expected_suite_id="suite",
+        expected_suite_version="v1",
         expected_binding=binding,
     )
     assert verified["suite_id"] == "suite"
