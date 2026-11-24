@@ -30,6 +30,8 @@ def test_workflow_never_reads_or_submits_credentials_after_incomplete_run(
 
     monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "cHVibGlj")
     monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID", "suite-authority-1")
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_ID", "provider-x-safety-suite")
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_EXPECTED_VERSION", "suite-1")
     monkeypatch.setattr(workflow, "run_suite", fake_run_suite)
     monkeypatch.setattr(workflow, "load_evidence", forbidden)
     monkeypatch.setattr(workflow, "submit_evidence", forbidden)
