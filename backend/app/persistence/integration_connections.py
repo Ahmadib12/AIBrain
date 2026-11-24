@@ -7,7 +7,7 @@ and a separately managed encrypted secret store are required first.
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from backend.app.persistence.database import Database
 
@@ -42,6 +42,9 @@ class IntegrationConnectionRepository:
             raise ValueError("Requested scopes must be unique")
 
         now = _now()
+        verification_expires_at = (
+            datetime.now(timezone.utc) + timedelta(minutes=15)
+        ).isoformat()
         connection_id = str(uuid.uuid4())
         with self.database.transaction(immediate=True):
             owner = self.database.connect().execute(
@@ -53,9 +56,10 @@ class IntegrationConnectionRepository:
             self.database.connect().execute(
                 """INSERT INTO integration_connections
                    (id,user_id,integration_id,status,consent_version,consented_at,
-                    created_at,updated_at)
-                   VALUES (?,?,?,'pending_verification',?,?,?,?)""",
-                (connection_id, user_id, integration_id, consent_version, now, now, now),
+                    expires_at,created_at,updated_at)
+                   VALUES (?,?,?,'pending_verification',?,?,?,?,?)""",
+                (connection_id, user_id, integration_id, consent_version, now,
+                 verification_expires_at, now, now),
             )
             for scope in requested_scopes:
                 self.database.connect().execute(
