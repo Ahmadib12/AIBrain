@@ -28,6 +28,7 @@ def test_workflow_never_reads_or_submits_credentials_after_incomplete_run(
     def forbidden(*args, **kwargs):
         raise AssertionError("Evidence loading/submission must not occur after failure")
 
+    monkeypatch.setenv("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "cHVibGlj")
     monkeypatch.setattr(workflow, "run_suite", fake_run_suite)
     monkeypatch.setattr(workflow, "load_evidence", forbidden)
     monkeypatch.setattr(workflow, "submit_evidence", forbidden)
