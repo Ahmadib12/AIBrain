@@ -1,0 +1,291 @@
+"""Provider-neutral, bounded conformance-suite process runner.
+
+This is a process supervisor, not a complete OS/container sandbox. Run it inside
+an independently hardened runner VM/container with network policy enforced
+outside this process. It deliberately never inherits runner/API/private-key
+secrets from the parent environment.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from backend.app.tools.conformance import REQUIRED_CHECKS, canonical_json
+
+MAX_COMMANDS = 64
+MAX_OUTPUT_BYTES = 256 * 1024
+MAX_TOTAL_ARTIFACT_BYTES = 10 * 1024 * 1024
+MAX_TIMEOUT_SECONDS = 300
+MAX_MEMORY_MB = 1024
+MAX_CPU_SECONDS = 300
+BINDING_FIELDS = {
+    "provider_id", "adapter_id", "adapter_version", "provider_scope",
+    "tool_id", "tool_contract_fingerprint", "capabilities",
+    "test_suite_version", "sandbox_environment",
+}
+
+
+def _load_json(path: Path) -> dict:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
+
+
+def _validate_commands(commands: dict[str, Any]) -> dict[str, list[str]]:
+    if set(commands) != set(REQUIRED_CHECKS):
+        missing = sorted(REQUIRED_CHECKS - set(commands))
+        extra = sorted(set(commands) - REQUIRED_CHECKS)
+        raise ValueError(f"Command map must cover exact required checks; missing={missing}, extra={extra}")
+    normalized: dict[str, list[str]] = {}
+    for check_id, argv in commands.items():
+        if (
+            not isinstance(argv, list) or not argv or len(argv) > MAX_COMMANDS
+            or any(not isinstance(part, str) or not part or "\x00" in part for part in argv)
+        ):
+            raise ValueError(f"Invalid argv for conformance check: {check_id}")
+        normalized[check_id] = list(argv)
+    return normalized
+
+
+def _validate_binding(binding: dict) -> None:
+    if set(binding) != BINDING_FIELDS:
+        raise ValueError("Binding file must contain the exact evidence binding fields")
+    for field in (
+        "provider_id", "adapter_id", "adapter_version", "provider_scope",
+        "tool_id", "test_suite_version", "sandbox_environment",
+    ):
+        value = binding[field]
+        if not isinstance(value, str) or not value.strip() or len(value) > 256:
+            raise ValueError(f"Invalid evidence binding: {field}")
+    fingerprint = binding["tool_contract_fingerprint"]
+    if (
+        not isinstance(fingerprint, str) or len(fingerprint) != 64
+        or any(c not in "0123456789abcdef" for c in fingerprint)
+    ):
+        raise ValueError("Invalid tool contract fingerprint")
+    capabilities = binding["capabilities"]
+    expected = {
+        "idempotency_mode", "key_scope", "idempotency_retention_seconds",
+        "rejects_payload_mismatch", "concurrent_deduplication",
+        "supports_outcome_lookup",
+    }
+    if not isinstance(capabilities, dict) or set(capabilities) != expected:
+        raise ValueError("A complete provider capability snapshot is required")
+
+
+def _resource_limiter(memory_mb: int, cpu_seconds: int):
+    """Return a POSIX pre-exec limiter; unsupported platforms fail closed."""
+    if os.name != "posix":
+        raise RuntimeError("This runner requires POSIX resource limits")
+    import resource
+
+    def apply() -> None:
+        os.setsid()
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+        memory = memory_mb * 1024 * 1024
+        if hasattr(resource, "RLIMIT_AS"):
+            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+        if hasattr(resource, "RLIMIT_NPROC"):
+            resource.setrlimit(resource.RLIMIT_NPROC, (16, 16))
+    return apply
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _bounded(data: bytes) -> bytes:
+    if len(data) <= MAX_OUTPUT_BYTES:
+        return data
+    marker = b"\n[runner truncated output at configured limit]\n"
+    return data[: MAX_OUTPUT_BYTES - len(marker)] + marker
+
+
+def run_suite(
+    *,
+    binding: dict,
+    commands: dict[str, list[str]],
+    output_dir: Path,
+    timeout_seconds: int = 60,
+    memory_mb: int = 512,
+    cpu_seconds: int = 60,
+    evidence_lifetime_hours: int = 24,
+) -> dict:
+    """Run every required check separately and build evidence only on full pass."""
+    _validate_binding(binding)
+    commands = _validate_commands(commands)
+    if not 1 <= timeout_seconds <= MAX_TIMEOUT_SECONDS:
+        raise ValueError("Per-check timeout must be between 1 and 300 seconds")
+    if not 64 <= memory_mb <= MAX_MEMORY_MB:
+        raise ValueError("Memory limit must be between 64 and 1024 MB")
+    if not 1 <= cpu_seconds <= MAX_CPU_SECONDS:
+        raise ValueError("CPU limit must be between 1 and 300 seconds")
+    if not 1 <= evidence_lifetime_hours <= 24 * 7:
+        raise ValueError("Evidence lifetime must be between 1 hour and 7 days")
+    if not isinstance(output_dir, Path):
+        output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if any(output_dir.iterdir()):
+        raise ValueError("Output directory must be empty")
+
+    started = datetime.now(timezone.utc)
+    results: dict[str, dict] = {}
+    artifacts: dict[str, bytes] = {}
+    total_bytes = 0
+    environment = {
+        "PATH": os.defpath,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    with tempfile.TemporaryDirectory(prefix="aibrain-conformance-") as work_root:
+        for check_id in sorted(REQUIRED_CHECKS):
+            check_dir = Path(work_root) / check_id
+            check_dir.mkdir(mode=0o700)
+            stdout = b""
+            stderr = b""
+            return_code = None
+            status = "not_run"
+            error = None
+            try:
+                process = subprocess.Popen(
+                    commands[check_id],
+                    cwd=check_dir,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                    close_fds=True,
+                    start_new_session=True,
+                    preexec_fn=_resource_limiter(memory_mb, cpu_seconds),
+                )
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout_seconds)
+                    return_code = process.returncode
+                    status = "passed" if return_code == 0 else "failed"
+                except subprocess.TimeoutExpired:
+                    _terminate_process(process)
+                    stdout, stderr = process.communicate()
+                    status = "unknown"
+                    error = "timeout"
+            except (OSError, RuntimeError, ValueError) as exc:
+                status = "not_run"
+                error = type(exc).__name__
+
+            stdout = _bounded(stdout)
+            stderr = _bounded(stderr)
+            artifact_name = f"{check_id}.log"
+            log_content = (
+                b"STDOUT\n" + stdout + b"\nSTDERR\n" + stderr
+            )
+            if len(log_content) > MAX_OUTPUT_BYTES:
+                log_content = _bounded(log_content)
+            total_bytes += len(log_content)
+            if total_bytes > MAX_TOTAL_ARTIFACT_BYTES:
+                raise ValueError("Runner output exceeded total artifact size limit")
+            (output_dir / artifact_name).write_bytes(log_content)
+            artifacts[artifact_name] = log_content
+            results[check_id] = {
+                "status": status,
+                "return_code": return_code,
+                "error": error,
+                "artifact": artifact_name,
+            }
+
+    finished = datetime.now(timezone.utc)
+    report = {
+        "schema": "aibrain-conformance-run-report-v1",
+        "runner": "aibrain-process-runner-v1",
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "results": results,
+    }
+    report_bytes = canonical_json(report)
+    if len(report_bytes) > MAX_OUTPUT_BYTES:
+        raise ValueError("Execution report exceeds output limit")
+    report_name = "execution-report.json"
+    (output_dir / report_name).write_bytes(report_bytes)
+    artifacts[report_name] = report_bytes
+
+    passed = all(item["status"] == "passed" for item in results.values())
+    response = {
+        "status": "passed" if passed else "incomplete",
+        "results": results,
+        "report": report_name,
+        "manifest": None,
+    }
+    if not passed:
+        return response
+
+    manifest = {
+        "schema_version": "aibrain-conformance-evidence-v1",
+        **binding,
+        "executed_at": started.isoformat(),
+        "expires_at": (finished + timedelta(hours=evidence_lifetime_hours)).isoformat(),
+        "tests": {
+            check_id: {"status": "passed", "artifact": results[check_id]["artifact"]}
+            for check_id in sorted(REQUIRED_CHECKS)
+        },
+        "artifacts": {
+            name: hashlib.sha256(content).hexdigest()
+            for name, content in sorted(artifacts.items())
+        },
+    }
+    manifest_bytes = canonical_json(manifest)
+    (output_dir / "manifest.json").write_bytes(manifest_bytes)
+    response["manifest"] = "manifest.json"
+    return response
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binding", type=Path, required=True)
+    parser.add_argument("--commands", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--timeout-seconds", type=int, default=60)
+    parser.add_argument("--memory-mb", type=int, default=512)
+    parser.add_argument("--cpu-seconds", type=int, default=60)
+    args = parser.parse_args()
+    try:
+        result = run_suite(
+            binding=_load_json(args.binding),
+            commands=_load_json(args.commands),
+            output_dir=args.output_dir,
+            timeout_seconds=args.timeout_seconds,
+            memory_mb=args.memory_mb,
+            cpu_seconds=args.cpu_seconds,
+        )
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"Conformance runner failed: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
