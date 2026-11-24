@@ -339,7 +339,6 @@ def run_suite(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", type=Path, required=True)
-    parser.add_argument("--authority-key-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=60)
     parser.add_argument("--memory-mb", type=int, default=512)
@@ -347,8 +346,9 @@ def main() -> int:
     args = parser.parse_args()
     try:
         public_key_b64 = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "")
-        if not public_key_b64:
-            raise ValueError("Pinned suite-authority public key is not provisioned")
+        authority_key_id = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_KEY_ID", "")
+        if not public_key_b64 or not authority_key_id:
+            raise ValueError("Pinned suite-authority public key and key ID must be provisioned")
         try:
             public_key = base64.b64decode(public_key_b64, validate=True)
         except (ValueError, base64.binascii.Error) as exc:
@@ -356,7 +356,7 @@ def main() -> int:
         result = run_suite(
             suite_envelope=_load_json(args.suite),
             authority_public_key=public_key,
-            authority_key_id=args.authority_key_id,
+            authority_key_id=authority_key_id,
             output_dir=args.output_dir,
             timeout_seconds=args.timeout_seconds,
             memory_mb=args.memory_mb,
