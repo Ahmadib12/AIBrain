@@ -171,27 +171,33 @@ def run_suite(
             status = "not_run"
             error = None
             try:
-                process = subprocess.Popen(
-                    commands[check_id],
-                    cwd=check_dir,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    shell=False,
-                    close_fds=True,
-                    start_new_session=True,
-                    preexec_fn=_resource_limiter(memory_mb, cpu_seconds),
-                )
-                try:
-                    stdout, stderr = process.communicate(timeout=timeout_seconds)
-                    return_code = process.returncode
-                    status = "passed" if return_code == 0 else "failed"
-                except subprocess.TimeoutExpired:
-                    _terminate_process(process)
-                    stdout, stderr = process.communicate()
-                    status = "unknown"
-                    error = "timeout"
+                # File-backed capture plus RLIMIT_FSIZE prevents unbounded
+                # in-memory pipe buffering when a child floods stdout/stderr.
+                with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+                    process = subprocess.Popen(
+                        commands[check_id],
+                        cwd=check_dir,
+                        env=environment,
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout_file,
+                        stderr=stderr_file,
+                        shell=False,
+                        close_fds=True,
+                        start_new_session=True,
+                        preexec_fn=_resource_limiter(memory_mb, cpu_seconds),
+                    )
+                    try:
+                        process.wait(timeout=timeout_seconds)
+                        return_code = process.returncode
+                        status = "passed" if return_code == 0 else "failed"
+                    except subprocess.TimeoutExpired:
+                        _terminate_process(process)
+                        status = "unknown"
+                        error = "timeout"
+                    stdout_file.seek(0)
+                    stderr_file.seek(0)
+                    stdout = stdout_file.read(MAX_OUTPUT_BYTES + 1)
+                    stderr = stderr_file.read(MAX_OUTPUT_BYTES + 1)
             except (OSError, RuntimeError, ValueError) as exc:
                 status = "not_run"
                 error = type(exc).__name__
