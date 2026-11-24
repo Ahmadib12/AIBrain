@@ -119,14 +119,14 @@ def test_timeout_is_unknown_and_never_passes(tmp_path):
 def test_missing_check_command_is_rejected(tmp_path):
     commands = commands_for()
     commands.pop(sorted(REQUIRED_CHECKS)[0])
-    with pytest.raises(ValueError, match="exact required checks"):
+    with pytest.raises(ValueError, match="exact required conformance checks"):
         execute(BINDING, commands, tmp_path / "out")
 
 
 def test_shell_string_is_not_accepted_as_command(tmp_path):
     commands = commands_for()
     commands[sorted(REQUIRED_CHECKS)[0]] = "echo unsafe"
-    with pytest.raises(ValueError, match="Invalid argv"):
+    with pytest.raises(ValueError, match="Invalid signed command"):
         execute(BINDING, commands, tmp_path / "out")
 
 
