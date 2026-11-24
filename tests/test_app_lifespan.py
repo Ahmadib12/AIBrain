@@ -5,6 +5,7 @@ from backend.app import main as main_module
 
 class FakeAppState:
     tool_requests = object()
+    memory = object()
 
 
 def install_lifecycle_fakes(monkeypatch, *, start_error=None, stop_error=None):
@@ -26,11 +27,27 @@ def install_lifecycle_fakes(monkeypatch, *, start_error=None, stop_error=None):
             if stop_error is not None:
                 raise stop_error
 
+    class FakeMemoryRetentionWorker:
+        def __init__(self, repository, *, interval_seconds):
+            assert repository is state.memory
+            events.append(("construct-memory", interval_seconds))
+
+        async def start(self):
+            events.append("memory-start")
+
+        async def stop(self):
+            events.append("memory-stop")
+
     monkeypatch.setattr(main_module, "get_app_state", lambda settings: state)
     monkeypatch.setattr(
         main_module,
         "ToolExecutionRecoveryWorker",
         FakeRecoveryWorker,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "MemoryRetentionWorker",
+        FakeMemoryRetentionWorker,
     )
     monkeypatch.setattr(
         main_module,
@@ -51,10 +68,12 @@ async def test_application_lifespan_starts_and_stops_recovery_worker(monkeypatch
                 main_module.settings.tool_execution_recovery_interval_seconds,
                 main_module.settings.tool_execution_stale_after_seconds,
             ),
+            ("construct-memory", main_module.settings.memory_retention_interval_seconds),
             "start",
+            "memory-start",
         ]
 
-    assert events[-2:] == ["stop", "reset"]
+    assert events[-3:] == ["memory-stop", "stop", "reset"]
 
 
 @pytest.mark.asyncio
@@ -88,4 +107,4 @@ async def test_application_lifespan_does_not_reset_before_worker_stops(monkeypat
     async with main_module.lifespan(main_module.app):
         assert "reset" not in events
 
-    assert events.index("stop") < events.index("reset")
+    assert events.index("memory-stop") < events.index("stop") < events.index("reset")
