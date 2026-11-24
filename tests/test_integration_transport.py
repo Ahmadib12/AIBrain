@@ -1,3 +1,5 @@
+import ssl
+
 import pytest
 
 from backend.app.tools.integration_network import ProviderEgressPolicy
@@ -243,3 +245,21 @@ def test_transport_rejects_truncated_or_mismatched_declared_body(monkeypatch):
     )
     with pytest.raises(ProviderTransportRejected, match="does not match"):
         transport.request("https://api.example.com/")
+
+
+
+def test_transport_rejects_insecure_or_legacy_tls_context():
+    insecure = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    with pytest.raises(ValueError, match="TLS requires"):
+        PinnedProviderHTTPTransport(
+            egress_policy=ProviderEgressPolicy({"api.example.com"}),
+            ssl_context=insecure,
+        )
+
+    legacy = ssl.create_default_context()
+    legacy.minimum_version = ssl.TLSVersion.TLSv1
+    with pytest.raises(ValueError, match="TLS requires"):
+        PinnedProviderHTTPTransport(
+            egress_policy=ProviderEgressPolicy({"api.example.com"}),
+            ssl_context=legacy,
+        )
