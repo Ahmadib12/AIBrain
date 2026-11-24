@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 import pytest
 
@@ -49,3 +50,28 @@ async def test_retention_worker_start_is_idempotent_and_stop_is_safe():
 def test_retention_worker_rejects_nonpositive_interval():
     with pytest.raises(ValueError, match="positive"):
         MemoryRetentionWorker(RecordingMemoryRepository(), interval_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_retention_worker_waits_for_inflight_cleanup_before_stop():
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingRepository:
+        def purge_expired(self) -> int:
+            started.set()
+            release.wait(timeout=3)
+            return 0
+
+    worker = MemoryRetentionWorker(BlockingRepository(), interval_seconds=3600)
+    await worker.start()
+    assert await asyncio.to_thread(started.wait, 2)
+
+    stop_task = asyncio.create_task(worker.stop())
+    await asyncio.sleep(0)
+    assert not stop_task.done()
+
+    release.set()
+    await asyncio.wait_for(stop_task, timeout=2)
+    assert worker._task is None
+
