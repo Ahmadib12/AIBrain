@@ -17,7 +17,21 @@ class AppState:
         )
         self.memory = MemoryRepository(self.database)
         self.learning = BehavioralLearningRepository(self.database)
-        self.tool_requests = ToolRequestRepository(self.database)
+        suite_trust = None
+        if settings.conformance_suite_authority_public_key_b64 is not None:
+            import base64
+            suite_trust = {
+                "public_key": base64.b64decode(
+                    settings.conformance_suite_authority_public_key_b64,
+                    validate=True,
+                ),
+                "authority_key_id": settings.conformance_suite_authority_key_id,
+                "expected_suite_id": settings.conformance_suite_expected_id,
+                "expected_suite_version": settings.conformance_suite_expected_version,
+            }
+        self.tool_requests = ToolRequestRepository(
+            self.database, conformance_suite_trust=suite_trust
+        )
         self.webauthn = WebAuthnRepository(self.database)
         self.webauthn_service = WebAuthnService(
             repository=self.webauthn,
