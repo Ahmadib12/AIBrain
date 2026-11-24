@@ -10,12 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
 from backend.app.app_state import get_app_state
-from backend.app.tools.integrations import IntegrationRegistry
 
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
-integration_registry = IntegrationRegistry()
-
 
 class IntegrationConsentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -26,7 +23,7 @@ class IntegrationConsentRequest(BaseModel):
 async def list_integration_catalog(user: dict = Depends(get_current_user)) -> list[dict]:
     # Authentication is required even for catalog discovery so the same
     # permission boundary applies to all integration-management operations.
-    return integration_registry.catalog()
+    return get_app_state().integrations.catalog()
 
 
 @router.get("/connections")
@@ -40,7 +37,7 @@ async def request_integration_connection(
     request: IntegrationConsentRequest,
     user: dict = Depends(get_current_user),
 ) -> dict:
-    manifest = integration_registry.get(integration_id)
+    manifest = get_app_state().integrations.get(integration_id)
     if manifest is None:
         raise HTTPException(
             status_code=404,
