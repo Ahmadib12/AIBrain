@@ -8,6 +8,7 @@ secrets from the parent environment.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ from typing import Any
 from backend.app.tools.conformance import (
     REQUIRED_CHECKS, canonical_json, verify_evidence_manifest,
 )
+from backend.app.tools.conformance_suite import verify_signed_suite
 
 MAX_COMMANDS = 64
 MAX_OUTPUT_BYTES = 256 * 1024
@@ -153,8 +155,9 @@ def _bounded(data: bytes) -> bytes:
 
 def run_suite(
     *,
-    binding: dict,
-    commands: dict[str, list[str]],
+    suite_envelope: dict,
+    authority_public_key: bytes,
+    authority_key_id: str,
     output_dir: Path,
     timeout_seconds: int = 60,
     memory_mb: int = 512,
@@ -162,8 +165,20 @@ def run_suite(
     evidence_lifetime_hours: int = 24,
 ) -> dict:
     """Run every required check separately and build evidence only on full pass."""
+    if not isinstance(suite_envelope, dict) or not isinstance(suite_envelope.get("payload"), dict):
+        raise ValueError("A signed conformance suite envelope is required")
+    signed_payload = suite_envelope["payload"]
+    binding = signed_payload.get("binding")
+    if not isinstance(binding, dict):
+        raise ValueError("Signed suite binding is required")
     _validate_binding(binding)
-    commands = _validate_commands(commands)
+    verified_suite = verify_signed_suite(
+        envelope=suite_envelope,
+        authority_public_key=authority_public_key,
+        expected_authority_key_id=authority_key_id,
+        expected_binding=binding,
+    )
+    commands = _validate_commands(verified_suite["commands"])
     if not 1 <= timeout_seconds <= MAX_TIMEOUT_SECONDS:
         raise ValueError("Per-check timeout must be between 1 and 300 seconds")
     if not 64 <= memory_mb <= MAX_MEMORY_MB:
@@ -257,9 +272,26 @@ def run_suite(
             }
 
     finished = datetime.now(timezone.utc)
+    suite_bytes = canonical_json(suite_envelope)
+    suite_name = "signed-suite.json"
+    (output_dir / suite_name).write_bytes(suite_bytes)
+    artifacts[suite_name] = suite_bytes
     report = {
         "schema": "aibrain-conformance-run-report-v1",
         "runner": "aibrain-process-runner-v1",
+        "suite_id": verified_suite["suite_id"],
+        "suite_version": verified_suite["suite_version"],
+        "suite_authority_key_id": verified_suite["authority_key_id"],
+        "suite_sha256": verified_suite["suite_sha256"],
+        "command_sha256": {
+            name: hashlib.sha256(canonical_json(commands[name])).hexdigest()
+            for name in sorted(commands)
+        },
+        "limits": {
+            "timeout_seconds": timeout_seconds,
+            "memory_mb": memory_mb,
+            "cpu_seconds": cpu_seconds,
+        },
         "started_at": started.isoformat(),
         "finished_at": finished.isoformat(),
         "results": results,
@@ -306,17 +338,25 @@ def run_suite(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binding", type=Path, required=True)
-    parser.add_argument("--commands", type=Path, required=True)
+    parser.add_argument("--suite", type=Path, required=True)
+    parser.add_argument("--authority-key-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=60)
     parser.add_argument("--memory-mb", type=int, default=512)
     parser.add_argument("--cpu-seconds", type=int, default=60)
     args = parser.parse_args()
     try:
+        public_key_b64 = os.environ.get("AIBRAIN_CONFORMANCE_SUITE_AUTHORITY_PUBLIC_KEY_B64", "")
+        if not public_key_b64:
+            raise ValueError("Pinned suite-authority public key is not provisioned")
+        try:
+            public_key = base64.b64decode(public_key_b64, validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise ValueError("Pinned suite-authority public key encoding is invalid") from exc
         result = run_suite(
-            binding=_load_json(args.binding),
-            commands=_load_json(args.commands),
+            suite_envelope=_load_json(args.suite),
+            authority_public_key=public_key,
+            authority_key_id=args.authority_key_id,
             output_dir=args.output_dir,
             timeout_seconds=args.timeout_seconds,
             memory_mb=args.memory_mb,
