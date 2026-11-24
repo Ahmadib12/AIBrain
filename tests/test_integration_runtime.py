@@ -87,6 +87,19 @@ def _activate_test_connection(database, connection):
     now = datetime.now(timezone.utc).isoformat()
     with database.transaction(immediate=True):
         database.connect().execute(
+            """INSERT INTO integration_secrets
+               (secret_ref,user_id,connection_id,integration_id,nonce,ciphertext,
+                key_version,created_at,updated_at)
+               VALUES ('vault-ref:test',?,?,?, ?, ?,1,?,?)""",
+            (
+                connection["user_id"] if "user_id" in connection else database.connect().execute(
+                    "SELECT user_id FROM integration_connections WHERE id=?",
+                    (connection["id"],),
+                ).fetchone()["user_id"],
+                connection["id"], "catalog", b"n" * 12, b"c" * 16, now, now,
+            ),
+        )
+        database.connect().execute(
             """UPDATE integration_connections
                SET status='active',verified_at=?,secret_ref='vault-ref:test',
                    updated_at=? WHERE id=?""",
