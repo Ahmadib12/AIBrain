@@ -133,3 +133,15 @@ def test_wrong_authority_id_is_rejected():
     envelope, public = signed_envelope()
     with pytest.raises(PermissionError, match="pinned authority"):
         verify(envelope, public, key_id="other-authority")
+
+
+def test_oversized_signed_command_arguments_are_rejected():
+    envelope, public = signed_envelope()
+    envelope["payload"]["commands"]["lookup_never_dispatches"] = ["/bin/echo", "x" * 4097]
+    private = Ed25519PrivateKey.generate()
+    envelope["signature"] = base64.urlsafe_b64encode(
+        private.sign(canonical_json(envelope["payload"]))
+    ).decode("ascii").rstrip("=")
+    public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    with pytest.raises(ValueError, match="Invalid command"):
+        verify(envelope, public)
