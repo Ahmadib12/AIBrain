@@ -8,6 +8,7 @@ import binascii
 import json
 import secrets
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -95,9 +96,7 @@ class IntegrationSecretVault:
                  AND c.secret_ref=s.secret_ref
                  AND (c.expires_at IS NULL OR c.expires_at>?)""",
             (user_id, connection_id, integration_id,
-             integration_id, __import__("datetime").datetime.now(
-                 __import__("datetime").timezone.utc
-             ).isoformat()),
+             integration_id, datetime.now(timezone.utc).isoformat()),
         ).fetchone()
         if row is None:
             raise LookupError("Active integration credentials are unavailable")
@@ -130,10 +129,13 @@ class IntegrationSecretVault:
             raise LookupError("Integration credentials are unavailable")
         if not isinstance(credentials, dict) or not credentials:
             raise ValueError("Credential payload must be a non-empty object")
-        plaintext = json.dumps(
-            credentials, ensure_ascii=False, sort_keys=True,
-            separators=(",", ":"), allow_nan=False,
-        ).encode("utf-8")
+        try:
+            plaintext = json.dumps(
+                credentials, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Credential payload is invalid") from exc
         if len(plaintext) > 65_536:
             raise ValueError("Credential payload exceeds the vault limit")
         secret_ref = row["secret_ref"]
