@@ -61,12 +61,11 @@ class IntegrationManifest:
                 raise ValueError(f"{field_name} must contain 1 to 256 characters")
         if not isinstance(self.tools, tuple) or not self.tools:
             raise ValueError("An integration must declare at least one tool")
+        if any(not isinstance(item, IntegrationTool) for item in self.tools):
+            raise TypeError("Integration manifest contains an invalid tool")
         tool_ids = [item.contract.tool_id for item in self.tools]
         if len(set(tool_ids)) != len(tool_ids):
             raise ValueError("Integration tool IDs must be unique")
-        for item in self.tools:
-            if not isinstance(item, IntegrationTool):
-                raise TypeError("Integration manifest contains an invalid tool")
             if not item.contract.tool_id.startswith(self.integration_id + "."):
                 raise ValueError("Tool IDs must be namespaced by integration ID")
 
