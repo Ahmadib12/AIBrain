@@ -145,6 +145,8 @@ async def process_intelligence(
         response = await _run_core(core, request, memory_context)
     except asyncio.CancelledError:
         raise
+    except HTTPException:
+        raise
     except Exception:
         logging.getLogger("aibrain.intelligence").error(
             "Unexpected intelligence core failure"
@@ -195,6 +197,8 @@ async def process_intelligence_stream(
         try:
             response = await _run_core(core, request, memory_context)
         except asyncio.CancelledError:
+            raise
+        except HTTPException:
             raise
         except Exception:
             logging.getLogger("aibrain.intelligence").warning(
