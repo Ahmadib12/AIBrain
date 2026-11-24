@@ -2601,7 +2601,7 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
-
+        )
 
         with self._lock:
             for version, script in migrations:
