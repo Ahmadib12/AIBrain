@@ -370,7 +370,13 @@ class MemoryRepository:
                 continue
             score = len(overlap) / len(query_terms)
             ranked.append((score, memory["updated_at"], memory))
-        ranked.sort(key=lambda item: (-item[0], item[1], item[2]["id"]))
+        ranked.sort(
+            key=lambda item: (
+                -item[0],
+                -self._parse_timestamp(item[1]).timestamp(),
+                item[2]["id"],
+            )
+        )
         return tuple({
             **memory,
             "relevance_score": round(score, 4),
