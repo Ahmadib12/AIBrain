@@ -28,6 +28,11 @@ class MemoryUpdateRequest(BaseModel):
 
     value: object
     confidence: float = Field(ge=0.0, le=1.0)
+    key: str | None = Field(default=None, min_length=1, max_length=200)
+    memory_type: str | None = Field(
+        default=None,
+        pattern=r"^(preference|goal|context|project)$",
+    )
 
 
 class MemoryConsentRequest(BaseModel):
@@ -194,6 +199,20 @@ async def list_memory(
     return list(get_app_state().memory.list(user["id"]))
 
 
+@router.get("/memory/{memory_id}")
+async def get_memory(
+    memory_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        return get_app_state().memory.get(user["id"], memory_id)
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "MEMORY_NOT_FOUND", "message": "Memory not found"},
+        ) from None
+
+
 @router.post("/memory/search")
 async def search_memory(
     request: MemorySearchRequest,
@@ -266,11 +285,15 @@ async def update_memory(
 ) -> dict:
     try:
         validate_personal_payload(request.value)
+        if request.key is not None:
+            validate_personal_payload(request.key)
         return get_app_state().memory.update(
             user["id"],
             memory_id,
             value=request.value,
             confidence=request.confidence,
+            key=request.key,
+            memory_type=request.memory_type,
         )
     except ValueError:
         raise HTTPException(
