@@ -27,6 +27,7 @@ from backend.app.intelligence.capabilities import (
 )
 from backend.app.intelligence.classifier import DeterministicTaskClassifier
 from backend.app.intelligence.context import ExecutionState, RequestContext
+from backend.app.intelligence.planning.engine import PlanningEngine
 from backend.app.intelligence.trace import (
     DecisionReasonCode,
     DecisionTraceBuilder,
@@ -95,6 +96,7 @@ class OrchestrationCore(CentralIntelligenceCore):
         classifier: DeterministicTaskClassifier | None = None,
         capability_registry: CapabilityRegistry | None = None,
         adapters: dict[str, CapabilityAdapter] | None = None,
+        planning_engine: PlanningEngine | None = None,
         timeout_seconds: float = 30.0,
     ) -> None:
         if timeout_seconds <= 0:
@@ -102,6 +104,7 @@ class OrchestrationCore(CentralIntelligenceCore):
         self.classifier = classifier or DeterministicTaskClassifier()
         self.capability_registry = capability_registry or CapabilityRegistry()
         self.adapters = adapters or {}
+        self.planning_engine = planning_engine or PlanningEngine()
         self.timeout_seconds = timeout_seconds
 
         if "text_generation" in self.adapters:
@@ -135,6 +138,7 @@ class OrchestrationCore(CentralIntelligenceCore):
     ) -> IntelligenceResponse:
         trace: DecisionTraceBuilder | None
         trace_recording_failed = False
+        planning_payload: dict | None = None
         try:
             trace = DecisionTraceBuilder()
         except Exception:
@@ -160,6 +164,10 @@ class OrchestrationCore(CentralIntelligenceCore):
 
         def finish(response: IntelligenceResponse) -> IntelligenceResponse:
             nonlocal trace_recording_failed
+            if planning_payload is not None:
+                response = response.model_copy(
+                    update={"planning": planning_payload}
+                )
             if trace is None or trace_recording_failed:
                 return response
             try:
@@ -209,6 +217,24 @@ class OrchestrationCore(CentralIntelligenceCore):
                 classification.reason,
             )
         )
+
+        try:
+            planning = self.planning_engine.plan(
+                text,
+                classification,
+                available_capabilities=(
+                    capability.capability_id
+                    for capability in self.capability_registry.available()
+                ),
+            )
+            planning_payload = planning.model_dump(mode="json")
+        except Exception:
+            # Planning is advisory; a planning defect must not bypass or alter
+            # the existing classifier, capability, adapter, or authorization
+            # boundaries. Keep the failure private and continue safely.
+            logging.getLogger("aibrain.intelligence").warning(
+                "Request planning failed"
+            )
 
         if classification.task_type == TaskType.UNSUPPORTED:
             record_trace(
