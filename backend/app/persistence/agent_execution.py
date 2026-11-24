@@ -283,33 +283,47 @@ class AgentExecutionRepository:
         failed = False
         for step in self.list_steps(user_id, run_id):
             try:
-                current = registry.get(step["tool_id"])
-                if (
-                    current is None
-                    or current.risk is not ToolRisk.READ_ONLY
-                    or contract_fingerprint(current) != step["contract_fingerprint"]
-                ):
-                    raise PermissionError("Tool contract changed or is no longer read-only")
-                if step["required_capability"] is not None:
-                    task = self._validate_live_task(user_id, self._raw_run(user_id, run_id)["task_id"])
-                    if step["required_capability"] not in self._effective_capabilities(user_id, task["agent_id"]):
-                        raise PermissionError("Required agent capability was revoked")
+                # This transaction is the step authorization linearization point.
+                # A later grant revocation cannot retroactively cancel a step
+                # that was already authorized and durably marked as started.
+                with self.database.transaction(immediate=True):
+                    run = self._raw_run(user_id, run_id)
+                    if run["status"] != "running":
+                        raise PermissionError("Agent run is no longer running")
+                    self._authorize_or_execute_check(user_id, run)
+                    current = registry.get(step["tool_id"])
+                    if (
+                        current is None
+                        or current.risk is not ToolRisk.READ_ONLY
+                        or contract_fingerprint(current) != step["contract_fingerprint"]
+                    ):
+                        raise PermissionError("Tool contract changed or is no longer read-only")
+                    self._event(user_id, run_id, "step_started", {
+                        "step_id": step["id"], "ordinal": step["ordinal"],
+                        "tool_id": step["tool_id"],
+                    })
+                    self.database.connect().execute(
+                        """UPDATE agent_run_steps SET status='running',updated_at=?
+                           WHERE id=? AND user_id=? AND status='pending'""",
+                        (_stamp(), step["id"], user_id),
+                    )
+
                 proposal = gateway.propose(
                     user_id, tool_id=step["tool_id"], arguments=step["arguments"]
                 )
                 result = gateway.execute(proposal, user_id=user_id)
                 with self.database.transaction(immediate=True):
-                    self.database.connect().execute(
-                        """UPDATE agent_run_steps SET status='completed',
-                           tool_request_id=?,result_json=?,updated_at=?
-                           WHERE id=? AND user_id=? AND status='pending'""",
-                        (proposal["id"], _canonical(result), _stamp(),
-                         step["id"], user_id),
-                    )
                     self._event(user_id, run_id, "step_completed", {
                         "step_id": step["id"], "ordinal": step["ordinal"],
                         "tool_id": step["tool_id"], "tool_request_id": proposal["id"],
                     })
+                    self.database.connect().execute(
+                        """UPDATE agent_run_steps SET status='completed',
+                           tool_request_id=?,result_json=?,updated_at=?
+                           WHERE id=? AND user_id=? AND status='running'""",
+                        (proposal["id"], _canonical(result), _stamp(),
+                         step["id"], user_id),
+                    )
             except Exception as exc:
                 failed = True
                 code = (
@@ -318,15 +332,20 @@ class AgentExecutionRepository:
                     else "read_only_execution_failed"
                 )
                 with self.database.transaction(immediate=True):
-                    self.database.connect().execute(
-                        """UPDATE agent_run_steps SET status='failed',error_code=?,
-                           updated_at=? WHERE id=? AND user_id=? AND status='pending'""",
-                        (code, _stamp(), step["id"], user_id),
-                    )
-                    self._event(user_id, run_id, "step_failed", {
-                        "step_id": step["id"], "ordinal": step["ordinal"],
-                        "error_code": code, "automatic_retry": False,
-                    })
+                    current_step = self.database.connect().execute(
+                        "SELECT status FROM agent_run_steps WHERE id=? AND user_id=?",
+                        (step["id"], user_id),
+                    ).fetchone()
+                    if current_step is not None and current_step["status"] in {"pending", "running"}:
+                        self._event(user_id, run_id, "step_failed", {
+                            "step_id": step["id"], "ordinal": step["ordinal"],
+                            "error_code": code, "automatic_retry": False,
+                        })
+                        self.database.connect().execute(
+                            """UPDATE agent_run_steps SET status='failed',error_code=?,
+                               updated_at=? WHERE id=? AND user_id=? AND status=?""",
+                            (code, _stamp(), step["id"], user_id, current_step["status"]),
+                        )
                 break
 
         with self.database.transaction(immediate=True):
@@ -343,11 +362,23 @@ class AgentExecutionRepository:
                 (target, now, now, run_id, user_id),
             )
             if failed:
-                self.database.connect().execute(
-                    """UPDATE agent_run_steps SET status='skipped',updated_at=?
-                       WHERE run_id=? AND user_id=? AND status='pending'""",
-                    (now, run_id, user_id),
-                )
+                pending_steps = self.database.connect().execute(
+                    """SELECT id,ordinal FROM agent_run_steps
+                       WHERE run_id=? AND user_id=? AND status='pending'
+                       ORDER BY ordinal""",
+                    (run_id, user_id),
+                ).fetchall()
+                for pending_step in pending_steps:
+                    self._event(user_id, run_id, "step_skipped", {
+                        "step_id": pending_step["id"],
+                        "ordinal": pending_step["ordinal"],
+                        "reason": "prior_step_failed",
+                    })
+                    self.database.connect().execute(
+                        """UPDATE agent_run_steps SET status='skipped',updated_at=?
+                           WHERE id=? AND user_id=? AND status='pending'""",
+                        (now, pending_step["id"], user_id),
+                    )
         return self.get_run(user_id, run_id)
 
     def cancel_run(self, user_id: str, run_id: str) -> dict:
