@@ -1174,7 +1174,7 @@ def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     rows = second.connect().execute(
         "SELECT COUNT(*) AS count FROM schema_migrations"
     ).fetchone()
-    assert rows["count"] == 16
+    assert rows["count"] == 17
     second.close()
 
 
