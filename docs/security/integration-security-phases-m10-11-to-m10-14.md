@@ -15,7 +15,9 @@ connect. The transport does not use environment proxy settings, does not
 follow redirects, and does not retry against a different address.
 
 The default SSL context performs certificate-chain and hostname validation.
-No insecure TLS mode is exposed. Only GET and HEAD are accepted; request bodies,
+Injected contexts are rejected unless certificate verification and hostname
+checking remain enabled and TLS 1.2 or newer is required. No insecure TLS mode
+is exposed. Only GET and HEAD are accepted; request bodies,
 caller-supplied Host/connection/proxy/framing headers, control characters,
 header injection, and oversized request headers are rejected.
 
