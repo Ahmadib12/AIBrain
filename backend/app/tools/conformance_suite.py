@@ -63,7 +63,7 @@ def verify_signed_suite(
                 not isinstance(part, str) or not part or len(part) > 4096 or "\x00" in part
                 for part in argv
             )
-            or sum(len(part.encode("utf-8")) for part in argv if isinstance(part, str)) > 16384
+            or sum(len(part) for part in argv if isinstance(part, str)) > 16384
         ):
             raise ValueError(f"Invalid signed command for conformance check: {check_id}")
     if not isinstance(signature, str) or not signature or len(signature) > 256:
