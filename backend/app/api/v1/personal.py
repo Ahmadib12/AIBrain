@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
 from backend.app.app_state import get_app_state
+from backend.app.intelligence.memory_context import MemoryContextAssembler
 from backend.app.persistence.validation import validate_personal_payload
 
 
@@ -27,6 +28,32 @@ class MemoryUpdateRequest(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class MemoryConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retention_days: int | None = Field(default=365, ge=1, le=3650)
+
+
+class MemoryRetentionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retention_days: int | None = Field(ge=1, le=3650)
+
+
+class MemorySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class MemoryContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=5, ge=1, le=5)
+
+
 class ObservationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,12 +73,83 @@ class AdaptationStatusRequest(BaseModel):
     status: str = Field(pattern=r"^(approved|rejected|suspended|revoked)$")
 
 
+@router.get("/memory/consent")
+async def get_memory_consent(
+    user: dict = Depends(get_current_user),
+) -> dict:
+    return get_app_state().memory.consent_status(user["id"])
+
+
+@router.post("/memory/consent")
+async def grant_memory_consent(
+    request: MemoryConsentRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        consent = get_app_state().memory.grant_consent(
+            user["id"],
+            retention_days=request.retention_days,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_MEMORY_POLICY", "message": "Invalid memory policy"},
+        ) from None
+    return {
+        "consent": consent,
+        "notice": (
+            "Personal memory is enabled only for this account. You can revoke "
+            "consent, export, change retention, or delete stored memories at any time."
+        ),
+    }
+
+
+@router.patch("/memory/consent/retention")
+async def update_memory_retention(
+    request: MemoryRetentionRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        return get_app_state().memory.set_retention_policy(
+            user["id"],
+            retention_days=request.retention_days,
+        )
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MEMORY_CONSENT_REQUIRED",
+                "message": "Grant memory consent before changing its retention policy",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_MEMORY_POLICY", "message": "Invalid memory policy"},
+        ) from None
+
+
+@router.delete("/memory/consent")
+async def revoke_memory_consent(
+    purge_existing: bool = Query(default=False),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    # Revocation takes effect immediately. Existing records are locked from
+    # retrieval; purge_existing=true additionally erases those records now.
+    return get_app_state().memory.revoke_consent(
+        user["id"],
+        purge_existing=purge_existing,
+    )
+
+
 @router.post("/memory")
 async def create_memory(
     request: MemoryCreateRequest,
     user: dict = Depends(get_current_user),
 ) -> dict:
     try:
+        validate_personal_payload(request.key)
+        validate_personal_payload(request.source)
         validate_personal_payload(request.value)
         return get_app_state().memory.create(
             user["id"],
@@ -62,6 +160,14 @@ async def create_memory(
             confidence=request.confidence,
             expires_at=request.expires_at,
         )
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MEMORY_CONSENT_REQUIRED",
+                "message": "Explicit memory consent is required before saving memories",
+            },
+        ) from None
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -74,6 +180,70 @@ async def list_memory(
     user: dict = Depends(get_current_user),
 ) -> list[dict]:
     return list(get_app_state().memory.list(user["id"]))
+
+
+@router.post("/memory/search")
+async def search_memory(
+    request: MemorySearchRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    state = get_app_state()
+    try:
+        assembled = MemoryContextAssembler().assemble(
+            state.memory,
+            user_id=user["id"],
+            query=request.query,
+            limit=request.limit,
+        )
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MEMORY_CONSENT_REQUIRED",
+                "message": "Active memory consent is required for retrieval",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_MEMORY_QUERY", "message": "Invalid memory query"},
+        ) from None
+    return {
+        "query": assembled.query,
+        "matches": [
+            item.model_dump(mode="json")
+            for item in assembled.memories
+        ],
+        "truncated": assembled.truncated,
+    }
+
+
+@router.post("/memory/context")
+async def assemble_memory_context(
+    request: MemoryContextRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        result = MemoryContextAssembler().assemble(
+            get_app_state().memory,
+            user_id=user["id"],
+            query=request.query,
+            limit=request.limit,
+        )
+        return result.model_dump(mode="json")
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MEMORY_CONSENT_REQUIRED",
+                "message": "Active memory consent is required for context assembly",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_MEMORY_QUERY", "message": "Invalid memory query"},
+        ) from None
 
 
 @router.patch("/memory/{memory_id}")
@@ -116,6 +286,13 @@ async def delete_memory(
     return {"deleted": True}
 
 
+@router.delete("/memory")
+async def delete_all_memory(
+    user: dict = Depends(get_current_user),
+) -> dict:
+    return {"deleted_count": get_app_state().memory.delete_all(user["id"])}
+
+
 @router.post("/memory/export")
 async def export_memory(
     user: dict = Depends(get_current_user),
@@ -127,9 +304,7 @@ async def export_memory(
 async def list_observations(
     user: dict = Depends(get_current_user),
 ) -> list[dict]:
-    return list(
-        get_app_state().learning.list_observations(user["id"])
-    )
+    return list(get_app_state().learning.list_observations(user["id"]))
 
 
 @router.get("/learning/observations/{observation_id}")
@@ -159,16 +334,16 @@ async def record_observation(
 ) -> dict:
     try:
         validate_personal_payload(request.observation)
+        return get_app_state().learning.record_observation(
+            user["id"],
+            source=request.source,
+            observation=request.observation,
+        )
     except ValueError:
         raise HTTPException(
             status_code=400,
             detail={"code": "INVALID_PERSONAL_DATA", "message": "Invalid personal data"},
         ) from None
-    return get_app_state().learning.record_observation(
-        user["id"],
-        source=request.source,
-        observation=request.observation,
-    )
 
 
 @router.post("/learning/adaptations")
@@ -178,24 +353,22 @@ async def propose_adaptation(
 ) -> dict:
     try:
         validate_personal_payload(request.proposal)
+        return get_app_state().learning.propose_adaptation(
+            user["id"],
+            proposal=request.proposal,
+        )
     except ValueError:
         raise HTTPException(
             status_code=400,
             detail={"code": "INVALID_PERSONAL_DATA", "message": "Invalid personal data"},
         ) from None
-    return get_app_state().learning.propose_adaptation(
-        user["id"],
-        proposal=request.proposal,
-    )
 
 
 @router.get("/learning/adaptations")
 async def list_adaptations(
     user: dict = Depends(get_current_user),
 ) -> list[dict]:
-    return list(
-        get_app_state().learning.list_adaptations(user["id"])
-    )
+    return list(get_app_state().learning.list_adaptations(user["id"]))
 
 
 @router.get("/learning/adaptations/{adaptation_id}")
