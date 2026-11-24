@@ -1504,6 +1504,87 @@ class ToolRequestRepository:
             for row in rows
         ]
 
+    def get_execution_history(self, user_id: str, request_id: str) -> list[dict]:
+        """Return owner-scoped dispatch, recovery, and lookup authorization history.
+
+        This is a read model over the immutable source ledgers. It does not
+        merge or overwrite their distinct record types.
+        """
+        connection = self.database.connect()
+        request = connection.execute(
+            """
+            SELECT 1 FROM tool_requests
+            WHERE id = ? AND user_id = ?
+            """,
+            (request_id, user_id),
+        ).fetchone()
+        if request is None:
+            raise LookupError("Tool request not found")
+
+        rows = connection.execute(
+            """
+            SELECT id, record_type, event_type, action_digest,
+                   details_json, created_at, certification_id
+            FROM (
+                SELECT
+                    id,
+                    'dispatch_audit' AS record_type,
+                    event_type,
+                    action_digest,
+                    details_json,
+                    created_at,
+                    NULL AS certification_id
+                FROM tool_dispatch_audit_events
+                WHERE user_id = ? AND request_id = ?
+
+                UNION ALL
+
+                SELECT
+                    id,
+                    'dispatch_recovery' AS record_type,
+                    event_type,
+                    action_digest,
+                    details_json,
+                    created_at,
+                    NULL AS certification_id
+                FROM tool_dispatch_recovery_events
+                WHERE user_id = ? AND request_id = ?
+
+                UNION ALL
+
+                SELECT
+                    id,
+                    'lookup_authorization' AS record_type,
+                    'lookup_authorized' AS event_type,
+                    action_digest,
+                    details_json,
+                    created_at,
+                    certification_id
+                FROM tool_dispatch_lookup_authorizations
+                WHERE user_id = ? AND request_id = ?
+            )
+            ORDER BY created_at ASC, record_type ASC, id ASC
+            """,
+            (
+                user_id, request_id,
+                user_id, request_id,
+                user_id, request_id,
+            ),
+        ).fetchall()
+
+        return [
+            {
+                "id": row["id"],
+                "record_type": row["record_type"],
+                "event_type": row["event_type"],
+                "action_digest": row["action_digest"],
+                "details": json.loads(row["details_json"]),
+                "created_at": row["created_at"],
+                "certification_id": row["certification_id"],
+            }
+            for row in rows
+        ]
+
     def reconcile_execution_attempt(
         self,
         user_id: str,
