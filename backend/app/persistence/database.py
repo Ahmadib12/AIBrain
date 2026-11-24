@@ -1974,6 +1974,143 @@ class Database:
                 BEGIN SELECT RAISE(ABORT, 'task definition is immutable'); END;
                 """
             ),
+            (
+                27,
+                """
+                CREATE TABLE agent_runs (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    actions_json TEXT NOT NULL CHECK (json_valid(actions_json)),
+                    plan_digest TEXT NOT NULL CHECK (length(plan_digest)=64),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'proposed','authorized','running','completed',
+                        'failed','cancelled','expired'
+                    )),
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    authorized_at TEXT,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                    FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_runs_owner_task
+                    ON agent_runs(user_id,task_id,created_at,id);
+                CREATE INDEX idx_agent_runs_status_expiry
+                    ON agent_runs(status,expires_at);
+
+                CREATE TABLE agent_run_steps (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 9),
+                    tool_id TEXT NOT NULL,
+                    arguments_json TEXT NOT NULL CHECK (json_valid(arguments_json)),
+                    contract_fingerprint TEXT NOT NULL CHECK (length(contract_fingerprint)=64),
+                    required_capability TEXT,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'pending','completed','failed','skipped'
+                    )),
+                    tool_request_id TEXT,
+                    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+                    error_code TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(run_id,ordinal),
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_run_steps_owner_run
+                    ON agent_run_steps(user_id,run_id,ordinal);
+
+                CREATE TABLE agent_run_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id)
+                );
+                CREATE INDEX idx_agent_run_events_owner_run
+                    ON agent_run_events(user_id,run_id,created_at,id);
+
+                CREATE TRIGGER validate_agent_run_insert
+                BEFORE INSERT ON agent_runs
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents a
+                    JOIN agent_tasks t ON t.agent_id=a.id AND t.user_id=a.user_id
+                    JOIN users u ON u.id=a.user_id
+                    WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                      AND a.status='active' AND u.deleted_at IS NULL
+                      AND t.id=NEW.task_id AND t.user_id=NEW.user_id
+                      AND t.status IN ('assigned','in_progress')
+                      AND t.expires_at > NEW.created_at
+                )
+                BEGIN SELECT RAISE(ABORT,'agent run requires active owned agent and live task'); END;
+
+                CREATE TRIGGER prevent_agent_run_definition_update
+                BEFORE UPDATE OF id,user_id,agent_id,task_id,actions_json,plan_digest,
+                                 expires_at,created_at ON agent_runs
+                BEGIN SELECT RAISE(ABORT,'agent run definition is immutable'); END;
+                CREATE TRIGGER prevent_agent_run_delete
+                BEFORE DELETE ON agent_runs
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT,'agent runs may only be deleted during account erasure'); END;
+
+                CREATE TRIGGER validate_agent_run_status_transition
+                BEFORE UPDATE OF status ON agent_runs
+                WHEN OLD.status <> NEW.status
+                AND NOT EXISTS (
+                    SELECT 1 FROM agent_run_events e
+                    WHERE e.run_id=OLD.id AND e.user_id=OLD.user_id
+                      AND json_extract(e.details_json,'$.from_status')=OLD.status
+                      AND json_extract(e.details_json,'$.to_status')=NEW.status
+                )
+                BEGIN SELECT RAISE(ABORT,'agent run status change requires matching event'); END;
+
+                CREATE TRIGGER validate_agent_run_step_insert
+                BEFORE INSERT ON agent_run_steps
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_runs r JOIN users u ON u.id=r.user_id
+                    WHERE r.id=NEW.run_id AND r.user_id=NEW.user_id
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'agent run step owner mismatch'); END;
+                CREATE TRIGGER prevent_agent_run_step_definition_update
+                BEFORE UPDATE OF id,user_id,run_id,ordinal,tool_id,arguments_json,
+                                 contract_fingerprint,required_capability,created_at
+                ON agent_run_steps
+                BEGIN SELECT RAISE(ABORT,'agent run step definition is immutable'); END;
+                CREATE TRIGGER prevent_agent_run_step_delete
+                BEFORE DELETE ON agent_run_steps
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT,'agent run steps may only be deleted during account erasure'); END;
+
+                CREATE TRIGGER validate_agent_run_event_insert
+                BEFORE INSERT ON agent_run_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_runs r JOIN users u ON u.id=r.user_id
+                    WHERE r.id=NEW.run_id AND r.user_id=NEW.user_id
+                      AND NEW.actor_user_id=NEW.user_id AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'agent run event owner mismatch'); END;
+                CREATE TRIGGER prevent_agent_run_event_update
+                BEFORE UPDATE ON agent_run_events
+                BEGIN SELECT RAISE(ABORT,'agent run events are immutable'); END;
+                CREATE TRIGGER prevent_agent_run_event_delete
+                BEFORE DELETE ON agent_run_events
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT,'agent run events may only be deleted during account erasure'); END;
+                """
+            ),
         )
 
         with self._lock:
