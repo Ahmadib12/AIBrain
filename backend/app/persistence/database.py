@@ -2327,6 +2327,85 @@ class Database:
                 END;
                 """
             ),
+            (
+                30,
+                """
+                CREATE TABLE agent_run_integration_bindings (
+                    step_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    integration_id TEXT NOT NULL,
+                    manifest_version TEXT NOT NULL,
+                    tool_id TEXT NOT NULL,
+                    contract_fingerprint TEXT NOT NULL
+                        CHECK (length(contract_fingerprint)=64),
+                    required_scopes_json TEXT NOT NULL
+                        CHECK (json_valid(required_scopes_json)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(step_id) REFERENCES agent_run_steps(id) ON DELETE CASCADE,
+                    FOREIGN KEY(connection_id,user_id)
+                        REFERENCES integration_connections(id,user_id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_agent_run_integration_bindings_owner
+                    ON agent_run_integration_bindings(user_id,run_id,step_id);
+
+                CREATE TRIGGER validate_agent_run_integration_binding_insert
+                BEFORE INSERT ON agent_run_integration_bindings
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_run_steps s
+                    JOIN agent_runs r ON r.id=s.run_id AND r.user_id=s.user_id
+                    JOIN integration_connections c
+                      ON c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                    JOIN users u ON u.id=NEW.user_id
+                    WHERE s.id=NEW.step_id AND s.user_id=NEW.user_id
+                      AND s.run_id=NEW.run_id AND r.status='proposed'
+                      AND s.status='pending' AND u.deleted_at IS NULL
+                      AND c.integration_id=NEW.integration_id
+                      AND c.status='active'
+                      AND (c.expires_at IS NULL OR c.expires_at>NEW.created_at)
+                      AND s.tool_id=NEW.tool_id
+                      AND s.contract_fingerprint=NEW.contract_fingerprint
+                )
+                BEGIN
+                    SELECT RAISE(ABORT,'integration binding requires matching proposed run, step, and active owner connection');
+                END;
+
+                CREATE TRIGGER validate_agent_run_integration_binding_scopes
+                BEFORE INSERT ON agent_run_integration_bindings
+                WHEN EXISTS (
+                    SELECT 1 FROM json_each(NEW.required_scopes_json) requested
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM integration_connection_grants g
+                        WHERE g.user_id=NEW.user_id
+                          AND g.connection_id=NEW.connection_id
+                          AND g.scope=requested.value
+                          AND g.status='active' AND g.revoked_at IS NULL
+                          AND (g.expires_at IS NULL OR g.expires_at>NEW.created_at)
+                    )
+                )
+                OR json_type(NEW.required_scopes_json) <> 'array'
+                OR json_array_length(NEW.required_scopes_json)=0
+                BEGIN
+                    SELECT RAISE(ABORT,'integration binding requires exact active owner-granted scopes');
+                END;
+
+                CREATE TRIGGER prevent_agent_run_integration_binding_update
+                BEFORE UPDATE ON agent_run_integration_bindings
+                BEGIN
+                    SELECT RAISE(ABORT,'agent run integration bindings are immutable');
+                END;
+
+                CREATE TRIGGER prevent_agent_run_integration_binding_delete
+                BEFORE DELETE ON agent_run_integration_bindings
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT,'agent run integration bindings may only be deleted during account erasure');
+                END;
+                """
+            ),
         )
 
         with self._lock:
