@@ -22,7 +22,7 @@ class MemoryContextResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     query: str = Field(min_length=1, max_length=500)
-    memories: tuple[MemoryContextItem, ...] = Field(max_length=10)
+    memories: tuple[MemoryContextItem, ...] = Field(max_length=5)
     truncated: bool = False
     assembled_at: str
 
@@ -60,6 +60,8 @@ class MemoryContextAssembler:
         query: str,
         limit: int = 5,
     ) -> MemoryContextResult:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 5:
+            raise ValueError("Memory context limit must be between 1 and 5")
         if not repository.consent_status(user_id)["enabled"]:
             raise PermissionError("Active memory consent is required")
         matches = repository.retrieve(
