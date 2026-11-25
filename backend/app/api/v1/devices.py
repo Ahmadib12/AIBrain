@@ -95,6 +95,14 @@ async def create_device_challenge(
             status_code=404,
             detail={"code": "PENDING_DEVICE_NOT_FOUND", "message": "Pending keyed device not found"},
         ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "DEVICE_CHALLENGE_RATE_LIMITED",
+                "message": "Too many device challenges were requested",
+            },
+        ) from None
 
 
 @router.post("/{device_id}/verify", status_code=204)
@@ -141,6 +149,14 @@ async def create_device_session_challenge(
             detail={
                 "code": "ACTIVE_DEVICE_NOT_FOUND",
                 "message": "Active keyed device not found",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "DEVICE_CHALLENGE_RATE_LIMITED",
+                "message": "Too many device challenges were requested",
             },
         ) from None
 
