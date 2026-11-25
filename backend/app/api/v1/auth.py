@@ -1,4 +1,5 @@
 import sqlite3
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -494,6 +495,31 @@ async def logout(
         )
     get_app_state().identity.revoke_token(token)
     return {"status": "logged_out"}
+
+
+@router.get("/security-events", response_model=list[dict])
+async def list_session_security_events(
+    limit: int = 50,
+    before_occurred_at: str | None = None,
+    before_event_id: UUID | None = None,
+    user: dict = Depends(get_current_user),
+) -> list[dict]:
+    """Return the authenticated owner's recent session security history."""
+    try:
+        return list(get_app_state().session_security_events.list_owned(
+            user["id"],
+            limit=limit,
+            before_occurred_at=before_occurred_at,
+            before_event_id=str(before_event_id) if before_event_id else None,
+        ))
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_SESSION_EVENT_CURSOR",
+                "message": "Session event pagination parameters are invalid",
+            },
+        ) from None
 
 
 @router.get("/me", response_model=dict)
