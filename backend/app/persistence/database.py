@@ -2771,6 +2771,36 @@ created_at TEXT NOT NULL,
                 END;
                 """,
             ),
+            (
+                35,
+                """
+                ALTER TABLE sessions
+                    ADD COLUMN device_id TEXT REFERENCES devices(id) ON DELETE CASCADE;
+                CREATE INDEX idx_sessions_device_active
+                    ON sessions(device_id, revoked_at, expires_at);
+
+                ALTER TABLE device_auth_challenges
+                    ADD COLUMN purpose TEXT NOT NULL DEFAULT 'enrollment'
+                    CHECK (purpose IN ('enrollment','session'));
+
+                DROP TRIGGER IF EXISTS validate_device_challenge_insert;
+                CREATE TRIGGER validate_device_challenge_insert
+                BEFORE INSERT ON device_auth_challenges
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM devices d JOIN users u ON u.id=d.user_id
+                    WHERE d.id=NEW.device_id AND d.user_id=NEW.user_id
+                      AND d.public_key_b64 IS NOT NULL
+                      AND u.deleted_at IS NULL
+                      AND (
+                        (NEW.purpose='enrollment' AND d.status='pending')
+                        OR (NEW.purpose='session' AND d.status='active')
+                      )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device challenge purpose does not match device state');
+                END;
+                """
+            ),
         )
 
         with self._lock:
