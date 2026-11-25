@@ -1,4 +1,5 @@
 from backend.app.config import Settings, get_settings
+from backend.app.agli.engine_registry import LanguageEngineRegistry
 from backend.app.auth.webauthn_service import WebAuthnService
 from backend.app.persistence.database import Database
 from backend.app.persistence.agents import AgentRepository
@@ -26,6 +27,8 @@ from backend.app.tools.integration_orchestrator import IntegrationAgentRunOrches
 class AppState:
     def __init__(self, settings: Settings) -> None:
         self.database = Database(settings.database_url)
+        # Runtime engines are registered only by trusted server composition.
+        self.agli_engines = LanguageEngineRegistry()
         self.identity = IdentityRepository(
             self.database,
             session_ttl_seconds=settings.session_ttl_seconds,
