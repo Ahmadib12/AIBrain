@@ -571,21 +571,27 @@ def test_passwordless_login_is_owner_scoped_and_revocation_is_rechecked(
     activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
     assert activated.status_code == 204
 
-    # A different device ID cannot reuse the original challenge.
+    # A different owner's active device cannot reuse this challenge.
+    other_device, other_private_key = _enroll_with_key(client, other_headers)
+    other_activated, _ = _activate_with_proof(
+        client, other_headers, other_device, other_private_key
+    )
+    assert other_activated.status_code == 204
+
     challenge = client.post(
         f"/api/v1/devices/{device['device_id']}/login/challenge"
     ).json()
     message = base64.b64decode(challenge["message_b64"], validate=True)
     signature = private_key.sign(message)
-    cross_device = client.post(
-        f"/api/v1/devices/{uuid4()}/login/verify",
+    cross_owner = client.post(
+        f"/api/v1/devices/{other_device['device_id']}/login/verify",
         params={"challenge_id": challenge["challenge_id"]},
         json={
             "nonce": challenge["nonce"],
             "signature_b64": base64.b64encode(signature).decode("ascii"),
         },
     )
-    assert cross_device.status_code == 401
+    assert cross_owner.status_code == 401
 
     state = get_app_state()
     original_create_session = state.identity.create_session
@@ -595,6 +601,38 @@ def test_passwordless_login_is_owner_scoped_and_revocation_is_rechecked(
         return original_create_session(user_id, device_id=device_id)
 
     monkeypatch.setattr(state.identity, "create_session", revoke_before_session)
+    response = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "DEVICE_LOGIN_REJECTED"
+
+
+
+def test_passwordless_device_login_rejects_expired_challenge(client: TestClient) -> None:
+    from backend.app.app_state import get_app_state
+
+    owner_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+
+    challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/challenge"
+    ).json()
+    state = get_app_state()
+    state.database.connect().execute(
+        "UPDATE device_auth_challenges SET expires_at=? WHERE id=?",
+        ("2000-01-01T00:00:00+00:00", challenge["challenge_id"]),
+    )
+    signature = private_key.sign(
+        base64.b64decode(challenge["message_b64"], validate=True)
+    )
     response = client.post(
         f"/api/v1/devices/{device['device_id']}/login/verify",
         params={"challenge_id": challenge["challenge_id"]},
