@@ -182,3 +182,86 @@ def test_device_security_history_survives_device_removal_and_is_immutable(client
         assert "only be erased with the account" in str(exc)
     else:
         raise AssertionError("direct audit deletion was allowed")
+
+
+
+def test_device_identity_and_registered_key_are_immutable(client: TestClient):
+    from backend.app.app_state import get_app_state
+
+    headers = _authenticated_headers(client)
+    other_headers = _authenticated_headers(client)
+    device, key = _enroll_with_key(client, headers)
+    state = get_app_state()
+    owner_id = client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"]
+    other_id = client.get("/api/v1/auth/me", headers=other_headers).json()["user"]["id"]
+    replacement_key = base64.b64encode(b"x" * 32).decode("ascii")
+
+    with pytest.raises(Exception, match="registered device public keys are immutable"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE devices SET public_key_b64=? WHERE id=?",
+                (replacement_key, device["device_id"]),
+            )
+
+    with pytest.raises(Exception, match="device identity fields are immutable"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE devices SET user_id=? WHERE id=?",
+                (other_id, device["device_id"]),
+            )
+
+    with pytest.raises(Exception, match="device identity fields are immutable"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE devices SET public_key_fingerprint=? WHERE id=?",
+                ("0" * 64, device["device_id"]),
+            )
+
+    persisted = state.devices.get_owned(owner_id, device["device_id"])
+    assert persisted.owner_id == owner_id
+
+
+def test_device_lifecycle_cannot_reactivate_a_revoked_device(client: TestClient):
+    from backend.app.app_state import get_app_state
+
+    headers = _authenticated_headers(client)
+    device, key = _enroll_with_key(client, headers)
+    activated, _ = _activate_with_proof(client, headers, device, key)
+    assert activated.status_code == 204
+    revoked = client.delete(f"/api/v1/devices/{device['device_id']}", headers=headers)
+    assert revoked.status_code == 200
+
+    state = get_app_state()
+    with pytest.raises(Exception, match="invalid device lifecycle transition"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE devices SET status='active' WHERE id=?",
+                (device["device_id"],),
+            )
+
+
+def test_device_audit_event_rolls_back_with_lifecycle_change(client: TestClient):
+    from backend.app.app_state import get_app_state
+
+    headers = _authenticated_headers(client)
+    device, key = _enroll_with_key(client, headers)
+    state = get_app_state()
+    before = client.get("/api/v1/devices/security-events", headers=headers).json()
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE devices SET status='active' WHERE id=?",
+                (device["device_id"],),
+            )
+            raise RuntimeError("force rollback")
+
+    persisted = state.devices.get_owned(
+        client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"],
+        device["device_id"],
+    )
+    assert persisted.status == "pending"
+    after = client.get("/api/v1/devices/security-events", headers=headers).json()
+    assert [item["event_id"] for item in after] == [
+        item["event_id"] for item in before
+    ]
