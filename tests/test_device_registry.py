@@ -92,7 +92,7 @@ def test_revoked_device_cannot_report_capabilities(client: TestClient) -> None:
         },
     )
     assert report.status_code == 409
-    assert report.json()["detail"]["code"] == "DEVICE_NOT_ACTIVE"
+    assert report.json()["error"]["code"] == "DEVICE_NOT_ACTIVE"
 
 
 def test_device_capability_report_is_metadata_not_permission_grant(
