@@ -138,6 +138,143 @@ class DeviceProofRepository:
             "message_b64": base64.b64encode(message).decode("ascii"),
         }
 
+
+    def create_login_challenge(self, device_id: str) -> dict:
+        """Issue a session-purpose challenge without requiring an account session.
+
+        The account owner is resolved only from the active device record.
+        """
+        challenge_id = str(uuid.uuid4())
+        nonce = secrets.token_urlsafe(32)
+        now = _now()
+        expires_text = (now + timedelta(minutes=5)).isoformat()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            device = connection.execute(
+                """
+                SELECT d.user_id
+                FROM devices d
+                JOIN users u ON u.id=d.user_id
+                WHERE d.id=? AND d.status='active'
+                  AND d.public_key_b64 IS NOT NULL
+                  AND u.deleted_at IS NULL
+                """,
+                (device_id,),
+            ).fetchone()
+            if device is None:
+                raise LookupError("Active keyed device not found")
+            owner_id = device["user_id"]
+            cutoff = (now - timedelta(minutes=5)).isoformat()
+            recent = connection.execute(
+                """
+                SELECT COUNT(*) AS total FROM device_auth_challenges
+                WHERE device_id=? AND user_id=? AND purpose='session'
+                  AND created_at > ?
+                """,
+                (device_id, owner_id, cutoff),
+            ).fetchone()["total"]
+            if recent >= 10:
+                raise PermissionError("Device challenge rate limit exceeded")
+            connection.execute(
+                """
+                DELETE FROM device_auth_challenges
+                WHERE expires_at <= ?
+                   OR (used_at IS NOT NULL AND used_at <= ?)
+                """,
+                (now.isoformat(), (now - timedelta(days=1)).isoformat()),
+            )
+            connection.execute(
+                """
+                INSERT INTO device_auth_challenges
+                    (id, device_id, user_id, nonce_hash, expires_at, created_at, purpose)
+                VALUES (?, ?, ?, ?, ?, ?, 'session')
+                """,
+                (
+                    challenge_id, device_id, owner_id,
+                    hashlib.sha256(nonce.encode("ascii")).hexdigest(),
+                    expires_text, now.isoformat(),
+                ),
+            )
+        message = _signed_message(
+            challenge_id, device_id, owner_id, expires_text, nonce, "session"
+        )
+        return {
+            "challenge_id": challenge_id,
+            "device_id": device_id,
+            "nonce": nonce,
+            "expires_at": expires_text,
+            "message_b64": base64.b64encode(message).decode("ascii"),
+        }
+
+    def verify_login_proof(
+        self,
+        device_id: str,
+        challenge_id: str,
+        nonce: str,
+        signature_b64: str,
+    ) -> str:
+        """Verify and consume an unauthenticated device login proof.
+
+        Returns the owner ID from the trusted device/challenge rows. The
+        caller must still create the session through IdentityRepository,
+        which atomically rechecks that the account and device remain active.
+        """
+        signature = _b64decode(signature_b64, expected_length=64)
+        if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
+            raise ValueError("Invalid challenge nonce")
+        now = _now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT c.user_id, c.nonce_hash, c.expires_at, c.used_at,
+                       d.public_key_b64
+                FROM device_auth_challenges c
+                JOIN devices d ON d.id=c.device_id AND d.user_id=c.user_id
+                JOIN users u ON u.id=c.user_id
+                WHERE c.id=? AND c.device_id=? AND c.purpose='session'
+                  AND d.status='active' AND d.public_key_b64 IS NOT NULL
+                  AND u.deleted_at IS NULL
+                """,
+                (challenge_id, device_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("Device login challenge not found")
+            if row["used_at"] is not None:
+                raise ValueError("Device challenge already used")
+            if datetime.fromisoformat(row["expires_at"]) <= now:
+                raise ValueError("Device challenge expired")
+            nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+            if not secrets.compare_digest(nonce_hash, row["nonce_hash"]):
+                raise ValueError("Device challenge nonce mismatch")
+            owner_id = row["user_id"]
+            public_key = _b64decode(row["public_key_b64"], expected_length=32)
+            message = _signed_message(
+                challenge_id, device_id, owner_id, row["expires_at"], nonce, "session"
+            )
+            try:
+                Ed25519PublicKey.from_public_bytes(public_key).verify(signature, message)
+            except (InvalidSignature, ValueError):
+                raise PermissionError("Device login proof rejected") from None
+            consumed = connection.execute(
+                """
+                UPDATE device_auth_challenges SET used_at=?
+                WHERE id=? AND device_id=? AND purpose='session' AND used_at IS NULL
+                """,
+                (now.isoformat(), challenge_id, device_id),
+            )
+            if consumed.rowcount != 1:
+                raise ValueError("Device challenge already used")
+            connection.execute(
+                """
+                UPDATE devices SET last_seen_at=?
+                WHERE id=? AND user_id=? AND status='active'
+                """,
+                (now.isoformat(), device_id, owner_id),
+            )
+        return owner_id
+
+
     def verify_and_activate(
         self,
         owner_id: str,

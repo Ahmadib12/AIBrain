@@ -204,6 +204,63 @@ async def verify_device_session(
     return {"access_token": token, "user": authenticated_user}
 
 
+
+@router.post("/{device_id}/login/challenge", response_model=dict)
+async def create_passwordless_device_login_challenge(device_id: UUID) -> dict:
+    """Start a passwordless login using an already-enrolled active device."""
+    try:
+        return get_app_state().device_proofs.create_login_challenge(str(device_id))
+    except LookupError:
+        # Unknown, pending, revoked, and unkeyed devices share one response.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "DEVICE_LOGIN_UNAVAILABLE",
+                "message": "Device login is unavailable",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "DEVICE_LOGIN_RATE_LIMITED",
+                "message": "Too many login challenges were requested",
+            },
+        ) from None
+
+
+@router.post("/{device_id}/login/verify", response_model=dict)
+async def verify_passwordless_device_login(
+    device_id: UUID,
+    request: DeviceProofRequest,
+    challenge_id: UUID,
+) -> dict:
+    """Verify device possession and issue a device-bound session."""
+    state = get_app_state()
+    try:
+        owner_id = state.device_proofs.verify_login_proof(
+            str(device_id),
+            str(challenge_id),
+            request.nonce,
+            request.signature_b64,
+        )
+        # create_session performs the final account/device active-state check
+        # in an IMMEDIATE transaction, closing the verification/revocation race.
+        authenticated_user, token = state.identity.create_session(
+            owner_id, device_id=str(device_id)
+        )
+    except (LookupError, PermissionError, ValueError):
+        # Keep unauthenticated proof failures indistinguishable.
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "DEVICE_LOGIN_REJECTED",
+                "message": "Device login could not be verified",
+            },
+        ) from None
+    return {"access_token": token, "user": authenticated_user}
+
+
 @router.post("/{device_id}/confirm", response_model=DeviceRecord)
 async def confirm_device(
     device_id: UUID,

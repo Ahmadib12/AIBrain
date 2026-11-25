@@ -404,3 +404,204 @@ def test_device_session_challenge_issuance_is_rate_limited(client: TestClient) -
     )
     assert limited.status_code == 429
     assert limited.json()["error"]["code"] == "DEVICE_CHALLENGE_RATE_LIMITED"
+
+
+
+def _passwordless_login(client: TestClient, device: dict, private_key):
+    device_id = device["device_id"]
+    challenge_response = client.post(
+        f"/api/v1/devices/{device_id}/login/challenge"
+    )
+    if challenge_response.status_code != 200:
+        return challenge_response, None
+    challenge = challenge_response.json()
+    signature = private_key.sign(
+        base64.b64decode(challenge["message_b64"], validate=True)
+    )
+    response = client.post(
+        f"/api/v1/devices/{device_id}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    return response, challenge
+
+
+def test_passwordless_device_login_needs_no_account_session(client: TestClient) -> None:
+    owner_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+
+    response, _ = _passwordless_login(client, device, private_key)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user"]["device_id"] == device["device_id"]
+    me = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {payload['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["user"]["id"] == payload["user"]["id"]
+    assert me.json()["user"]["device_id"] == device["device_id"]
+
+
+def test_passwordless_login_rejects_unknown_pending_revoked_and_unkeyed_devices(
+    client: TestClient,
+) -> None:
+    owner_headers = _authenticated_headers(client)
+    pending, _ = _enroll_with_key(client, owner_headers)
+    pending_response = client.post(
+        f"/api/v1/devices/{pending['device_id']}/login/challenge"
+    )
+    assert pending_response.status_code == 404
+    assert pending_response.json()["error"]["code"] == "DEVICE_LOGIN_UNAVAILABLE"
+
+    unkeyed = _enroll(client, owner_headers)
+    unkeyed_response = client.post(
+        f"/api/v1/devices/{unkeyed['device_id']}/login/challenge"
+    )
+    assert unkeyed_response.status_code == 404
+    assert unkeyed_response.json()["error"]["code"] == "DEVICE_LOGIN_UNAVAILABLE"
+
+    active, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, active, private_key)
+    assert activated.status_code == 204
+    revoked = client.delete(
+        f"/api/v1/devices/{active['device_id']}", headers=owner_headers
+    )
+    assert revoked.status_code == 200
+    revoked_response = client.post(
+        f"/api/v1/devices/{active['device_id']}/login/challenge"
+    )
+    assert revoked_response.status_code == 404
+    assert revoked_response.json()["error"]["code"] == "DEVICE_LOGIN_UNAVAILABLE"
+
+    unknown_response = client.post(
+        f"/api/v1/devices/{uuid4()}/login/challenge"
+    )
+    assert unknown_response.status_code == 404
+    assert unknown_response.json()["error"]["code"] == "DEVICE_LOGIN_UNAVAILABLE"
+
+
+def test_passwordless_login_rejects_forgery_wrong_nonce_and_replay(
+    client: TestClient,
+) -> None:
+    owner_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+
+    challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/challenge"
+    ).json()
+    message = base64.b64decode(challenge["message_b64"], validate=True)
+    attacker = Ed25519PrivateKey.generate()
+    forged = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(attacker.sign(message)).decode("ascii"),
+        },
+    )
+    assert forged.status_code == 401
+    assert forged.json()["error"]["code"] == "DEVICE_LOGIN_REJECTED"
+
+    wrong_nonce = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json={
+            "nonce": "x" * len(challenge["nonce"]),
+            "signature_b64": base64.b64encode(private_key.sign(message)).decode("ascii"),
+        },
+    )
+    assert wrong_nonce.status_code == 401
+
+    valid_signature = private_key.sign(message)
+    body = {
+        "nonce": challenge["nonce"],
+        "signature_b64": base64.b64encode(valid_signature).decode("ascii"),
+    }
+    first = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json=body,
+    )
+    assert first.status_code == 200
+    replay = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json=body,
+    )
+    assert replay.status_code == 401
+    assert replay.json()["error"]["code"] == "DEVICE_LOGIN_REJECTED"
+
+
+def test_passwordless_login_challenge_is_rate_limited_without_authentication(
+    client: TestClient,
+) -> None:
+    owner_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+
+    for _ in range(10):
+        response = client.post(
+            f"/api/v1/devices/{device['device_id']}/login/challenge"
+        )
+        assert response.status_code == 200
+    limited = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/challenge"
+    )
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "DEVICE_LOGIN_RATE_LIMITED"
+
+
+def test_passwordless_login_is_owner_scoped_and_revocation_is_rechecked(
+    client: TestClient, monkeypatch,
+) -> None:
+    from backend.app.app_state import get_app_state
+
+    owner_headers = _authenticated_headers(client)
+    other_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+
+    # A different device ID cannot reuse the original challenge.
+    challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/challenge"
+    ).json()
+    message = base64.b64decode(challenge["message_b64"], validate=True)
+    signature = private_key.sign(message)
+    cross_device = client.post(
+        f"/api/v1/devices/{uuid4()}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    assert cross_device.status_code == 401
+
+    state = get_app_state()
+    original_create_session = state.identity.create_session
+
+    def revoke_before_session(user_id: str, *, device_id: str | None = None):
+        state.devices.revoke(user_id, device_id)
+        return original_create_session(user_id, device_id=device_id)
+
+    monkeypatch.setattr(state.identity, "create_session", revoke_before_session)
+    response = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "DEVICE_LOGIN_REJECTED"
