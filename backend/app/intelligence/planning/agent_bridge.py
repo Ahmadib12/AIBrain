@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from backend.app.intelligence.planning.contracts import PlanTaskKind
 from backend.app.intelligence.planning.engine import PlanningResult
 from backend.app.persistence.agent_execution import AgentExecutionRepository
 from backend.app.tools.contracts import ToolRegistry
@@ -62,8 +63,14 @@ class PlanRunProposalBridge:
             }:
                 raise ValueError("Plan action mapping has unsupported fields")
             plan_task_id = action["plan_task_id"]
+            if not isinstance(plan_task_id, str) or not plan_task_id.strip():
+                raise ValueError("Plan task identifier is invalid")
             task = planned.get(plan_task_id)
-            if task is None or task.capability_id is None:
+            if (
+                task is None
+                or task.capability_id is None
+                or task.kind in {PlanTaskKind.REQUEST_INPUT, PlanTaskKind.VALIDATE}
+            ):
                 raise PermissionError("Action must map to a declared plan capability")
             if plan_task_id in mapped:
                 raise ValueError("A planned task can be mapped only once")
