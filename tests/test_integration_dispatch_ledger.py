@@ -25,6 +25,26 @@ def test_integration_dispatch_ledger_migration_is_applied_after_bindings():
     }
     assert "agent_run_integration_bindings" in tables
     assert "agent_run_integration_dispatches" in tables
+    assert "session_security_events" in tables
+
+    session_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+    }
+    assert "audit_ref" in session_columns
+
+    session_triggers = {
+        row["name"]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    assert {
+        "audit_session_created",
+        "audit_session_revoked",
+        "audit_session_expired",
+        "prevent_session_audit_ref_replacement",
+    } <= session_triggers
 
     columns = {
         row["name"]
