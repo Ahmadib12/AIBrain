@@ -54,6 +54,10 @@ def test_session_security_history_records_creation_and_revocation(client: TestCl
     assert after_logout.status_code == 401
 
     events = state.session_security_events.list_owned(user_id, limit=100)
+    created_event = next(event for event in events if event["event_type"] == "session.created")
+    revoked_event = next(event for event in events if event["event_type"] == "session.revoked")
+    assert created_event["session_ref"] == revoked_event["session_ref"]
+    assert uuid.UUID(created_event["session_ref"])
     assert [event["event_type"] for event in events].count("session.created") == 1
     assert [event["event_type"] for event in events].count("session.revoked") == 1
 
@@ -125,6 +129,18 @@ def test_session_security_events_are_immutable_and_rollback_with_session(client:
     state = get_app_state()
     user_id = state.identity.resolve_token(token)["id"]
     event = state.session_security_events.list_owned(user_id)[0]
+    session_row = state.database.connect().execute(
+        "SELECT token_hash, audit_ref FROM sessions WHERE user_id=? LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    assert session_row["audit_ref"] == event["session_ref"]
+
+    with pytest.raises(Exception, match="session audit reference is immutable"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE sessions SET audit_ref=? WHERE token_hash=?",
+                (str(uuid.uuid4()), session_row["token_hash"]),
+            )
 
     with pytest.raises(Exception, match="session security events are immutable"):
         with state.database.transaction(immediate=True):
