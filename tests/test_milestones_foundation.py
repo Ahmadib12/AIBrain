@@ -1484,15 +1484,25 @@ def test_logout_is_idempotent_for_unknown_nonempty_token(
 def test_expired_session_is_rejected(
     client: TestClient,
 ) -> None:
-    token = register_and_login(client, "expired-session@example.com")
+    account_token = register_and_login(client, "expired-session@example.com")
     state = get_app_state()
+    user_id = state.identity.resolve_token(account_token)["id"]
+    token = "expired-session-test-token"
     token_hash = __import__("hashlib").sha256(
         token.encode("utf-8")
     ).hexdigest()
     state.database.connect().execute(
-        "UPDATE sessions SET expires_at = ? "
-        "WHERE token_hash = ?",
-        ("2000-01-01T00:00:00+00:00", token_hash),
+        """
+        INSERT INTO sessions (
+            token_hash, user_id, expires_at, created_at, device_id, auth_method
+        ) VALUES (?, ?, ?, ?, NULL, 'account')
+        """,
+        (
+            token_hash,
+            user_id,
+            "2000-01-01T00:00:00+00:00",
+            "1999-12-31T00:00:00+00:00",
+        ),
     )
     state.database.connect().commit()
 
