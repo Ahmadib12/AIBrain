@@ -54,7 +54,16 @@ This document distinguishes implemented foundations from external integrations t
 - AGLI: metadata and provider-independent interfaces exist, but language detection, translation, and speech implementations require engines or credentials.
 - Tools: contracts, persistent request/attempt lifecycle, proposal-bound passkey approval, external adapter certification, and a read-only echo implementation exist. No production provider adapter is enabled.
 - Agents: M8.1–M8.6 identity, lifecycle, capability governance, task control, same-owner coordination, audit, and recovery are implemented and verified. M9 governed execution is verified in Codespaces on 2026-11-24: 823 full-suite tests passed, compilation passed, and dependency checks were clean. M9 supports digest-bound run proposals, explicit owner authorization, live grant/task/agent revalidation, read-only-only execution through the existing ToolExecutionGateway, immutable run definitions, and append-only run events. Current runtime supports only the registered read-only echo tool; no state-changing or consequential agent action is enabled.
-- M10.1 is implemented and verified. M10.2 now has owner-scoped pending connection and exact-scope consent persistence, authenticated catalog/connection APIs, revocation/disconnection, immutable lifecycle events, database owner checks, and account-erasure cleanup. Connections cannot be activated by API input and pending grants are unusable. M10.3 now has a bounded async read-only runtime and trusted adapter registry with owner/scope checks, schema validation, timeout and output bounds, and credential-like output rejection. No provider adapter is registered. M10.2 still lacks trusted provider verification and an encrypted credential vault; M10.4 run-step connection binding and M10.6 provider conformance remain incomplete. M10.5 continues to fail closed for agent writes. No real external integration is active. See `docs/m10-governed-integration-architecture.md`.
+- M10.1–M10.14 integration security foundations are implemented. They include
+  owner-scoped pending connections, exact-scope consent, encrypted credential
+  storage, trusted verifier lifecycle, immutable run bindings, durable dispatch
+  records, asynchronous read-only orchestration, dispatch-time authority checks,
+  pinned HTTPS transport, bounded response handling, provider-readiness gates,
+  and stale-dispatch recovery. No production provider adapter is registered;
+  integrations remain read-only. M10.11–M10.14 were locally verified on
+  2026-11-25 with 53 targeted tests and 901 full-suite tests passing, and
+  `pip check` clean. See
+  `docs/security/integration-security-phases-m10-11-to-m10-14.md`.
 - Android and desktop: no application projects are present; only backend contracts can support future clients.
 - Multimodal: typed media and event contracts exist, but image/document processing and real-time voice are not implemented.
 - Providers: the deterministic mock provider exists; no external provider credentials or local runtime are active.
