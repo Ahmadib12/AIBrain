@@ -95,7 +95,7 @@ python -m compileall -q backend tests scripts
 
 pytest -q tests/test_external_action_readiness.py \
   tests/test_digital_twin.py tests/test_memory_core.py \
-  tests/test_provider_policy.py \
+  tests/test_agent_control_plane.py tests/test_provider_policy.py \
   tests/test_plan_run_proposal_bridge.py \
   tests/test_intelligence_planning_contracts.py \
   tests/test_intelligence_planning_engine.py \
