@@ -78,6 +78,8 @@ class LanguageEngineExecutor:
             if profile.execution_location not in allowed:
                 continue
             languages = set(profile.supported_languages)
+            if capability == LanguageCapability.LANGUAGE_DETECTION and not languages:
+                continue
             if source_language is not None and source_language.lower() not in languages:
                 if not any(
                     pair.source_language.lower() == source_language.lower()
