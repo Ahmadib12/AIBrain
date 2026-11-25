@@ -2994,6 +2994,51 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                39,
+                """
+                -- A session's authentication provenance and device binding are
+                -- immutable. Revocation is one-way and session validity cannot
+                -- be extended by rewriting its expiry.
+                CREATE TRIGGER validate_session_device_binding
+                BEFORE INSERT ON sessions
+                WHEN
+                    (NEW.device_id IS NULL AND NEW.auth_method <> 'account')
+                    OR
+                    (NEW.device_id IS NOT NULL AND (
+                        NEW.auth_method = 'account'
+                        OR NOT EXISTS (
+                            SELECT 1 FROM devices d
+                            WHERE d.id = NEW.device_id
+                              AND d.user_id = NEW.user_id
+                              AND d.status = 'active'
+                        )
+                    ))
+                BEGIN
+                    SELECT RAISE(ABORT, 'session authentication method and device binding are inconsistent');
+                END;
+
+                CREATE TRIGGER prevent_session_identity_mutation
+                BEFORE UPDATE OF token_hash, user_id, expires_at, created_at,
+                                 device_id, auth_method ON sessions
+                WHEN NEW.token_hash IS NOT OLD.token_hash
+                  OR NEW.user_id IS NOT OLD.user_id
+                  OR NEW.expires_at IS NOT OLD.expires_at
+                  OR NEW.created_at IS NOT OLD.created_at
+                  OR NEW.device_id IS NOT OLD.device_id
+                  OR NEW.auth_method IS NOT OLD.auth_method
+                BEGIN
+                    SELECT RAISE(ABORT, 'session identity and authentication binding are immutable');
+                END;
+
+                CREATE TRIGGER prevent_session_unrevocation
+                BEFORE UPDATE OF revoked_at ON sessions
+                WHEN OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NOT OLD.revoked_at
+                BEGIN
+                    SELECT RAISE(ABORT, 'session revocation is irreversible');
+                END;
+                """
+            ),
         )
 
         with self._lock:
