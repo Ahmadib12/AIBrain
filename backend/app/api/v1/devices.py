@@ -326,8 +326,11 @@ async def revoke_device(
     user: dict = Depends(get_current_user),
 ) -> DeviceRecord:
     try:
-        device = get_app_state().devices.revoke(user["id"], str(device_id))
-        get_app_state().device_security_events.record(user["id"], str(device_id), "device.revoked")
+        state = get_app_state()
+        previous = state.devices.get_owned(user["id"], str(device_id))
+        device = state.devices.revoke(user["id"], str(device_id))
+        if previous.status.value != "revoked":
+            state.device_security_events.record(user["id"], str(device_id), "device.revoked")
         return device
     except LookupError:
         raise HTTPException(
