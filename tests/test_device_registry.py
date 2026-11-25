@@ -190,7 +190,7 @@ def test_device_public_key_must_match_enrollment_fingerprint(
 def test_device_records_are_owner_scoped(client: TestClient) -> None:
     owner_headers = _authenticated_headers(client)
     other_headers = _authenticated_headers(client)
-    device = _enroll(client, owner_headers)
+    device, _private_key = _enroll_with_key(client, owner_headers)
 
     other_list = client.get("/api/v1/devices", headers=other_headers)
     assert other_list.status_code == 200
