@@ -127,8 +127,10 @@ class IdentityRepository:
 
         return dict(row) if row is not None else None
 
-    def create_session(self, user_id: str) -> tuple[dict, str]:
-        """Create the standard bearer session after successful authentication."""
+    def create_session(
+        self, user_id: str, *, device_id: str | None = None
+    ) -> tuple[dict, str]:
+        """Create an account session, optionally bound to an active owned device."""
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
         expires = (
@@ -150,17 +152,31 @@ class IdentityRepository:
             if active_user is None:
                 raise LookupError("User not found")
 
+            if device_id is not None:
+                active_device = connection.execute(
+                    """
+                    SELECT id FROM devices
+                    WHERE id = ? AND user_id = ? AND status = 'active'
+                    """,
+                    (device_id, user_id),
+                ).fetchone()
+                if active_device is None:
+                    raise LookupError("Active owned device not found")
+
             connection.execute(
                 """
                 INSERT INTO sessions (
-                    token_hash, user_id, expires_at, created_at
+                    token_hash, user_id, expires_at, created_at, device_id
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (token_hash, user_id, expires, now),
+                (token_hash, user_id, expires, now, device_id),
             )
 
-        return self.get_user(user_id), token
+        user = self.get_user(user_id)
+        if device_id is not None:
+            user["device_id"] = device_id
+        return user, token
 
     def get_user(self, user_id: str) -> dict:
         row = self.database.connect().execute(
@@ -177,12 +193,14 @@ class IdentityRepository:
         row = self.database.connect().execute(
             """
             SELECT u.id, u.email, u.display_name, u.created_at,
-                   s.expires_at
+                   s.expires_at, s.device_id, d.status AS device_status
             FROM sessions s
             JOIN users u ON u.id = s.user_id
+            LEFT JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
             WHERE s.token_hash = ?
               AND s.revoked_at IS NULL
               AND u.deleted_at IS NULL
+              AND (s.device_id IS NULL OR d.status = 'active')
             """,
             (token_hash,),
         ).fetchone()
@@ -190,12 +208,15 @@ class IdentityRepository:
             raise LookupError("Session not found")
         if datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc):
             raise LookupError("Session expired")
-        return {
+        user = {
             "id": row["id"],
             "email": row["email"],
             "display_name": row["display_name"],
             "created_at": row["created_at"],
         }
+        if row["device_id"] is not None:
+            user["device_id"] = row["device_id"]
+        return user
 
     def revoke_token(self, token: str) -> bool:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
