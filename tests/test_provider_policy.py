@@ -160,13 +160,11 @@ def test_provider_without_trusted_profile_is_not_eligible_for_policy_routing():
 
 
 def test_policy_routing_fails_closed_without_trusted_policy():
-    from backend.app.providers.registry import ProviderRegistry
-
     registry = ProviderRegistry()
     registry.register(StubProvider("cloud"))
     router = ModelRouter(registry, Healthy(), CaptureFallback())
     with pytest.raises(PermissionError, match="trusted provider policy"):
-        __import__("asyncio").run(router.route_with_outcome(
+        asyncio.run(router.route_with_outcome(
             request("cloud"),
             requirements=ProviderRoutingRequirements(),
         ))
@@ -184,14 +182,12 @@ def test_provider_profile_rejects_unknown_fields_and_empty_locations():
             provider_version="1.0",
             credential="not-allowed",
         )
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ProviderRoutingRequirements(allowed_locations=())
 
 
 
 def test_provider_policy_enforces_data_residency_allowlist():
-    from backend.app.providers.registry import ProviderRegistry
-
     provider = StubProvider("region-a")
     profiles = ProviderProfileRegistry()
     profiles.register(profile(
