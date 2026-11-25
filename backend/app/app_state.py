@@ -3,6 +3,7 @@ from backend.app.agli.engine_registry import LanguageEngineRegistry
 from backend.app.auth.webauthn_service import WebAuthnService
 from backend.app.persistence.database import Database
 from backend.app.persistence.devices import DeviceRepository
+from backend.app.persistence.device_security_events import DeviceSecurityEventRepository
 from backend.app.devices.proof import DeviceProofRepository
 from backend.app.persistence.agents import AgentRepository
 from backend.app.persistence.agent_control import AgentControlRepository
@@ -32,6 +33,7 @@ class AppState:
         # Runtime engines are registered only by trusted server composition.
         self.agli_engines = LanguageEngineRegistry()
         self.devices = DeviceRepository(self.database)
+        self.device_security_events = DeviceSecurityEventRepository(self.database)
         self.device_proofs = DeviceProofRepository(self.database)
         self.identity = IdentityRepository(
             self.database,
