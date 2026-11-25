@@ -382,3 +382,24 @@ def test_device_session_challenge_cannot_be_replayed(client: TestClient) -> None
         params=params, headers=headers, json=body,
     )
     assert replay.status_code == 404
+
+
+def test_device_session_challenge_issuance_is_rate_limited(client: TestClient) -> None:
+    headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, headers)
+    activated, _ = _activate_with_proof(client, headers, device, private_key)
+    assert activated.status_code == 204
+
+    for _ in range(10):
+        response = client.post(
+            f"/api/v1/devices/{device['device_id']}/session/challenge",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    limited = client.post(
+        f"/api/v1/devices/{device['device_id']}/session/challenge",
+        headers=headers,
+    )
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "DEVICE_CHALLENGE_RATE_LIMITED"
