@@ -42,7 +42,6 @@ async def enroll_device(
         # Enrollment is deliberately pending. It is not a trusted device
         # assertion and does not create a device-bound session.
         device = get_app_state().devices.enroll(user["id"], request)
-        get_app_state().device_security_events.record(user["id"], str(device.device_id), "device.enrolled")
         return device
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -71,7 +70,6 @@ async def register_device_public_key(
         get_app_state().device_proofs.register_public_key(
             user["id"], str(device_id), request.public_key_b64
         )
-        get_app_state().device_security_events.record(user["id"], str(device_id), "device.key_registered")
     except LookupError:
         raise HTTPException(
             status_code=404,
@@ -120,7 +118,6 @@ async def verify_device_proof(
             user["id"], str(device_id), challenge_id,
             request.nonce, request.signature_b64,
         )
-        get_app_state().device_security_events.record(user["id"], str(device_id), "device.activated")
     except LookupError:
         raise HTTPException(
             status_code=404,
@@ -181,7 +178,6 @@ async def verify_device_session(
         authenticated_user, token = state.identity.create_session(
             user["id"], device_id=str(device_id)
         )
-        state.device_security_events.record(user["id"], str(device_id), "device.session_authenticated")
     except LookupError:
         raise HTTPException(
             status_code=404,
@@ -252,9 +248,8 @@ async def verify_passwordless_device_login(
         # create_session performs the final account/device active-state check
         # in an IMMEDIATE transaction, closing the verification/revocation race.
         authenticated_user, token = state.identity.create_session(
-            owner_id, device_id=str(device_id)
+            owner_id, device_id=str(device_id), auth_method="device_login"
         )
-        state.device_security_events.record(owner_id, str(device_id), "device.login_authenticated")
     except (LookupError, PermissionError, ValueError):
         # Keep unauthenticated proof failures indistinguishable.
         raise HTTPException(
@@ -311,11 +306,17 @@ async def report_device_capabilities(
 @router.get("/security-events", response_model=list[dict])
 async def list_device_security_events(
     limit: int = 50,
+    before_occurred_at: str | None = None,
+    before_event_id: UUID | None = None,
     user: dict = Depends(get_current_user),
 ) -> list[dict]:
     """Return the authenticated owner's recent device security history."""
     try:
-        return list(get_app_state().device_security_events.list_owned(user["id"], limit=limit))
+        return list(get_app_state().device_security_events.list_owned(
+            user["id"], limit=limit,
+            before_occurred_at=before_occurred_at,
+            before_event_id=str(before_event_id) if before_event_id else None,
+        ))
     except ValueError:
         raise HTTPException(status_code=422, detail={"code": "INVALID_EVENT_PAGE_SIZE", "message": "Limit must be between 1 and 100"}) from None
 
@@ -329,8 +330,6 @@ async def revoke_device(
         state = get_app_state()
         previous = state.devices.get_owned(user["id"], str(device_id))
         device = state.devices.revoke(user["id"], str(device_id))
-        if previous.status.value != "revoked":
-            state.device_security_events.record(user["id"], str(device_id), "device.revoked")
         return device
     except LookupError:
         raise HTTPException(
