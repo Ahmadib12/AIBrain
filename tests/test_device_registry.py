@@ -626,10 +626,11 @@ def test_passwordless_device_login_rejects_expired_challenge(client: TestClient)
         f"/api/v1/devices/{device['device_id']}/login/challenge"
     ).json()
     state = get_app_state()
-    state.database.connect().execute(
-        "UPDATE device_auth_challenges SET expires_at=? WHERE id=?",
-        ("2000-01-01T00:00:00+00:00", challenge["challenge_id"]),
-    )
+    with state.database.transaction(immediate=True):
+        state.database.connect().execute(
+            "UPDATE device_auth_challenges SET expires_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", challenge["challenge_id"]),
+        )
     signature = private_key.sign(
         base64.b64decode(challenge["message_b64"], validate=True)
     )
