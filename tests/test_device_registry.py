@@ -644,3 +644,93 @@ def test_passwordless_device_login_rejects_expired_challenge(client: TestClient)
     )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "DEVICE_LOGIN_REJECTED"
+
+
+
+def test_session_device_binding_and_authentication_provenance_are_immutable(
+    client: TestClient,
+) -> None:
+    import pytest
+    from backend.app.app_state import get_app_state
+
+    owner_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+    session = _create_device_session(client, owner_headers, device, private_key)
+    assert session.status_code == 200
+
+    token = session.json()["access_token"]
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    state = get_app_state()
+    row = state.database.connect().execute(
+        "SELECT * FROM sessions WHERE token_hash=?", (token_hash,)
+    ).fetchone()
+    assert row["device_id"] == device["device_id"]
+    assert row["auth_method"] == "device_proof"
+
+    for sql, values in (
+        ("UPDATE sessions SET device_id=NULL WHERE token_hash=?", (token_hash,)),
+        ("UPDATE sessions SET auth_method='account' WHERE token_hash=?", (token_hash,)),
+        ("UPDATE sessions SET expires_at='2999-01-01T00:00:00+00:00' WHERE token_hash=?", (token_hash,)),
+        ("UPDATE sessions SET token_hash=? WHERE token_hash=?", ("f" * 64, token_hash)),
+    ):
+        with pytest.raises(Exception, match="session identity and authentication binding are immutable"):
+            with state.database.transaction(immediate=True):
+                state.database.connect().execute(sql, values)
+
+
+def test_database_rejects_sessions_with_invalid_device_authentication_binding(
+    client: TestClient,
+) -> None:
+    import pytest
+    from datetime import timedelta
+    from backend.app.app_state import get_app_state
+
+    owner_headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, private_key)
+    assert activated.status_code == 204
+
+    state = get_app_state()
+    user_id = state.identity.resolve_token(
+        owner_headers["Authorization"].removeprefix("Bearer ")
+    )["id"]
+    now = datetime.now(timezone.utc)
+    expires = (now + timedelta(hours=1)).isoformat()
+
+    with pytest.raises(Exception, match="session authentication method and device binding are inconsistent"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                """INSERT INTO sessions
+                   (token_hash,user_id,expires_at,created_at,device_id,auth_method)
+                   VALUES (?,?,?,?,?,'account')""",
+                ("a" * 64, user_id, expires, now.isoformat(), device["device_id"]),
+            )
+
+    with pytest.raises(Exception, match="session authentication method and device binding are inconsistent"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                """INSERT INTO sessions
+                   (token_hash,user_id,expires_at,created_at,device_id,auth_method)
+                   VALUES (?,?,?, ?,NULL,'device_login')""",
+                ("b" * 64, user_id, expires, now.isoformat()),
+            )
+
+
+def test_session_revocation_cannot_be_reversed(client: TestClient) -> None:
+    import pytest
+    from backend.app.app_state import get_app_state
+
+    headers = _authenticated_headers(client)
+    token = headers["Authorization"].removeprefix("Bearer ")
+    state = get_app_state()
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert state.identity.revoke_token(token)
+
+    with pytest.raises(Exception, match="session revocation is irreversible"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE sessions SET revoked_at=NULL WHERE token_hash=?",
+                (token_hash,),
+            )
