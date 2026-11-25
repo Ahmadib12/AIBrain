@@ -34,7 +34,7 @@ class SessionSecurityEventRepository:
         if before_occurred_at is None:
             rows = self.database.connect().execute(
                 """
-                SELECT id, device_id, auth_method, event_type, occurred_at
+                SELECT id, session_ref, device_id, auth_method, event_type, occurred_at
                 FROM session_security_events
                 WHERE user_id=?
                 ORDER BY occurred_at DESC, id DESC
@@ -64,6 +64,7 @@ class SessionSecurityEventRepository:
         return tuple(
             {
                 "event_id": row["id"],
+                "session_ref": row["session_ref"],
                 "device_id": row["device_id"],
                 "auth_method": row["auth_method"],
                 "event_type": row["event_type"],
