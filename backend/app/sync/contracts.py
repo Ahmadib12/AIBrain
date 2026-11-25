@@ -3,12 +3,14 @@
 These schemas carry opaque encrypted payloads. They do not claim end-to-end
 encryption: key establishment, authorization, and encryption are separate services.
 """
+import base64
 from datetime import datetime
 from enum import Enum
+import hashlib
 import re
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _B64 = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
@@ -54,29 +56,34 @@ class SyncOperation(BaseModel):
     @field_validator("ciphertext_b64")
     @classmethod
     def validate_ciphertext_encoding(cls, value: str | None) -> str | None:
-        if value is not None and (not value or not _B64.fullmatch(value)):
+        if value is None:
+            return value
+        if not value or not _B64.fullmatch(value):
             raise ValueError("Ciphertext must be base64 encoded")
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise ValueError("Ciphertext must be valid base64") from error
+        if not decoded or len(decoded) > 65_536:
+            raise ValueError("Ciphertext must contain between 1 and 65536 bytes")
         return value
 
-    @field_validator("ciphertext_sha256")
-    @classmethod
-    def validate_ciphertext_digest(cls, value: str | None) -> str | None:
-        if value is not None and not _SHA256.fullmatch(value):
-            raise ValueError("Ciphertext digest must be a lowercase SHA-256 hex value")
-        return value
-
-    @field_validator("key_reference")
-    @classmethod
-    def validate_key_reference(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
+    @model_validator(mode="after")
+    def validate_payload_binding(self):
+        fields = (self.ciphertext_b64, self.ciphertext_sha256, self.key_reference)
+        if self.operation == SyncOperationKind.DELETE:
+            if any(value is not None for value in fields):
+                raise ValueError("Delete operations must not carry a payload or key reference")
+            return self
+        if any(value is None for value in fields):
+            raise ValueError("Upsert operations require ciphertext, digest, and key reference")
+        decoded = base64.b64decode(self.ciphertext_b64, validate=True)
+        digest = hashlib.sha256(decoded).hexdigest()
+        if digest != self.ciphertext_sha256:
+            raise ValueError("Ciphertext digest does not match payload")
+        if not self.key_reference.strip():
             raise ValueError("Key reference must not be blank")
-        return value
-
-    @field_validator("operation")
-    @classmethod
-    def require_delete_without_payload(cls, value: SyncOperationKind, info):
-        # Cross-field validation is performed by the model validator below.
-        return value
+        return self
 
 
 class SyncBatchRequest(BaseModel):
