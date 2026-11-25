@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, Depends, HTTPException
 from backend.app.concurrency import require_ai_capacity
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -19,6 +20,8 @@ from backend.app.intelligence.schemas import (
     ResponseStatus,
     TaskType,
 )
+from backend.app.intelligence.classifier import DeterministicTaskClassifier
+from backend.app.intelligence.planning.engine import PlanningEngine
 from backend.app.intelligence.trace import (
     DecisionReasonCode,
     DecisionTraceBuilder,
@@ -27,6 +30,23 @@ from backend.app.intelligence.trace import (
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
+
+
+class PlanningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/plan")
+async def plan_intelligence(
+    request: PlanningRequest,
+    _capacity: None = Depends(require_ai_capacity, scope="request"),
+) -> dict:
+    """Return a deterministic bounded plan; this endpoint never executes."""
+    classifier = DeterministicTaskClassifier()
+    classification = classifier.classify(request.text)
+    result = PlanningEngine().plan(request.text, classification)
+    return result.model_dump(mode="json")
 
 
 
