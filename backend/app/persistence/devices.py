@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from backend.app.devices.contracts import (
     DeviceCapabilityReport,
-    DeviceLifecycleStatus,
     DeviceRecord,
     DeviceRegistrationRequest,
 )
