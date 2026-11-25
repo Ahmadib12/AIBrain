@@ -101,9 +101,9 @@ class DeviceProofRepository:
             recent = connection.execute(
                 """
                 SELECT COUNT(*) AS total FROM device_auth_challenges
-                WHERE device_id=? AND user_id=? AND created_at > ?
+                WHERE device_id=? AND user_id=? AND purpose=? AND created_at > ?
                 """,
-                (device_id, owner_id, cutoff),
+                (device_id, owner_id, purpose, cutoff),
             ).fetchone()["total"]
             if recent >= 10:
                 raise PermissionError("Device challenge rate limit exceeded")
