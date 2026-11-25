@@ -1,4 +1,7 @@
+import asyncio
+
 import pytest
+from pydantic import ValidationError
 
 from backend.app.providers.interface import AIProvider
 from backend.app.providers.policy import (
@@ -10,6 +13,7 @@ from backend.app.providers.policy import (
     ProviderRoutingRequirements,
 )
 from backend.app.providers.router import ModelRouter
+from backend.app.providers.registry import ProviderRegistry
 from backend.app.providers.routing import ProviderRoutingResult, ProviderRoutingSummary
 from backend.app.providers.schemas import (
     ChatMessage,
@@ -118,16 +122,17 @@ def test_sensitive_request_is_routed_only_to_trusted_local_profile():
         ProviderExecutionLocation.CLOUD,
         (ProviderDataClass.PUBLIC,),
     ))
+    provider_registry = ProviderRegistry()
+    provider_registry.register(local)
+    provider_registry.register(cloud)
     router = ModelRouter(
-        provider_registry := __import__("backend.app.providers.registry", fromlist=["ProviderRegistry"]).ProviderRegistry(),
+        provider_registry,
         Healthy(),
         CaptureFallback(),
         provider_policy=ProviderRoutingPolicy(registry),
     )
-    provider_registry.register(local)
-    provider_registry.register(cloud)
 
-    result = __import__("asyncio").run(router.route_with_outcome(
+    result = asyncio.run(router.route_with_outcome(
         request("local"),
         requirements=ProviderRoutingRequirements(
             data_classification=ProviderDataClass.SENSITIVE,
@@ -141,13 +146,11 @@ def test_sensitive_request_is_routed_only_to_trusted_local_profile():
 
 def test_provider_without_trusted_profile_is_not_eligible_for_policy_routing():
     provider = StubProvider("unprofiled")
-    from backend.app.providers.registry import ProviderRegistry
-
     registry = ProviderRegistry()
     registry.register(provider)
     router = ModelRouter(registry, Healthy(), CaptureFallback(), provider_policy=ProviderRoutingPolicy(ProviderProfileRegistry()))
     with pytest.raises(PermissionError, match="No registered provider"):
-        __import__("asyncio").run(router.route_with_outcome(
+        asyncio.run(router.route_with_outcome(
             request("unprofiled"),
             requirements=ProviderRoutingRequirements(
                 data_classification=ProviderDataClass.SENSITIVE,
@@ -170,7 +173,7 @@ def test_policy_routing_fails_closed_without_trusted_policy():
 
 
 def test_provider_profile_rejects_unknown_fields_and_empty_locations():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ProviderProfile(
             provider_id="bad",
             execution_location="cloud",
