@@ -596,9 +596,16 @@ def test_passwordless_login_is_owner_scoped_and_revocation_is_rechecked(
     state = get_app_state()
     original_create_session = state.identity.create_session
 
-    def revoke_before_session(user_id: str, *, device_id: str | None = None):
+    def revoke_before_session(
+        user_id: str,
+        *,
+        device_id: str | None = None,
+        auth_method: str | None = None,
+    ):
         state.devices.revoke(user_id, device_id)
-        return original_create_session(user_id, device_id=device_id)
+        return original_create_session(
+            user_id, device_id=device_id, auth_method=auth_method
+        )
 
     monkeypatch.setattr(state.identity, "create_session", revoke_before_session)
     response = client.post(
