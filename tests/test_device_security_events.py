@@ -57,8 +57,11 @@ def _activate_with_proof(client: TestClient, headers: dict[str, str], device: di
 def test_device_security_event_page_size_contract():
     from backend.app.persistence.device_security_events import DeviceSecurityEventRepository
 
+    from backend.app.app_state import get_app_state
+    from backend.app.persistence.device_security_events import DeviceSecurityEventRepository
+    state = get_app_state()
     try:
-        DeviceSecurityEventRepository.list_owned(None, "owner", limit=101)
+        DeviceSecurityEventRepository(state.database).list_owned("owner", limit=101)
     except ValueError as exc:
         assert "between 1 and 100" in str(exc)
     else:
@@ -111,3 +114,67 @@ def test_device_security_history_records_login_and_revocation_once(client):
     kinds = [item["event_type"] for item in events]
     assert kinds.count("device.login_authenticated") == 1
     assert kinds.count("device.revoked") == 1
+
+
+def test_device_security_cursor_is_stable_for_equal_timestamps(client: TestClient):
+    from backend.app.app_state import get_app_state
+
+    headers = _authenticated_headers(client)
+    device, key = _enroll_with_key(client, headers)
+    activated, _ = _activate_with_proof(client, headers, device, key)
+    assert activated.status_code == 204
+
+    state = get_app_state()
+    rows = state.database.connect().execute(
+        "SELECT id, occurred_at FROM device_security_events WHERE user_id=? ORDER BY id",
+        (client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"],),
+    ).fetchall()
+    assert len(rows) >= 3
+    timestamp = "2026-01-01T00:00:00+00:00"
+    with state.database.transaction(immediate=True):
+        state.database.connect().execute(
+            "UPDATE device_security_events SET occurred_at=? WHERE user_id=?",
+            (timestamp, client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"]),
+        )
+    ordered = state.database.connect().execute(
+        "SELECT id FROM device_security_events WHERE user_id=? ORDER BY occurred_at DESC,id DESC",
+        (client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"],),
+    ).fetchall()
+    first = client.get("/api/v1/devices/security-events?limit=2", headers=headers).json()
+    assert len(first) == 2
+    second = client.get(
+        "/api/v1/devices/security-events",
+        params={"limit": 2, "before_occurred_at": timestamp, "before_event_id": first[-1]["event_id"]},
+        headers=headers,
+    ).json()
+    assert {item["event_id"] for item in first}.isdisjoint(
+        {item["event_id"] for item in second}
+    )
+    assert len(first) + len(second) >= 3
+
+
+def test_device_security_history_survives_device_removal_and_is_immutable(client: TestClient):
+    headers = _authenticated_headers(client)
+    device, key = _enroll_with_key(client, headers)
+    activated, _ = _activate_with_proof(client, headers, device, key)
+    assert activated.status_code == 204
+    before = client.get("/api/v1/devices/security-events", headers=headers).json()
+    assert any(item["device_id"] == device["device_id"] for item in before)
+
+    from backend.app.app_state import get_app_state
+    state = get_app_state()
+    with state.database.transaction(immediate=True):
+        state.database.connect().execute(
+            "DELETE FROM devices WHERE id=?", (device["device_id"],)
+        )
+    after = client.get("/api/v1/devices/security-events", headers=headers).json()
+    assert [item["event_id"] for item in after] == [item["event_id"] for item in before]
+    try:
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "DELETE FROM device_security_events WHERE id=?", (after[0]["event_id"],)
+            )
+    except Exception as exc:
+        assert "only be erased with the account" in str(exc)
+    else:
+        raise AssertionError("direct audit deletion was allowed")
