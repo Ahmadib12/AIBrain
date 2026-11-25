@@ -634,3 +634,55 @@ def test_integration_agent_run_persists_immutable_owner_scope_binding(
             user_id, raw_run, state.integrations, state.integration_connections
         )
 
+
+
+
+def test_planning_api_creates_proposal_without_authorizing_or_executing(client: TestClient):
+    token = owner_token(client, "m14-plan-owner@example.com")
+    agent = create_agent(client, token)
+    grant = client.post(
+        f"/api/v1/agents/{agent['id']}/capabilities",
+        headers=auth(token),
+        json={"capability": "text_generation"},
+    )
+    assert grant.status_code == 201, grant.text
+    task = create_task(client, token, agent["id"], ["text_generation"])
+    state = get_app_state()
+    user_id = state.identity.resolve_token(token)["id"]
+    before = state.database.connect().execute(
+        "SELECT COUNT(*) FROM tool_requests WHERE user_id=?",
+        (user_id,),
+    ).fetchone()[0]
+
+    response = client.post(
+        f"/api/v1/agent-tasks/{task['id']}/plan-runs",
+        headers=auth(token),
+        json={
+            "text": "Explain networking",
+            "actions": [{
+                "plan_task_id": "produce-result",
+                "tool_id": "echo",
+                "arguments": {"text": "safe proposed result"},
+                "required_capability": "text_generation",
+            }],
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["assessment"]["execution_permitted"] is False
+    assert body["execution_authorized"] is False
+    assert body["execution_started"] is False
+    assert body["run"]["status"] == "proposed"
+
+    after = state.database.connect().execute(
+        "SELECT COUNT(*) FROM tool_requests WHERE user_id=?",
+        (user_id,),
+    ).fetchone()[0]
+    assert after == before
+
+    blocked = client.post(
+        f"/api/v1/agent-runs/{body['run']['id']}/execute",
+        headers=auth(token),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "AGENT_RUN_NOT_EXECUTABLE"
