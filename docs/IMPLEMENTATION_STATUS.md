@@ -1,5 +1,32 @@
 # AIBrain Implementation Status
 
+## Latest milestone increment — M11–M14
+
+A first coordinated M11–M14 implementation increment is present on
+`dev/tool-authorization-lifecycle`:
+
+- M11: production external-action adapters now have an additional
+  composition-time readiness gate bound to provider, adapter/version, account
+  scope, verifier, pinned transport, and conformance evidence. Existing
+  operator certification and one-time passkey approval remain mandatory.
+  No production external action adapter is registered.
+- M12: a consent-gated `GET /api/v1/personal/digital-twin` endpoint projects
+  explicit owner-approved preferences, goals, and projects; transient context
+  and inferred observations are excluded. The repository reads active consent
+  and its memory generation in one query.
+- M13: trusted provider profiles and policy-aware routing enforce execution
+  location, data classification, capabilities, cost tier, and data residency
+  when trusted server-side requirements are supplied. No real provider or
+  local inference runtime is enabled.
+- M14: deterministic bounded plans can be mapped to durable M9 read-only run
+  proposals through `POST /api/v1/agent-tasks/{task_id}/plan-runs`. The route
+  never authorizes or executes; the owner must use the separate M9 lifecycle.
+
+These are implementation additions, not a claim that production external
+actions, real model providers, cross-device synchronization, or autonomous
+consequential execution are complete. See
+`docs/architecture/milestones-m11-to-m14.md` for scope and verification.
+
 This document distinguishes implemented foundations from external integrations that require additional credentials, hardware, or platform support.
 
 ## Implemented
