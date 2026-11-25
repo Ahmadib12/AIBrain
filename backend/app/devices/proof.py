@@ -118,7 +118,7 @@ class DeviceProofRepository:
         signature_b64: str,
     ) -> None:
         signature = _b64decode(signature_b64, expected_length=64)
-        if not isinstance(nonce, str) or not 20 <= len(nonce) <= 128:
+        if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
             raise ValueError("Invalid challenge nonce")
         now = _now()
         with self.database.transaction(immediate=True):
