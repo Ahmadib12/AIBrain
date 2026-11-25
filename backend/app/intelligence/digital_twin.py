@@ -49,10 +49,8 @@ class PersonalDigitalTwinAssembler:
         *,
         user_id: str,
     ) -> PersonalDigitalTwinSnapshot:
-        consent = repository.consent_status(user_id)
-        if not consent["enabled"]:
-            raise PermissionError("Active personal-memory consent is required")
-        records = repository.list(user_id)
+        approved = repository.approved_digital_twin_records(user_id)
+        records = approved["records"]
         buckets: dict[str, list[DigitalTwinRecord]] = {
             "preference": [],
             "goal": [],
@@ -80,7 +78,7 @@ class PersonalDigitalTwinAssembler:
             ))
         return PersonalDigitalTwinSnapshot(
             generated_at=datetime.now(timezone.utc).isoformat(),
-            consent_policy_version=consent["policy_version"],
+            consent_policy_version=approved["policy_version"],
             preferences=tuple(buckets["preference"]),
             goals=tuple(buckets["goal"]),
             projects=tuple(buckets["project"]),
