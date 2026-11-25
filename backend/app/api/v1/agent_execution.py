@@ -11,6 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
 from backend.app.app_state import get_app_state
+from backend.app.intelligence.classifier import DeterministicTaskClassifier
+from backend.app.intelligence.planning.agent_bridge import PlanRunProposalBridge
+from backend.app.intelligence.planning.engine import PlanningEngine
 
 
 router = APIRouter(tags=["agent-execution"])
@@ -31,6 +34,20 @@ class AgentRunActionRequest(BaseModel):
 class AgentRunCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     actions: list[AgentRunActionRequest] = Field(min_length=1, max_length=10)
+
+
+class PlanActionMappingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_task_id: str = Field(min_length=1, max_length=64)
+    tool_id: str = Field(min_length=1, max_length=100)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    required_capability: str = Field(min_length=1, max_length=80)
+
+
+class AgentPlanRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=500)
+    actions: list[PlanActionMappingRequest] = Field(min_length=1, max_length=10)
 
 
 def _reject_unbound_integration_actions(actions, state) -> None:
@@ -61,6 +78,56 @@ def _runtime():
     # Import lazily to avoid coupling router registration to the tools API.
     from backend.app.api.v1.tools import _get_tool_gateway, tool_registry
     return tool_registry, _get_tool_gateway()
+
+
+@router.post("/agent-tasks/{task_id}/plan-runs", status_code=201)
+async def create_planned_agent_run(
+    task_id: str,
+    request: AgentPlanRunRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Create a durable M9 proposal from a deterministic bounded plan.
+
+    The endpoint never authorizes or executes the resulting run. The owner
+    must use the separate authorize and execute endpoints.
+    """
+    try:
+        classifier = DeterministicTaskClassifier()
+        classification = classifier.classify(request.text)
+        mapped_capabilities = tuple(
+            item.required_capability for item in request.actions
+        )
+        planning = PlanningEngine().plan(
+            request.text,
+            classification,
+            available_capabilities=mapped_capabilities,
+        )
+        state = get_app_state()
+        registry, _ = _runtime()
+        run = PlanRunProposalBridge().create_proposal(
+            user["id"],
+            task_id,
+            planning,
+            [item.model_dump() for item in request.actions],
+            repository=state.agent_execution,
+            registry=registry,
+        )
+        return {
+            "intent": planning.intent.model_dump(mode="json"),
+            "plan": planning.plan.model_dump(mode="json"),
+            "assessment": planning.assessment.model_dump(mode="json"),
+            "run": run,
+            "execution_authorized": False,
+            "execution_started": False,
+        }
+    except LookupError:
+        _error(404, "AGENT_TASK_OR_TOOL_NOT_FOUND", "Agent task or tool not found")
+    except PermissionError:
+        _error(403, "AGENT_PLAN_NOT_PERMITTED", "The plan exceeds current agent authority")
+    except ValueError:
+        _error(400, "INVALID_AGENT_PLAN", "The plan or action mapping is invalid")
+    except sqlite3.IntegrityError:
+        _error(409, "AGENT_PLAN_CONFLICT", "The plan proposal could not be persisted")
 
 
 @router.post("/agent-tasks/{task_id}/runs", status_code=201)
