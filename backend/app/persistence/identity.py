@@ -129,9 +129,11 @@ class IdentityRepository:
 
     def create_session(
         self, user_id: str, *, device_id: str | None = None,
-        auth_method: str = "account",
+        auth_method: str | None = None,
     ) -> tuple[dict, str]:
         """Create an account session, optionally bound to an active owned device."""
+        if auth_method is None:
+            auth_method = "device_proof" if device_id is not None else "account"
         if auth_method not in {"account", "device_proof", "device_login"}:
             raise ValueError("Unsupported session authentication method")
         if device_id is None and auth_method != "account":
