@@ -2703,6 +2703,44 @@ created_at TEXT NOT NULL,
                 BEGIN SELECT RAISE(ABORT, 'task requires active agent and granted capability ceiling'); END;
                 """,
             ),
+            (
+                33,
+                """
+                CREATE TABLE devices (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    platform TEXT NOT NULL
+                        CHECK (platform IN ('android','windows','macos','linux')),
+                    app_version TEXT NOT NULL
+                        CHECK (length(app_version) BETWEEN 1 AND 50),
+                    display_name TEXT,
+                    public_key_fingerprint TEXT NOT NULL
+                        CHECK (length(public_key_fingerprint) = 64),
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','active','revoked')),
+                    enrolled_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    revoked_at TEXT,
+                    capability_report_json TEXT NOT NULL DEFAULT '[]',
+                    capability_reported_at TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, public_key_fingerprint)
+                );
+
+                CREATE INDEX idx_devices_owner_status
+                    ON devices(user_id, status, enrolled_at);
+
+                CREATE TRIGGER prevent_device_for_inactive_user
+                BEFORE INSERT ON devices
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id = NEW.user_id AND deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device requires an active owner');
+                END;
+                """,
+            ),
         )
 
         with self._lock:
