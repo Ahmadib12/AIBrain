@@ -58,11 +58,14 @@ class DeviceSecurityEventRepository:
             )
 
     def list_owned(
-        self, owner_id: str, *, limit: int = 50, before: str | None = None
+        self, owner_id: str, *, limit: int = 50,
+        before_occurred_at: str | None = None, before_event_id: str | None = None,
     ) -> tuple[dict, ...]:
         if not 1 <= limit <= 100:
             raise ValueError("Event page size must be between 1 and 100")
-        if before is None:
+        if (before_occurred_at is None) != (before_event_id is None):
+            raise ValueError("Both event cursor fields must be supplied together")
+        if before_occurred_at is None:
             rows = self.database.connect().execute(
                 """
                 SELECT id, device_id, event_type, occurred_at, details_json
@@ -78,11 +81,12 @@ class DeviceSecurityEventRepository:
                 """
                 SELECT id, device_id, event_type, occurred_at, details_json
                 FROM device_security_events
-                WHERE user_id=? AND occurred_at < ?
+                WHERE user_id=?
+                  AND (occurred_at < ? OR (occurred_at = ? AND id < ?))
                 ORDER BY occurred_at DESC, id DESC
                 LIMIT ?
                 """,
-                (owner_id, before, limit),
+                (owner_id, before_occurred_at, before_occurred_at, before_event_id, limit),
             ).fetchall()
         return tuple({
             "event_id": row["id"],
