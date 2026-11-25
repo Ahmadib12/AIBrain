@@ -4,13 +4,10 @@ Client capability declarations are descriptive input, not authorization grants.
 """
 from datetime import datetime
 from enum import Enum
-import re
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
-_FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
 
 
 class DevicePlatform(str, Enum):
