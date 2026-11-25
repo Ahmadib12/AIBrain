@@ -48,6 +48,7 @@ class ProviderRoutingRequirements(BaseModel):
     )
     required_capabilities: tuple[str, ...] = Field(default=(), max_length=20)
     max_cost_tier: int = Field(default=5, ge=0, le=5)
+    allowed_data_residencies: tuple[str, ...] = Field(default=(), max_length=10)
 
 
 class ProviderProfileRegistry:
@@ -90,6 +91,11 @@ class ProviderRoutingPolicy:
             if requirements.data_classification not in profile.data_classifications:
                 continue
             if profile.cost_tier > requirements.max_cost_tier:
+                continue
+            if (
+                requirements.allowed_data_residencies
+                and profile.data_residency not in requirements.allowed_data_residencies
+            ):
                 continue
             if not required_caps.issubset(set(profile.capabilities)):
                 continue
