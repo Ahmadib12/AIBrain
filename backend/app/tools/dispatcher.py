@@ -16,6 +16,10 @@ from backend.app.tools.contracts import (
     execution_action_digest,
 )
 from backend.app.tools.external import ExternalToolAction, ExternalToolAdapter
+from backend.app.tools.external_action_readiness import (
+    ExternalActionReadinessEvidence,
+    ExternalActionReadinessGate,
+)
 
 
 def _capability_snapshot(adapter: ExternalToolAdapter) -> dict[str, Any]:
@@ -36,11 +40,21 @@ class ExternalToolAdapterRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, ExternalToolAdapter] = {}
 
-    def register(self, tool_id: str, adapter: ExternalToolAdapter) -> None:
+    def register(
+        self,
+        tool_id: str,
+        adapter: ExternalToolAdapter,
+        *,
+        readiness: ExternalActionReadinessEvidence | None = None,
+    ) -> None:
         if not isinstance(tool_id, str) or not tool_id.strip():
             raise ValueError("Tool ID must be a non-empty string")
         if not isinstance(adapter, ExternalToolAdapter):
             raise TypeError("A conforming external adapter is required")
+        if getattr(adapter, "production_provider", False) is True:
+            ExternalActionReadinessGate.validate(adapter.capabilities, readiness)
+        elif readiness is not None:
+            raise ValueError("Readiness evidence is reserved for production external adapters")
         if tool_id in self._adapters:
             raise ValueError("An external adapter is already registered for this tool")
         self._adapters[tool_id] = adapter
