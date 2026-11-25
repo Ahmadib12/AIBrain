@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 import base64
 import hashlib
-import json
 from uuid import uuid4
 
 import pytest
