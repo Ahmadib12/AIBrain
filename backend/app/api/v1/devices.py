@@ -126,6 +126,68 @@ async def verify_device_proof(
         ) from None
 
 
+@router.post("/{device_id}/session/challenge", response_model=dict)
+async def create_device_session_challenge(
+    device_id: UUID,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        return get_app_state().device_proofs.create_challenge(
+            user["id"], str(device_id), purpose="session"
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "ACTIVE_DEVICE_NOT_FOUND",
+                "message": "Active keyed device not found",
+            },
+        ) from None
+
+
+@router.post("/{device_id}/session/verify", response_model=dict)
+async def verify_device_session(
+    device_id: UUID,
+    request: DeviceProofRequest,
+    challenge_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    state = get_app_state()
+    try:
+        state.device_proofs.verify_session_proof(
+            user["id"], str(device_id), challenge_id,
+            request.nonce, request.signature_b64,
+        )
+        authenticated_user, token = state.identity.create_session(
+            user["id"], device_id=str(device_id)
+        )
+    except LookupError:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "DEVICE_SESSION_CHALLENGE_NOT_FOUND",
+                "message": "Device session challenge not found",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "DEVICE_SESSION_PROOF_REJECTED",
+                "message": "Device session proof could not be verified",
+            },
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DEVICE_SESSION_CHALLENGE_INVALID",
+                "message": "Device session challenge is invalid, expired, or already used",
+            },
+        ) from None
+    return {"access_token": token, "user": authenticated_user}
+
+
 @router.post("/{device_id}/confirm", response_model=DeviceRecord)
 async def confirm_device(
     device_id: UUID,
