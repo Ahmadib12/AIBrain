@@ -11,10 +11,12 @@ from backend.app.api.v1.providers import router as providers_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.personal import router as personal_router
 from backend.app.api.v1.tools import router as tools_router
+from backend.app.api.v1.devices import router as devices_router
 
 
 api_router = APIRouter()
 api_router.include_router(health_router)
+api_router.include_router(devices_router)
 api_router.include_router(agli_router, prefix="/agli")
 api_router.include_router(providers_router)
 api_router.include_router(intelligence_router)
