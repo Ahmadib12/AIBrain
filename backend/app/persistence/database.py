@@ -2601,6 +2601,83 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                32,
+                """
+                CREATE TABLE agent_capability_grants_new (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    capability TEXT NOT NULL CHECK (capability IN (
+                        'text_generation', 'research.read', 'notes.read',
+                        'notes.write', 'calendar.read', 'calendar.write',
+                        'web.search', 'files.read'
+                    )),
+                    expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                INSERT INTO agent_capability_grants_new
+                    (id,user_id,agent_id,capability,expires_at,created_at)
+                SELECT id,user_id,agent_id,capability,expires_at,created_at
+                FROM agent_capability_grants;
+
+                CREATE TABLE agent_capability_revocations_new (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    grant_id TEXT NOT NULL UNIQUE,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(grant_id) REFERENCES agent_capability_grants_new(id) ON DELETE CASCADE
+                );
+                INSERT INTO agent_capability_revocations_new
+                    (id,user_id,grant_id,reason,created_at)
+                SELECT id,user_id,grant_id,reason,created_at
+                FROM agent_capability_revocations;
+
+                DROP TABLE agent_capability_revocations;
+                DROP TABLE agent_capability_grants;
+                ALTER TABLE agent_capability_grants_new RENAME TO agent_capability_grants;
+                ALTER TABLE agent_capability_revocations_new RENAME TO agent_capability_revocations;
+
+                CREATE INDEX idx_agent_grants_owner_agent
+                    ON agent_capability_grants(user_id,agent_id,created_at);
+                CREATE TRIGGER validate_agent_grant_insert
+                BEFORE INSERT ON agent_capability_grants
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                    WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                      AND a.status='active' AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'grant requires active owned agent'); END;
+                CREATE TRIGGER prevent_agent_grant_update
+                BEFORE UPDATE ON agent_capability_grants
+                BEGIN SELECT RAISE(ABORT,'capability grants are immutable'); END;
+                CREATE TRIGGER prevent_agent_grant_delete
+                BEFORE DELETE ON agent_capability_grants
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT,'grants may only be deleted during account erasure'); END;
+                CREATE TRIGGER validate_agent_revocation_insert
+                BEFORE INSERT ON agent_capability_revocations
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_capability_grants g
+                    JOIN agents a ON a.id=g.agent_id
+                    JOIN users u ON u.id=g.user_id
+                    WHERE g.id=NEW.grant_id AND g.user_id=NEW.user_id
+                      AND a.status<>'terminated' AND u.deleted_at IS NULL
+                )
+                BEGIN SELECT RAISE(ABORT,'grant revocation owner mismatch'); END;
+                CREATE TRIGGER prevent_agent_revocation_update
+                BEFORE UPDATE ON agent_capability_revocations
+                BEGIN SELECT RAISE(ABORT,'grant revocations are immutable'); END;
+                CREATE TRIGGER prevent_agent_revocation_delete
+                BEFORE DELETE ON agent_capability_revocations
+                WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
+                BEGIN SELECT RAISE(ABORT,'revocations may only be deleted during account erasure'); END;
+                """,
+            ),
         )
 
         with self._lock:
