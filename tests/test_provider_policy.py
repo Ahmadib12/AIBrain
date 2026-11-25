@@ -186,3 +186,31 @@ def test_provider_profile_rejects_unknown_fields_and_empty_locations():
         )
     with pytest.raises(Exception):
         ProviderRoutingRequirements(allowed_locations=())
+
+
+
+def test_provider_policy_enforces_data_residency_allowlist():
+    from backend.app.providers.registry import ProviderRegistry
+
+    provider = StubProvider("region-a")
+    profiles = ProviderProfileRegistry()
+    profiles.register(profile(
+        "region-a",
+        ProviderExecutionLocation.CLOUD,
+        (ProviderDataClass.PUBLIC,),
+    ))
+    registry = ProviderRegistry()
+    registry.register(provider)
+    router = ModelRouter(
+        registry, Healthy(), CaptureFallback(),
+        provider_policy=ProviderRoutingPolicy(profiles),
+    )
+    with pytest.raises(PermissionError, match="No registered provider"):
+        asyncio.run(router.route_with_outcome(
+            request("region-a"),
+            requirements=ProviderRoutingRequirements(
+                data_classification=ProviderDataClass.PUBLIC,
+                allowed_locations=(ProviderExecutionLocation.CLOUD,),
+                allowed_data_residencies=("region-b",),
+            ),
+        ))
