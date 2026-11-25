@@ -7,6 +7,10 @@ from backend.app.providers.health import ProviderHealthMonitor
 from backend.app.providers.registry import ProviderRegistry
 from backend.app.providers.schemas import ChatRequest, ChatResponse
 from backend.app.providers.routing import ProviderRoutingResult
+from backend.app.providers.policy import (
+    ProviderRoutingPolicy,
+    ProviderRoutingRequirements,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -21,20 +25,29 @@ class ModelRouter:
         fallback_executor: FallbackExecutor,
         *,
         fallback_enabled: bool = True,
+        provider_policy: ProviderRoutingPolicy | None = None,
     ) -> None:
         self.registry = registry
         self.health_monitor = health_monitor
         self.fallback_executor = fallback_executor
         self.fallback_enabled = fallback_enabled
+        self.provider_policy = provider_policy
 
-    async def route(self, request: ChatRequest) -> ChatResponse:
-        result = await self.route_with_outcome(request)
+    async def route(
+        self,
+        request: ChatRequest,
+        *,
+        requirements: ProviderRoutingRequirements | None = None,
+    ) -> ChatResponse:
+        result = await self.route_with_outcome(request, requirements=requirements)
         return result.response
 
     async def route_with_outcome(
         self,
         request: ChatRequest,
         execution_state: "ExecutionState | None" = None,
+        *,
+        requirements: ProviderRoutingRequirements | None = None,
     ) -> ProviderRoutingResult:
         if request.provider:
             provider = self.registry.get(request.provider)
@@ -89,6 +102,19 @@ class ModelRouter:
                 candidates = eligible
             else:
                 candidates = [eligible[0]]
+
+        if requirements is not None:
+            if self.provider_policy is None:
+                raise PermissionError(
+                    "Provider routing requirements need a trusted provider policy"
+                )
+            candidates = list(
+                self.provider_policy.filter_candidates(candidates, requirements)
+            )
+            if not candidates:
+                raise PermissionError(
+                    "No registered provider satisfies the trusted data and capability policy"
+                )
 
         if not candidates:
             raise AllProvidersFailedError([])
