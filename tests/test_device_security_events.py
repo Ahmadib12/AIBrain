@@ -220,7 +220,7 @@ def test_device_identity_and_registered_key_are_immutable(client: TestClient):
             )
 
     persisted = state.devices.get_owned(owner_id, device["device_id"])
-    assert persisted.owner_id == owner_id
+    assert str(persisted.owner_id) == owner_id
 
 
 def test_device_lifecycle_cannot_reactivate_a_revoked_device(client: TestClient):
