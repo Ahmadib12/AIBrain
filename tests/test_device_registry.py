@@ -381,7 +381,8 @@ def test_device_session_challenge_cannot_be_replayed(client: TestClient) -> None
         f"/api/v1/devices/{device['device_id']}/session/verify",
         params=params, headers=headers, json=body,
     )
-    assert replay.status_code == 404
+    assert replay.status_code == 409
+    assert replay.json()["error"]["code"] == "DEVICE_SESSION_CHALLENGE_INVALID"
 
 
 def test_device_session_challenge_issuance_is_rate_limited(client: TestClient) -> None:
