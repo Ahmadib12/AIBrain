@@ -183,16 +183,14 @@ class DeviceProofRepository:
             except (InvalidSignature, ValueError):
                 raise PermissionError("Device proof rejected") from None
 
-            connection.execute(
+            consumed = connection.execute(
                 """
                 UPDATE device_auth_challenges SET used_at=?
                 WHERE id=? AND purpose='enrollment' AND used_at IS NULL
                 """,
                 (now.isoformat(), challenge_id),
             )
-            if connection.execute(
-                "SELECT changes()"
-            ).fetchone()[0] != 1:
+            if consumed.rowcount != 1:
                 raise ValueError("Device challenge already used")
             connection.execute(
                 """
