@@ -92,24 +92,14 @@ class DeviceRepository:
         return self._record(row)
 
     def confirm(self, owner_id: str, device_id: str) -> DeviceRecord:
-        now = _now()
-        with self.database.transaction(immediate=True):
-            cursor = self.database.connect().execute(
-                """
-                UPDATE devices SET status = 'active', last_seen_at = ?
-                WHERE id = ? AND user_id = ? AND status = 'pending'
-                """,
-                (now, device_id, owner_id),
-            )
-            if cursor.rowcount != 1:
-                row = self.database.connect().execute(
-                    "SELECT status FROM devices WHERE id = ? AND user_id = ?",
-                    (device_id, owner_id),
-                ).fetchone()
-                if row is None:
-                    raise LookupError("Device not found")
-                raise ValueError("Only a pending device can be confirmed")
-        return self.get_owned(owner_id, device_id)
+        """Legacy confirmation is disabled; activation requires key proof."""
+        row = self.database.connect().execute(
+            "SELECT id FROM devices WHERE id = ? AND user_id = ?",
+            (device_id, owner_id),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Device not found")
+        raise PermissionError("Device activation requires cryptographic proof")
 
     def revoke(self, owner_id: str, device_id: str) -> DeviceRecord:
         now = _now()
