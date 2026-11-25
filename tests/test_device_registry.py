@@ -118,11 +118,11 @@ def test_device_records_are_owner_scoped(client: TestClient) -> None:
     assert other_list.status_code == 200
     assert all(item["device_id"] != device["device_id"] for item in other_list.json())
 
-    cross_owner_confirm = client.post(
-        f"/api/v1/devices/{device['device_id']}/confirm",
+    cross_owner_challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/challenge",
         headers=other_headers,
     )
-    assert cross_owner_confirm.status_code == 404
+    assert cross_owner_challenge.status_code == 404
 
 
 def test_revoked_device_cannot_report_capabilities(client: TestClient) -> None:
