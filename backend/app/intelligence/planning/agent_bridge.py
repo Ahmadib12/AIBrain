@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from backend.app.intelligence.planning.engine import PlanningResult
-from backend.app.persistence.agents import AgentRepository
 from backend.app.persistence.agent_execution import AgentExecutionRepository
 from backend.app.tools.registry import ToolRegistry
 
