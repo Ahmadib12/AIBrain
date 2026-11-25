@@ -109,3 +109,25 @@ def test_non_production_adapter_cannot_supply_readiness_evidence():
             TestAdapter(),
             readiness=evidence(),
         )
+
+
+
+def test_production_external_adapter_requires_provider_enforced_idempotency():
+    class NonIdempotentProductionAdapter(ProductionAdapter):
+        @property
+        def capabilities(self):
+            return ExternalToolExecutionCapabilities(
+                provider_id="calendar-provider",
+                adapter_id="calendar-adapter",
+                adapter_version="1.0.0",
+                provider_scope="calendar-account-123",
+                idempotency_mode=ExecutionIdempotencyMode.NONE,
+                supports_outcome_lookup=True,
+            )
+
+    with pytest.raises(PermissionError, match="readiness is incomplete"):
+        ExternalToolAdapterRegistry().register(
+            "calendar.create_event",
+            NonIdempotentProductionAdapter(),
+            readiness=evidence(),
+        )
