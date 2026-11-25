@@ -10,6 +10,8 @@ from backend.app.persistence.validation import validate_personal_payload
 CAPABILITY_CATALOG_VERSION = 1
 
 CAPABILITIES = frozenset({
+    # Internal assistant capability used by bounded planning and local generation.
+    "text_generation",
     "research.read",
     "notes.read",
     "notes.write",
