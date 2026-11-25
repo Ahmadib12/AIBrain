@@ -95,6 +95,36 @@ def test_session_security_history_rejects_invalid_pagination(client: TestClient)
     assert incomplete_cursor.status_code == 422
 
 
+def test_session_security_history_paginates_with_stable_cursor(client: TestClient):
+    token, email = _register_and_login(client, "cursor")
+    second_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "safe-password-123"},
+    )
+    assert second_login.status_code == 200
+
+    first = client.get(
+        "/api/v1/auth/security-events?limit=1", headers=_headers(token)
+    )
+    assert first.status_code == 200
+    assert len(first.json()) == 1
+    first_event = first.json()[0]
+
+    second = client.get(
+        "/api/v1/auth/security-events",
+        params={
+            "limit": 1,
+            "before_occurred_at": first_event["occurred_at"],
+            "before_event_id": first_event["event_id"],
+        },
+        headers=_headers(token),
+    )
+    assert second.status_code == 200
+    assert len(second.json()) == 1
+    assert second.json()[0]["event_id"] != first_event["event_id"]
+    assert second.json()[0]["session_ref"] != first_event["session_ref"]
+
+
 def test_session_expiry_cleanup_emits_audit_event(client: TestClient):
     token, _ = _register_and_login(client, "expiry")
     state = get_app_state()
@@ -122,6 +152,12 @@ def test_session_expiry_cleanup_emits_audit_event(client: TestClient):
     expired = [event for event in events if event["event_type"] == "session.expired"]
     assert len(expired) == 1
     assert expired[0]["auth_method"] == "account"
+    matching_created = [
+        event for event in events
+        if event["event_type"] == "session.created"
+        and event["session_ref"] == expired[0]["session_ref"]
+    ]
+    assert len(matching_created) == 1
 
 
 def test_session_security_events_are_immutable_and_rollback_with_session(client: TestClient):
