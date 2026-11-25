@@ -221,3 +221,57 @@ def test_memory_context_respects_provider_message_count_limit(client_for_core):
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "MEMORY_CONTEXT_MESSAGE_LIMIT"
     assert adapter.memory_contexts == []
+
+
+
+def test_personal_digital_twin_api_is_consent_gated_and_explicit_only(client_for_core):
+    with client_for_core(OrchestrationCore(adapters={})) as client:
+        token = _register_and_login(client, "digital-twin@example.com")
+        headers = _headers(token)
+
+        denied = client.get("/api/v1/personal/digital-twin", headers=headers)
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "MEMORY_CONSENT_REQUIRED"
+
+        granted = client.post(
+            "/api/v1/personal/memory/consent",
+            headers=headers,
+            json={"retention_days": 30},
+        )
+        assert granted.status_code == 200
+
+        for memory_type, key, value in (
+            ("preference", "language", "English"),
+            ("goal", "learning_goal", "Improve networking"),
+            ("project", "project_name", "AIBrain"),
+            ("context", "temporary_context", "Not part of the digital twin"),
+        ):
+            created = client.post(
+                "/api/v1/personal/memory",
+                headers=headers,
+                json={
+                    "memory_type": memory_type,
+                    "key": key,
+                    "value": value,
+                    "source": "owner_statement",
+                    "confidence": 1.0,
+                },
+            )
+            assert created.status_code == 200
+
+        snapshot = client.get("/api/v1/personal/digital-twin", headers=headers)
+        assert snapshot.status_code == 200
+        body = snapshot.json()
+        assert [item["value"] for item in body["preferences"]] == ["English"]
+        assert [item["value"] for item in body["goals"]] == ["Improve networking"]
+        assert [item["value"] for item in body["projects"]] == ["AIBrain"]
+        assert body["excluded_record_count"] == 1
+        assert "temporary_context" not in str(body)
+
+        revoked = client.delete("/api/v1/personal/memory/consent", headers=headers)
+        assert revoked.status_code == 200
+        denied_after_revoke = client.get(
+            "/api/v1/personal/digital-twin",
+            headers=headers,
+        )
+        assert denied_after_revoke.status_code == 403
