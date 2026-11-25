@@ -1,6 +1,5 @@
 """Authenticated device enrollment, confirmation, capability reporting and revocation."""
 import sqlite3
-from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
