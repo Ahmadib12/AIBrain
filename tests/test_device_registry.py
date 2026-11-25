@@ -273,3 +273,112 @@ def test_account_erasure_removes_enrolled_devices(client: TestClient) -> None:
         (owner["id"],),
     ).fetchall()
     assert remaining == []
+
+
+def _create_device_session(client: TestClient, headers: dict[str, str], device: dict, private_key):
+    device_id = device["device_id"]
+    challenge = client.post(
+        f"/api/v1/devices/{device_id}/session/challenge", headers=headers
+    )
+    assert challenge.status_code == 200
+    data = challenge.json()
+    message = base64.b64decode(data["message_b64"], validate=True)
+    signature = private_key.sign(message)
+    response = client.post(
+        f"/api/v1/devices/{device_id}/session/verify",
+        params={"challenge_id": data["challenge_id"]},
+        headers=headers,
+        json={
+            "nonce": data["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    return response
+
+
+def test_device_session_requires_active_device_proof(client: TestClient) -> None:
+    headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, headers)
+
+    pending_challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/session/challenge",
+        headers=headers,
+    )
+    assert pending_challenge.status_code == 404
+
+    activated, _ = _activate_with_proof(client, headers, device, private_key)
+    assert activated.status_code == 204
+
+    session = _create_device_session(client, headers, device, private_key)
+    assert session.status_code == 200
+    payload = session.json()
+    assert payload["user"]["device_id"] == device["device_id"]
+
+    me = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {payload['access_token']}"},
+    )
+    assert me.status_code == 200
+    assert me.json()["user"]["device_id"] == device["device_id"]
+
+
+def test_device_revocation_immediately_invalidates_bound_sessions(
+    client: TestClient,
+) -> None:
+    headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, headers)
+    activated, _ = _activate_with_proof(client, headers, device, private_key)
+    assert activated.status_code == 204
+
+    session = _create_device_session(client, headers, device, private_key)
+    assert session.status_code == 200
+    device_token = session.json()["access_token"]
+    device_headers = {"Authorization": f"Bearer {device_token}"}
+
+    before = client.get("/api/v1/auth/me", headers=device_headers)
+    assert before.status_code == 200
+
+    revoked = client.delete(
+        f"/api/v1/devices/{device['device_id']}", headers=headers
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+
+    after = client.get("/api/v1/auth/me", headers=device_headers)
+    assert after.status_code == 401
+
+    # Revoking one device must not revoke the owner's independent account session.
+    owner_session = client.get("/api/v1/auth/me", headers=headers)
+    assert owner_session.status_code == 200
+
+
+def test_device_session_challenge_cannot_be_replayed(client: TestClient) -> None:
+    headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, headers)
+    activated, _ = _activate_with_proof(client, headers, device, private_key)
+    assert activated.status_code == 204
+
+    challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/session/challenge",
+        headers=headers,
+    )
+    assert challenge.status_code == 200
+    data = challenge.json()
+    signature = private_key.sign(
+        base64.b64decode(data["message_b64"], validate=True)
+    )
+    body = {
+        "nonce": data["nonce"],
+        "signature_b64": base64.b64encode(signature).decode("ascii"),
+    }
+    params = {"challenge_id": data["challenge_id"]}
+    first = client.post(
+        f"/api/v1/devices/{device['device_id']}/session/verify",
+        params=params, headers=headers, json=body,
+    )
+    assert first.status_code == 200
+    replay = client.post(
+        f"/api/v1/devices/{device['device_id']}/session/verify",
+        params=params, headers=headers, json=body,
+    )
+    assert replay.status_code == 404
