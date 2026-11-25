@@ -117,6 +117,7 @@ def test_device_security_history_records_login_and_revocation_once(client):
 
 
 def test_device_security_cursor_is_stable_for_equal_timestamps(client: TestClient):
+    from uuid import uuid4
     from backend.app.app_state import get_app_state
 
     headers = _authenticated_headers(client)
@@ -125,32 +126,35 @@ def test_device_security_cursor_is_stable_for_equal_timestamps(client: TestClien
     assert activated.status_code == 204
 
     state = get_app_state()
-    rows = state.database.connect().execute(
-        "SELECT id, occurred_at FROM device_security_events WHERE user_id=? ORDER BY id",
-        (client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"],),
-    ).fetchall()
-    assert len(rows) >= 3
-    timestamp = "2026-01-01T00:00:00+00:00"
+    owner_id = client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"]
+    timestamp = "2999-01-01T00:00:00+00:00"
+    inserted_ids = [str(uuid4()) for _ in range(3)]
     with state.database.transaction(immediate=True):
-        state.database.connect().execute(
-            "UPDATE device_security_events SET occurred_at=? WHERE user_id=?",
-            (timestamp, client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"]),
-        )
-    ordered = state.database.connect().execute(
-        "SELECT id FROM device_security_events WHERE user_id=? ORDER BY occurred_at DESC,id DESC",
-        (client.get("/api/v1/auth/me", headers=headers).json()["user"]["id"],),
-    ).fetchall()
+        for event_id in inserted_ids:
+            state.database.connect().execute(
+                """INSERT INTO device_security_events
+                   (id,user_id,device_id,event_type,occurred_at,details_json)
+                   VALUES (?,?,?,'device.enrolled',?,'{}')""",
+                (event_id, owner_id, device["device_id"], timestamp),
+            )
     first = client.get("/api/v1/devices/security-events?limit=2", headers=headers).json()
     assert len(first) == 2
     second = client.get(
         "/api/v1/devices/security-events",
-        params={"limit": 2, "before_occurred_at": timestamp, "before_event_id": first[-1]["event_id"]},
+        params={
+            "limit": 2,
+            "before_occurred_at": timestamp,
+            "before_event_id": first[-1]["event_id"],
+        },
         headers=headers,
     ).json()
     assert {item["event_id"] for item in first}.isdisjoint(
         {item["event_id"] for item in second}
     )
-    assert len(first) + len(second) >= 3
+    assert len({item["event_id"] for item in first + second}) == 4
+    assert set(inserted_ids).issubset(
+        {item["event_id"] for item in first + second}
+    )
 
 
 def test_device_security_history_survives_device_removal_and_is_immutable(client: TestClient):
