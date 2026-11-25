@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.api.v1.auth import get_current_user
 from backend.app.app_state import get_app_state
 from backend.app.intelligence.memory_context import MemoryContextAssembler
+from backend.app.intelligence.digital_twin import PersonalDigitalTwinAssembler
 from backend.app.persistence.validation import validate_personal_payload
 
 
@@ -90,6 +91,26 @@ class LearningEvaluationRequest(BaseModel):
     observed_value: float
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: object
+
+
+@router.get("/digital-twin")
+async def get_personal_digital_twin(
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        snapshot = PersonalDigitalTwinAssembler().assemble(
+            get_app_state().memory,
+            user_id=user["id"],
+        )
+        return snapshot.model_dump(mode="json")
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MEMORY_CONSENT_REQUIRED",
+                "message": "Active memory consent is required for the digital-twin view",
+            },
+        ) from None
 
 
 @router.get("/memory/consent")
