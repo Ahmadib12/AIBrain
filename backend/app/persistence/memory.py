@@ -348,6 +348,43 @@ class MemoryRepository:
         ).fetchall()
         return tuple(self._to_dict(row) for row in rows)
 
+    def approved_digital_twin_records(self, user_id: str) -> dict[str, Any]:
+        """Read profile records and active consent in one SQL snapshot.
+
+        Unlike owner-review listing, this method never returns records from a
+        revoked consent generation. The single joined query closes the
+        consent-check/list race for assistant-facing profile assembly.
+        """
+        self._purge_expired_for_user(user_id)
+        rows = self.database.connect().execute(
+            """
+            SELECT c.policy_version, m.*
+            FROM memory_consents AS c
+            JOIN users AS u ON u.id = c.user_id
+            LEFT JOIN memory_items AS m
+              ON m.user_id = c.user_id
+             AND m.consent_id = c.id
+             AND m.status = 'active'
+            WHERE c.user_id = ?
+              AND c.purpose = 'personal_memory'
+              AND c.revoked_at IS NULL
+              AND u.deleted_at IS NULL
+            ORDER BY m.updated_at DESC, m.id
+            """,
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            raise PermissionError("Active personal-memory consent is required")
+        records = [
+            self._to_dict(row)
+            for row in rows
+            if row["id"] is not None
+        ]
+        return {
+            "policy_version": rows[0]["policy_version"],
+            "records": records,
+        }
+
     def retrieve(
         self,
         user_id: str,
