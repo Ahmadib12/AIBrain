@@ -2961,6 +2961,39 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                38,
+                """
+                -- Device identity and trust state are monotonic after enrollment.
+                CREATE TRIGGER prevent_device_identity_mutation
+                BEFORE UPDATE OF id, user_id, public_key_fingerprint ON devices
+                WHEN NEW.id IS NOT OLD.id
+                  OR NEW.user_id IS NOT OLD.user_id
+                  OR NEW.public_key_fingerprint IS NOT OLD.public_key_fingerprint
+                BEGIN
+                    SELECT RAISE(ABORT, 'device identity fields are immutable');
+                END;
+
+                CREATE TRIGGER prevent_device_public_key_replacement
+                BEFORE UPDATE OF public_key_b64 ON devices
+                WHEN OLD.public_key_b64 IS NOT NULL
+                 AND NEW.public_key_b64 IS NOT OLD.public_key_b64
+                BEGIN
+                    SELECT RAISE(ABORT, 'registered device public keys are immutable');
+                END;
+
+                CREATE TRIGGER validate_device_status_transition
+                BEFORE UPDATE OF status ON devices
+                WHEN NOT (
+                    OLD.status = NEW.status
+                    OR (OLD.status = 'pending' AND NEW.status IN ('active','revoked'))
+                    OR (OLD.status = 'active' AND NEW.status = 'revoked')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid device lifecycle transition');
+                END;
+                """
+            ),
         )
 
         with self._lock:
