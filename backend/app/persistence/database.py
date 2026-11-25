@@ -3039,6 +3039,93 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                40,
+                """
+                -- Session security history is independent of live session rows:
+                -- token material is never copied into the audit stream.
+                CREATE TABLE session_security_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT,
+                    auth_method TEXT NOT NULL CHECK (
+                        auth_method IN ('account','device_proof','device_login')
+                    ),
+                    event_type TEXT NOT NULL CHECK (
+                        event_type IN (
+                            'session.created',
+                            'session.revoked',
+                            'session.expired'
+                        )
+                    ),
+                    occurred_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX idx_session_security_events_owner_time
+                    ON session_security_events(user_id, occurred_at DESC, id DESC);
+
+                CREATE TRIGGER prevent_session_security_event_update
+                BEFORE UPDATE ON session_security_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'session security events are immutable');
+                END;
+
+                CREATE TRIGGER prevent_session_security_event_delete
+                BEFORE DELETE ON session_security_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(
+                        ABORT,
+                        'session security events may only be erased with the account'
+                    );
+                END;
+
+                CREATE TRIGGER audit_session_created
+                AFTER INSERT ON sessions
+                BEGIN
+                    INSERT INTO session_security_events
+                        (id,user_id,device_id,auth_method,event_type,occurred_at)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.device_id,NEW.auth_method,'session.created',NEW.created_at
+                    );
+                END;
+
+                CREATE TRIGGER audit_session_revoked
+                AFTER UPDATE OF revoked_at ON sessions
+                WHEN OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+                BEGIN
+                    INSERT INTO session_security_events
+                        (id,user_id,device_id,auth_method,event_type,occurred_at)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.device_id,NEW.auth_method,'session.revoked',NEW.revoked_at
+                    );
+                END;
+
+                CREATE TRIGGER audit_session_expired
+                BEFORE DELETE ON sessions
+                WHEN datetime(OLD.expires_at) <= CURRENT_TIMESTAMP
+                BEGIN
+                    INSERT INTO session_security_events
+                        (id,user_id,device_id,auth_method,event_type,occurred_at)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        OLD.user_id,OLD.device_id,OLD.auth_method,'session.expired',OLD.expires_at
+                    );
+                END;
+                """
+            ),
         )
 
         with self._lock:
