@@ -9,7 +9,11 @@ from pydantic import ValidationError
 from backend.app.agli.contracts import (
     AudioEncoding,
     DataClassification,
+    EngineCapabilityProfile,
+    EngineCapabilityState,
+    EngineExecutionLocation,
     LanguageDetectionRequest,
+    LanguagePair,
     LanguageDetectionResult,
     ProcessingPreference,
     SpeechSessionRequest,
@@ -184,4 +188,43 @@ def test_sync_delete_is_a_tombstone_without_payload():
     with pytest.raises(ValidationError):
         _sync_operation(
             operation=SyncOperationKind.DELETE,
+        )
+
+
+
+def test_verified_language_capability_requires_evaluation_identity():
+    with pytest.raises(ValidationError):
+        EngineCapabilityProfile(
+            engine_id="translator",
+            engine_version="1.0",
+            capability="text_translation",
+            state=EngineCapabilityState.VERIFIED,
+            execution_location=EngineExecutionLocation.LOCAL,
+            supported_language_pairs=(
+                LanguagePair(source_language="en", target_language="fr"),
+            ),
+        )
+
+    profile = EngineCapabilityProfile(
+        engine_id="translator",
+        engine_version="1.0",
+        capability="text_translation",
+        state=EngineCapabilityState.VERIFIED,
+        execution_location=EngineExecutionLocation.LOCAL,
+        supported_languages=("EN", "fr"),
+        supported_language_pairs=(
+            LanguagePair(source_language="en", target_language="fr"),
+        ),
+        evaluation_suite_id="translation-smoke",
+        evaluation_suite_version="1",
+    )
+    assert profile.supported_languages == ("en", "fr")
+
+    with pytest.raises(ValidationError):
+        EngineCapabilityProfile(
+            engine_id="translator",
+            engine_version="1.0",
+            capability="text_translation",
+            execution_location=EngineExecutionLocation.LOCAL,
+            supported_languages=("en", "en"),
         )
