@@ -4,9 +4,14 @@ from backend.app.providers.health import ProviderHealthMonitor
 from backend.app.providers.mock import MockAIProvider
 from backend.app.providers.registry import ProviderRegistry
 from backend.app.providers.router import ModelRouter
+from backend.app.providers.policy import ProviderPolicyRegistry, ProviderRoutingPolicy
 
 
-def build_provider_router(settings: Settings) -> ModelRouter:
+def build_provider_router(
+    settings: Settings,
+    *,
+    provider_profiles: ProviderPolicyRegistry | None = None,
+) -> ModelRouter:
     registry = ProviderRegistry()
     health_monitor = ProviderHealthMonitor()
 
@@ -38,4 +43,8 @@ def build_provider_router(settings: Settings) -> ModelRouter:
         health_monitor,
         fallback,
         fallback_enabled=settings.fallback_enabled,
+        provider_policy=(
+            ProviderRoutingPolicy(provider_profiles)
+            if provider_profiles is not None else None
+        ),
     )
