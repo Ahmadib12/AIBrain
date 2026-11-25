@@ -3,6 +3,7 @@
 These models describe requests and results only. They do not register engines,
 grant consent, capture audio, or assert that a capability is available.
 """
+from collections.abc import AsyncIterator
 from enum import Enum
 from typing import Protocol
 from uuid import UUID
@@ -123,10 +124,29 @@ class TranscriptSegment(BaseModel):
         return value
 
 
+class SpeechSynthesisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: str = Field(min_length=1, max_length=8_000)
+    language: str = Field(pattern=_LANGUAGE_TAG, max_length=35)
+    encoding: AudioEncoding
+    voice_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class SpeechEngine(Protocol):
     """Trusted runtime adapter contract; implementations are composition-owned."""
 
-    async def recognize(self, request: SpeechSessionRequest) -> TranscriptSegment:
+    def recognize(
+        self,
+        request: SpeechSessionRequest,
+    ) -> AsyncIterator[TranscriptSegment]:
+        ...
+
+
+class SpeechSynthesisEngine(Protocol):
+    """Audio bytes are streamed separately, never embedded in JSON events."""
+
+    def synthesize(self, request: SpeechSynthesisRequest) -> AsyncIterator[bytes]:
         ...
 
 
