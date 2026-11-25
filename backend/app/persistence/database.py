@@ -2801,6 +2801,35 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                36,
+                """
+                CREATE TABLE device_security_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (event_type IN (
+                        'device.enrolled',
+                        'device.key_registered',
+                        'device.activated',
+                        'device.revoked',
+                        'device.session_authenticated',
+                        'device.login_authenticated'
+                    )),
+                    occurred_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_device_security_events_owner_time
+                    ON device_security_events(user_id, occurred_at DESC, id DESC);
+                CREATE TRIGGER prevent_device_security_event_update
+                BEFORE UPDATE ON device_security_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'device security events are append-only');
+                END;
+                """
+            ),
         )
 
         with self._lock:
