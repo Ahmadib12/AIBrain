@@ -2637,6 +2637,9 @@ created_at TEXT NOT NULL,
                 SELECT id,user_id,grant_id,reason,created_at
                 FROM agent_capability_revocations;
 
+                -- Rebuild referenced grant tables without leaving the task trigger
+                -- compiled against the dropped table definitions.
+                DROP TRIGGER IF EXISTS validate_agent_task_insert;
                 DROP TABLE agent_capability_revocations;
                 DROP TABLE agent_capability_grants;
                 ALTER TABLE agent_capability_grants_new RENAME TO agent_capability_grants;
@@ -2676,6 +2679,28 @@ created_at TEXT NOT NULL,
                 BEFORE DELETE ON agent_capability_revocations
                 WHEN NOT EXISTS (SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL)
                 BEGIN SELECT RAISE(ABORT,'revocations may only be deleted during account erasure'); END;
+
+                CREATE TRIGGER validate_agent_task_insert
+                BEFORE INSERT ON agent_tasks
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                    WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                      AND a.status='active' AND u.deleted_at IS NULL
+                )
+                OR EXISTS (
+                    SELECT 1 FROM json_each(NEW.capability_ceiling_json) c
+                    WHERE c.type <> 'text' OR NOT EXISTS (
+                        SELECT 1 FROM agent_capability_grants g
+                        WHERE g.user_id=NEW.user_id AND g.agent_id=NEW.agent_id
+                          AND g.capability=c.value
+                          AND (g.expires_at IS NULL OR g.expires_at > NEW.created_at)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM agent_capability_revocations r
+                              WHERE r.grant_id=g.id
+                          )
+                    )
+                )
+                BEGIN SELECT RAISE(ABORT, 'task requires active agent and granted capability ceiling'); END;
                 """,
             ),
         )
