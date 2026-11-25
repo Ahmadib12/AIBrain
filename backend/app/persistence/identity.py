@@ -129,7 +129,7 @@ class IdentityRepository:
 
     def create_session(
         self, user_id: str, *, device_id: str | None = None,
-        auth_method: str = "device_proof",
+        auth_method: str = "account",
     ) -> tuple[dict, str]:
         """Create an account session, optionally bound to an active owned device."""
         if auth_method not in {"account", "device_proof", "device_login"}:
