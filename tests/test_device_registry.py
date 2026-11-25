@@ -109,6 +109,84 @@ def test_device_enrollment_is_pending_until_explicit_confirmation(
     assert listed.json()[0]["status"] == "active"
 
 
+
+def test_device_proof_rejects_forged_signature_without_activating_device(
+    client: TestClient,
+) -> None:
+    headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, headers)
+    challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/challenge", headers=headers
+    ).json()
+    attacker_key = Ed25519PrivateKey.generate()
+    forged = attacker_key.sign(
+        base64.b64decode(challenge["message_b64"], validate=True)
+    )
+    rejected = client.post(
+        f"/api/v1/devices/{device['device_id']}/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=headers,
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(forged).decode("ascii"),
+        },
+    )
+    assert rejected.status_code == 401
+    assert rejected.json()["error"]["code"] == "DEVICE_PROOF_REJECTED"
+
+    valid = client.post(
+        f"/api/v1/devices/{device['device_id']}/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=headers,
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(
+                private_key.sign(base64.b64decode(challenge["message_b64"], validate=True))
+            ).decode("ascii"),
+        },
+    )
+    assert valid.status_code == 204
+
+
+def test_device_challenge_cannot_be_replayed_after_activation(
+    client: TestClient,
+) -> None:
+    headers = _authenticated_headers(client)
+    device, private_key = _enroll_with_key(client, headers)
+    verified, challenge = _activate_with_proof(client, headers, device, private_key)
+    assert verified.status_code == 204
+
+    replay = client.post(
+        f"/api/v1/devices/{device['device_id']}/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=headers,
+        json={
+            "nonce": challenge["nonce"],
+            "signature_b64": base64.b64encode(
+                private_key.sign(base64.b64decode(challenge["message_b64"], validate=True))
+            ).decode("ascii"),
+        },
+    )
+    assert replay.status_code == 404
+
+
+def test_device_public_key_must_match_enrollment_fingerprint(
+    client: TestClient,
+) -> None:
+    headers = _authenticated_headers(client)
+    device = _enroll(client, headers)
+    other_key = Ed25519PrivateKey.generate().public_key().public_bytes(
+        Encoding.Raw, PublicFormat.Raw
+    )
+    response = client.put(
+        f"/api/v1/devices/{device['device_id']}/key",
+        headers=headers,
+        json={"public_key_b64": base64.b64encode(other_key).decode("ascii")},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "DEVICE_KEY_REJECTED"
+
+
 def test_device_records_are_owner_scoped(client: TestClient) -> None:
     owner_headers = _authenticated_headers(client)
     other_headers = _authenticated_headers(client)
