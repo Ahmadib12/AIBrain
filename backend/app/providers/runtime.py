@@ -4,13 +4,13 @@ from backend.app.providers.health import ProviderHealthMonitor
 from backend.app.providers.mock import MockAIProvider
 from backend.app.providers.registry import ProviderRegistry
 from backend.app.providers.router import ModelRouter
-from backend.app.providers.policy import ProviderPolicyRegistry, ProviderRoutingPolicy
+from backend.app.providers.policy import ProviderProfileRegistry, ProviderRoutingPolicy
 
 
 def build_provider_router(
     settings: Settings,
     *,
-    provider_profiles: ProviderPolicyRegistry | None = None,
+    provider_profiles: ProviderProfileRegistry | None = None,
 ) -> ModelRouter:
     registry = ProviderRegistry()
     health_monitor = ProviderHealthMonitor()
