@@ -8,14 +8,10 @@ class FakeMemoryRepository:
         self.enabled = enabled
         self.records = tuple(records)
 
-    def consent_status(self, user_id):
-        return {
-            "enabled": self.enabled,
-            "policy_version": 3,
-        }
-
-    def list(self, user_id):
-        return self.records
+    def approved_digital_twin_records(self, user_id):
+        if not self.enabled:
+            raise PermissionError("Active personal-memory consent is required")
+        return {"policy_version": 3, "records": self.records}
 
 
 def record(memory_type, index):
