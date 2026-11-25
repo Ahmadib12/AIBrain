@@ -119,6 +119,17 @@ class DeviceRepository:
                 ).fetchone()
                 if row is None:
                     raise LookupError("Device not found")
+            # Device revocation and session invalidation share one write
+            # transaction, so no new request can observe a revoked device
+            # with still-valid device-bound sessions.
+            self.database.connect().execute(
+                """
+                UPDATE sessions
+                SET revoked_at = COALESCE(revoked_at, ?)
+                WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL
+                """,
+                (now, device_id, owner_id),
+            )
         return self.get_owned(owner_id, device_id)
 
     def record_capabilities(
