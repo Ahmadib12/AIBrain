@@ -1,5 +1,10 @@
+import base64
+import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from fastapi.testclient import TestClient
 
@@ -35,19 +40,73 @@ def _enroll(client: TestClient, headers: dict[str, str]) -> dict:
     return response.json()
 
 
+def _enroll_with_key(client: TestClient, headers: dict[str, str]):
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        Encoding.Raw, PublicFormat.Raw
+    )
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+    response = client.post(
+        "/api/v1/devices",
+        headers=headers,
+        json={
+            "platform": "android",
+            "app_version": "1.0.0",
+            "display_name": "My phone",
+            "public_key_fingerprint": fingerprint,
+        },
+    )
+    assert response.status_code == 201
+    device = response.json()
+    registered = client.put(
+        f"/api/v1/devices/{device['device_id']}/key",
+        headers=headers,
+        json={"public_key_b64": base64.b64encode(public_key).decode("ascii")},
+    )
+    assert registered.status_code == 204
+    return device, private_key
+
+
+def _activate_with_proof(client: TestClient, headers: dict[str, str], device: dict, private_key):
+    device_id = device["device_id"]
+    challenge = client.post(
+        f"/api/v1/devices/{device_id}/challenge", headers=headers
+    )
+    assert challenge.status_code == 200
+    data = challenge.json()
+    message = base64.b64decode(data["message_b64"], validate=True)
+    signature = private_key.sign(message)
+    verified = client.post(
+        f"/api/v1/devices/{device_id}/verify",
+        params={"challenge_id": data["challenge_id"]},
+        headers=headers,
+        json={
+            "nonce": data["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    return verified, data
+
+
 def test_device_enrollment_is_pending_until_explicit_confirmation(
     client: TestClient,
 ) -> None:
     headers = _authenticated_headers(client)
-    device = _enroll(client, headers)
+    device, private_key = _enroll_with_key(client, headers)
     assert device["status"] == "pending"
 
     confirmed = client.post(
         f"/api/v1/devices/{device['device_id']}/confirm",
         headers=headers,
     )
-    assert confirmed.status_code == 200
-    assert confirmed.json()["status"] == "active"
+    assert confirmed.status_code == 409
+    assert confirmed.json()["error"]["code"] == "DEVICE_PROOF_REQUIRED"
+
+    verified, _ = _activate_with_proof(client, headers, device, private_key)
+    assert verified.status_code == 204
+
+    listed = client.get("/api/v1/devices", headers=headers)
+    assert listed.json()[0]["status"] == "active"
 
 
 def test_device_records_are_owner_scoped(client: TestClient) -> None:
@@ -68,13 +127,11 @@ def test_device_records_are_owner_scoped(client: TestClient) -> None:
 
 def test_revoked_device_cannot_report_capabilities(client: TestClient) -> None:
     headers = _authenticated_headers(client)
-    device = _enroll(client, headers)
+    device, private_key = _enroll_with_key(client, headers)
     device_id = device["device_id"]
 
-    assert client.post(
-        f"/api/v1/devices/{device_id}/confirm",
-        headers=headers,
-    ).status_code == 200
+    verified, _ = _activate_with_proof(client, headers, device, private_key)
+    assert verified.status_code == 204
 
     revoked = client.delete(f"/api/v1/devices/{device_id}", headers=headers)
     assert revoked.status_code == 200
@@ -99,9 +156,10 @@ def test_device_capability_report_is_metadata_not_permission_grant(
     client: TestClient,
 ) -> None:
     headers = _authenticated_headers(client)
-    device = _enroll(client, headers)
+    device, private_key = _enroll_with_key(client, headers)
     device_id = device["device_id"]
-    client.post(f"/api/v1/devices/{device_id}/confirm", headers=headers)
+    verified, _ = _activate_with_proof(client, headers, device, private_key)
+    assert verified.status_code == 204
 
     report = client.put(
         f"/api/v1/devices/{device_id}/capabilities",
