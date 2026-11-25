@@ -78,11 +78,11 @@ class DeviceSecurityEventRepository:
                 """
                 SELECT id, device_id, event_type, occurred_at, details_json
                 FROM device_security_events
-                WHERE user_id=? AND (occurred_at, id) < (?, ?)
+                WHERE user_id=? AND occurred_at < ?
                 ORDER BY occurred_at DESC, id DESC
                 LIMIT ?
                 """,
-                (owner_id, before, before, limit),
+                (owner_id, before, limit),
             ).fetchall()
         return tuple({
             "event_id": row["id"],
