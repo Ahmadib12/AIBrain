@@ -5,10 +5,13 @@ grant consent, capture audio, or assert that a capability is available.
 """
 from collections.abc import AsyncIterator
 from enum import Enum
+import re
 from typing import Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from backend.app.agli.schemas import LanguageCapability
 
 
 _LANGUAGE_TAG = r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"
@@ -31,6 +34,60 @@ class AudioEncoding(str, Enum):
     PCM_S16LE = "pcm_s16le"
     OPUS = "opus"
     AAC = "aac"
+
+
+
+class EngineExecutionLocation(str, Enum):
+    LOCAL = "local"
+    CLOUD = "cloud"
+
+
+class EngineCapabilityState(str, Enum):
+    REGISTERED = "registered"
+    IMPLEMENTED = "implemented"
+    AVAILABLE = "available"
+    VERIFIED = "verified"
+    DISABLED = "disabled"
+
+
+class LanguagePair(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_language: str = Field(pattern=_LANGUAGE_TAG, max_length=35)
+    target_language: str = Field(pattern=_LANGUAGE_TAG, max_length=35)
+
+
+class EngineCapabilityProfile(BaseModel):
+    """Trusted composition metadata; a status is not proof by itself."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    engine_id: str = Field(min_length=1, max_length=100)
+    engine_version: str = Field(min_length=1, max_length=100)
+    capability: LanguageCapability
+    state: EngineCapabilityState = EngineCapabilityState.REGISTERED
+    execution_location: EngineExecutionLocation
+    supported_languages: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
+    supported_language_pairs: tuple[LanguagePair, ...] = Field(default_factory=tuple, max_length=500)
+    evaluation_suite_id: str | None = Field(default=None, max_length=120)
+    evaluation_suite_version: str | None = Field(default=None, max_length=80)
+
+    @field_validator("supported_languages")
+    @classmethod
+    def validate_supported_languages(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(value.lower() for value in values)
+        if any(not re.fullmatch(_LANGUAGE_TAG, value) for value in normalized):
+            raise ValueError("Supported languages must use valid language tags")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("Supported languages must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_evaluation_for_verified_state(self):
+        if self.state == EngineCapabilityState.VERIFIED:
+            if not self.evaluation_suite_id or not self.evaluation_suite_version:
+                raise ValueError("Verified capability requires evaluation suite identity and version")
+        return self
 
 
 class LanguageDetectionRequest(BaseModel):
