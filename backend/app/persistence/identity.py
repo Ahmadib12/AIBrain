@@ -232,6 +232,10 @@ class IdentityRepository:
 
             # Remove integration audit and consent state after owner tombstoning.
             connection.execute(
+                "DELETE FROM devices WHERE user_id = ?",
+                (user_id,),
+            )
+            connection.execute(
                 "DELETE FROM integration_connection_events WHERE user_id = ?",
                 (user_id,),
             )
