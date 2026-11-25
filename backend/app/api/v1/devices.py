@@ -176,7 +176,7 @@ async def verify_device_session(
             request.nonce, request.signature_b64,
         )
         authenticated_user, token = state.identity.create_session(
-            user["id"], device_id=str(device_id)
+            user["id"], device_id=str(device_id), auth_method="device_proof"
         )
     except LookupError:
         raise HTTPException(
