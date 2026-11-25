@@ -84,7 +84,8 @@ class DeviceProofRepository:
         expires = now + timedelta(minutes=5)
         expires_text = expires.isoformat()
         with self.database.transaction(immediate=True):
-            row = self.database.connect().execute(
+            connection = self.database.connect()
+            row = connection.execute(
                 """
                 SELECT id FROM devices
                 WHERE id=? AND user_id=? AND status=?
@@ -94,7 +95,29 @@ class DeviceProofRepository:
             ).fetchone()
             if row is None:
                 raise LookupError("Pending keyed device not found")
-            self.database.connect().execute(
+
+            # Bound challenge issuance to reduce database and signing abuse.
+            cutoff = (now - timedelta(minutes=5)).isoformat()
+            recent = connection.execute(
+                """
+                SELECT COUNT(*) AS total FROM device_auth_challenges
+                WHERE device_id=? AND user_id=? AND created_at > ?
+                """,
+                (device_id, owner_id, cutoff),
+            ).fetchone()["total"]
+            if recent >= 10:
+                raise PermissionError("Device challenge rate limit exceeded")
+
+            # Opportunistic bounded cleanup; expired challenges are never valid.
+            connection.execute(
+                """
+                DELETE FROM device_auth_challenges
+                WHERE expires_at <= ?
+                   OR (used_at IS NOT NULL AND used_at <= ?)
+                """,
+                (now.isoformat(), (now - timedelta(days=1)).isoformat()),
+            )
+            connection.execute(
                 """
                 INSERT INTO device_auth_challenges
                     (id, device_id, user_id, nonce_hash, expires_at, created_at, purpose)
@@ -163,10 +186,14 @@ class DeviceProofRepository:
             connection.execute(
                 """
                 UPDATE device_auth_challenges SET used_at=?
-                WHERE id=? AND used_at IS NULL
+                WHERE id=? AND purpose='enrollment' AND used_at IS NULL
                 """,
                 (now.isoformat(), challenge_id),
             )
+            if connection.execute(
+                "SELECT changes()"
+            ).fetchone()[0] != 1:
+                raise ValueError("Device challenge already used")
             connection.execute(
                 """
                 UPDATE devices SET status='active', last_seen_at=?
