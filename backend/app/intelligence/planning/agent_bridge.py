@@ -49,8 +49,8 @@ class PlanRunProposalBridge:
             or planning.assessment.execution_permitted
         ):
             raise PermissionError("Planning assessment is not eligible for a run proposal")
-        if not isinstance(actions, list) or not 1 <= len(actions) <= self.MAX_ACTIONS:
-            raise ValueError("A plan proposal requires between 1 and 10 mapped actions")
+        if not isinstance(actions, list) or len(actions) > self.MAX_ACTIONS:
+            raise ValueError("A plan proposal accepts at most 10 mapped actions")
 
         planned = {task.task_id: task for task in planning.plan.tasks}
         order = {task.task_id: index for index, task in enumerate(planning.plan.tasks)}
@@ -96,6 +96,8 @@ class PlanRunProposalBridge:
         }
         if mapped != expected:
             raise PermissionError("Every capability-bearing plan task must be mapped exactly once")
+        if not normalized:
+            raise ValueError("A plan proposal requires at least one mapped action")
 
         # AgentExecutionRepository independently validates live task authority,
         # task capability ceilings, READ_ONLY risk, schemas, and contract hashes.
