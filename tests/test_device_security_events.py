@@ -1,3 +1,59 @@
+
+import base64
+import hashlib
+from uuid import uuid4
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from fastapi.testclient import TestClient
+
+
+def _authenticated_headers(client: TestClient) -> dict[str, str]:
+    email = f"device-audit-{uuid4().hex}@example.com"
+    password = "test-password-strong"
+    registered = client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    assert registered.status_code == 200
+    login = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+def _enroll_with_key(client: TestClient, headers: dict[str, str]):
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+    response = client.post("/api/v1/devices", headers=headers, json={
+        "platform": "android", "app_version": "1.0.0",
+        "display_name": "Audit test phone",
+        "public_key_fingerprint": fingerprint,
+    })
+    assert response.status_code == 201
+    device = response.json()
+    registered = client.put(
+        f"/api/v1/devices/{device['device_id']}/key",
+        headers=headers,
+        json={"public_key_b64": base64.b64encode(public_key).decode("ascii")},
+    )
+    assert registered.status_code == 204
+    return device, private_key
+
+
+def _activate_with_proof(client: TestClient, headers: dict[str, str], device: dict, private_key):
+    challenge = client.post(f"/api/v1/devices/{device['device_id']}/challenge", headers=headers)
+    assert challenge.status_code == 200
+    data = challenge.json()
+    signature = private_key.sign(base64.b64decode(data["message_b64"], validate=True))
+    verified = client.post(
+        f"/api/v1/devices/{device['device_id']}/verify",
+        params={"challenge_id": data["challenge_id"]},
+        headers=headers,
+        json={
+            "nonce": data["nonce"],
+            "signature_b64": base64.b64encode(signature).decode("ascii"),
+        },
+    )
+    return verified, data
+
 def test_device_security_event_page_size_contract():
     from backend.app.persistence.device_security_events import DeviceSecurityEventRepository
 
@@ -9,7 +65,6 @@ def test_device_security_event_page_size_contract():
         raise AssertionError("unbounded page size accepted")
 
 def test_device_security_history_is_owner_scoped(client):
-    from test_device_registry import _authenticated_headers, _enroll_with_key, _activate_with_proof
 
     owner = _authenticated_headers(client)
     other = _authenticated_headers(client)
@@ -28,7 +83,6 @@ def test_device_security_history_is_owner_scoped(client):
 
 
 def test_device_security_history_rejects_unbounded_page_size(client):
-    from test_device_registry import _authenticated_headers
 
     headers = _authenticated_headers(client)
     response = client.get("/api/v1/devices/security-events?limit=101", headers=headers)
@@ -36,8 +90,6 @@ def test_device_security_history_rejects_unbounded_page_size(client):
     assert response.json()["error"]["code"] == "INVALID_EVENT_PAGE_SIZE"
 
 def test_device_security_history_records_login_and_revocation_once(client):
-    import base64
-    from test_device_registry import _authenticated_headers, _enroll_with_key, _activate_with_proof
 
     headers = _authenticated_headers(client)
     device, key = _enroll_with_key(client, headers)
