@@ -349,3 +349,15 @@ def test_database_rejects_grant_mutation_and_unrecorded_task_transition(client):
                 "UPDATE agent_task_events SET event_type='failed' WHERE id=?",
                 (event["id"],),
             )
+
+def test_text_generation_capability_is_owner_grantable(client):
+    token = owner_token(client, "control-text-generation@example.com")
+    agent = create_active_agent(client, token, "Local generation agent")
+    response = client.post(
+        f"/api/v1/agents/{agent['id']}/capabilities",
+        headers=headers(token),
+        json={"capability": "text_generation"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["capability"] == "text_generation"
+
