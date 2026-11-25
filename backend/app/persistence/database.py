@@ -2802,6 +2802,137 @@ created_at TEXT NOT NULL,
                 """
             ),
             (
+                37,
+                """
+                -- Preserve device audit history when a device is removed. Account
+                -- erasure remains the only lifecycle allowed to erase owner events.
+                DROP TRIGGER IF EXISTS prevent_device_security_event_update;
+                DROP INDEX IF EXISTS idx_device_security_events_owner_time;
+                ALTER TABLE device_security_events RENAME TO device_security_events_v36;
+                CREATE TABLE device_security_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (event_type IN (
+                        'device.enrolled',
+                        'device.key_registered',
+                        'device.activated',
+                        'device.revoked',
+                        'device.session_authenticated',
+                        'device.login_authenticated'
+                    )),
+                    occurred_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                INSERT INTO device_security_events
+                    (id, user_id, device_id, event_type, occurred_at, details_json)
+                SELECT id, user_id, device_id, event_type, occurred_at, details_json
+                FROM device_security_events_v36;
+                DROP TABLE device_security_events_v36;
+                CREATE INDEX idx_device_security_events_owner_time
+                    ON device_security_events(user_id, occurred_at DESC, id DESC);
+
+                ALTER TABLE sessions ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'account'
+                    CHECK (auth_method IN ('account','device_proof','device_login'));
+
+                CREATE TRIGGER prevent_device_security_event_update
+                BEFORE UPDATE ON device_security_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'device security events are immutable');
+                END;
+                CREATE TRIGGER prevent_device_security_event_delete
+                BEFORE DELETE ON device_security_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device security events may only be erased with the account');
+                END;
+
+                -- Security events are emitted by the same SQLite transaction as
+                -- the state change, eliminating gaps between action and audit.
+                CREATE TRIGGER audit_device_enrollment
+                AFTER INSERT ON devices
+                BEGIN
+                    INSERT INTO device_security_events
+                        (id,user_id,device_id,event_type,occurred_at,details_json)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+                        substr(lower(hex(randomblob(2))),2) || '-' ||
+                        substr('89ab',abs(random()) % 4 + 1,1) ||
+                        substr(lower(hex(randomblob(2))),2) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.id,'device.enrolled',NEW.enrolled_at,'{}'
+                    );
+                END;
+                CREATE TRIGGER audit_device_key_registration
+                AFTER UPDATE OF public_key_b64 ON devices
+                WHEN OLD.public_key_b64 IS NULL AND NEW.public_key_b64 IS NOT NULL
+                BEGIN
+                    INSERT INTO device_security_events
+                        (id,user_id,device_id,event_type,occurred_at,details_json)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.id,'device.key_registered',
+                        strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),'{}'
+                    );
+                END;
+                CREATE TRIGGER audit_device_activation
+                AFTER UPDATE OF status ON devices
+                WHEN OLD.status <> 'active' AND NEW.status = 'active'
+                BEGIN
+                    INSERT INTO device_security_events
+                        (id,user_id,device_id,event_type,occurred_at,details_json)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.id,'device.activated',
+                        strftime('%Y-%m-%dT%H:%M:%f+00:00','now'),'{}'
+                    );
+                END;
+                CREATE TRIGGER audit_device_revocation
+                AFTER UPDATE OF status ON devices
+                WHEN OLD.status <> 'revoked' AND NEW.status = 'revoked'
+                BEGIN
+                    INSERT INTO device_security_events
+                        (id,user_id,device_id,event_type,occurred_at,details_json)
+                    VALUES (
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.id,'device.revoked',
+                        COALESCE(NEW.revoked_at,strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),'{}'
+                    );
+                END;
+                CREATE TRIGGER audit_device_session
+                AFTER INSERT ON sessions
+                WHEN NEW.device_id IS NOT NULL
+                BEGIN
+                    INSERT INTO device_security_events
+                        (id,user_id,device_id,event_type,occurred_at,details_json)
+                    SELECT
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.user_id,NEW.device_id,
+                        CASE NEW.auth_method
+                            WHEN 'device_login' THEN 'device.login_authenticated'
+                            ELSE 'device.session_authenticated'
+                        END,
+                        NEW.created_at,'{}'
+                    WHERE EXISTS (
+                        SELECT 1 FROM devices d
+                        WHERE d.id=NEW.device_id AND d.user_id=NEW.user_id AND d.status='active'
+                    );
+                END;
+                """
+            ),
+            (
                 36,
                 """
                 CREATE TABLE device_security_events (
