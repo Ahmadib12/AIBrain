@@ -128,9 +128,17 @@ class IdentityRepository:
         return dict(row) if row is not None else None
 
     def create_session(
-        self, user_id: str, *, device_id: str | None = None
+        self, user_id: str, *, device_id: str | None = None,
+        auth_method: str = "device_proof",
     ) -> tuple[dict, str]:
         """Create an account session, optionally bound to an active owned device."""
+        if auth_method not in {"account", "device_proof", "device_login"}:
+            raise ValueError("Unsupported session authentication method")
+        if device_id is None and auth_method != "account":
+            raise ValueError("Device authentication method requires a device")
+        if device_id is not None and auth_method == "account":
+            raise ValueError("Device-bound session requires device authentication")
+
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
         expires = (
@@ -166,11 +174,11 @@ class IdentityRepository:
             connection.execute(
                 """
                 INSERT INTO sessions (
-                    token_hash, user_id, expires_at, created_at, device_id
+                    token_hash, user_id, expires_at, created_at, device_id, auth_method
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (token_hash, user_id, expires, now, device_id),
+                (token_hash, user_id, expires, now, device_id, auth_method),
             )
 
         user = self.get_user(user_id)
