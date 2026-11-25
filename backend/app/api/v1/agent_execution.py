@@ -94,15 +94,13 @@ async def create_planned_agent_run(
     try:
         classifier = DeterministicTaskClassifier()
         classification = classifier.classify(request.text)
-        mapped_capabilities = tuple(
-            item.required_capability for item in request.actions
-        )
+        state = get_app_state()
+        task = state.agent_control.get_task(user["id"], task_id)
         planning = PlanningEngine().plan(
             request.text,
             classification,
-            available_capabilities=mapped_capabilities,
+            available_capabilities=task["capability_ceiling"],
         )
-        state = get_app_state()
         registry, _ = _runtime()
         run = PlanRunProposalBridge().create_proposal(
             user["id"],
