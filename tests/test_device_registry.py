@@ -120,3 +120,20 @@ def test_device_capability_report_is_metadata_not_permission_grant(
 def test_device_lifecycle_requires_authentication(client: TestClient) -> None:
     response = client.get("/api/v1/devices")
     assert response.status_code == 401
+
+
+def test_account_erasure_removes_enrolled_devices(client: TestClient) -> None:
+    from backend.app.app_state import get_app_state
+
+    headers = _authenticated_headers(client)
+    device = _enroll(client, headers)
+    token = headers["Authorization"].removeprefix("Bearer ")
+    owner = get_app_state().identity.resolve_token(token)
+
+    get_app_state().identity.delete_user(owner["id"])
+
+    remaining = get_app_state().database.connect().execute(
+        "SELECT id FROM devices WHERE user_id = ?",
+        (owner["id"],),
+    ).fetchall()
+    assert remaining == []
