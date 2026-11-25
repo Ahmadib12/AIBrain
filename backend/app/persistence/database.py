@@ -2741,6 +2741,36 @@ created_at TEXT NOT NULL,
                 END;
                 """,
             ),
+            (
+                34,
+                """
+                ALTER TABLE devices ADD COLUMN public_key_b64 TEXT;
+                CREATE TABLE device_auth_challenges (
+                    id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    nonce_hash TEXT NOT NULL CHECK (length(nonce_hash) = 64),
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_device_auth_challenges_expiry
+                    ON device_auth_challenges(expires_at, used_at);
+                CREATE TRIGGER validate_device_challenge_insert
+                BEFORE INSERT ON device_auth_challenges
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM devices d JOIN users u ON u.id=d.user_id
+                    WHERE d.id=NEW.device_id AND d.user_id=NEW.user_id
+                      AND d.status='pending' AND d.public_key_b64 IS NOT NULL
+                      AND u.deleted_at IS NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device challenge requires pending keyed device');
+                END;
+                """,
+            ),
         )
 
         with self._lock:
