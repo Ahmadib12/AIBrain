@@ -98,11 +98,15 @@ class DeviceProofRepository:
                  hashlib.sha256(nonce.encode("ascii")).hexdigest(),
                  expires_text, now.isoformat()),
             )
+        message = _signed_message(
+            challenge_id, device_id, owner_id, expires_text, nonce
+        )
         return {
             "challenge_id": challenge_id,
             "device_id": device_id,
             "nonce": nonce,
             "expires_at": expires_text,
+            "message_b64": base64.b64encode(message).decode("ascii"),
         }
 
     def verify_and_activate(
