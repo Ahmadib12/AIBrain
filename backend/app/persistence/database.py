@@ -3044,9 +3044,19 @@ created_at TEXT NOT NULL,
                 """
                 -- Session security history is independent of live session rows:
                 -- token material is never copied into the audit stream.
+                ALTER TABLE sessions ADD COLUMN audit_ref TEXT;
+                UPDATE sessions
+                SET audit_ref =
+                    lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                    lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                    lower(hex(randomblob(6)))
+                WHERE audit_ref IS NULL;
+                CREATE UNIQUE INDEX idx_sessions_audit_ref ON sessions(audit_ref);
+
                 CREATE TABLE session_security_events (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
+                    session_ref TEXT NOT NULL,
                     device_id TEXT,
                     auth_method TEXT NOT NULL CHECK (
                         auth_method IN ('account','device_proof','device_login')
@@ -3059,11 +3069,14 @@ created_at TEXT NOT NULL,
                         )
                     ),
                     occurred_at TEXT NOT NULL,
+                    UNIQUE(session_ref, event_type),
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
                 CREATE INDEX idx_session_security_events_owner_time
                     ON session_security_events(user_id, occurred_at DESC, id DESC);
+                CREATE INDEX idx_session_security_events_session
+                    ON session_security_events(user_id, session_ref, occurred_at);
 
                 CREATE TRIGGER prevent_session_security_event_update
                 BEFORE UPDATE ON session_security_events
@@ -3084,17 +3097,38 @@ created_at TEXT NOT NULL,
                     );
                 END;
 
+                CREATE TRIGGER prevent_client_session_audit_ref
+                BEFORE INSERT ON sessions
+                WHEN NEW.audit_ref IS NOT NULL
+                BEGIN
+                    SELECT RAISE(ABORT, 'session audit reference is server generated');
+                END;
+
+                CREATE TRIGGER prevent_session_audit_ref_replacement
+                BEFORE UPDATE OF audit_ref ON sessions
+                WHEN OLD.audit_ref IS NOT NULL AND NEW.audit_ref IS NOT OLD.audit_ref
+                BEGIN
+                    SELECT RAISE(ABORT, 'session audit reference is immutable');
+                END;
+
                 CREATE TRIGGER audit_session_created
                 AFTER INSERT ON sessions
                 BEGIN
+                    UPDATE sessions
+                    SET audit_ref =
+                        lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6)))
+                    WHERE token_hash=NEW.token_hash AND audit_ref IS NULL;
+
                     INSERT INTO session_security_events
-                        (id,user_id,device_id,auth_method,event_type,occurred_at)
-                    VALUES (
+                        (id,user_id,session_ref,device_id,auth_method,event_type,occurred_at)
+                    SELECT
                         lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
                         lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
                         lower(hex(randomblob(6))),
-                        NEW.user_id,NEW.device_id,NEW.auth_method,'session.created',NEW.created_at
-                    );
+                        user_id,audit_ref,device_id,auth_method,'session.created',created_at
+                    FROM sessions WHERE token_hash=NEW.token_hash;
                 END;
 
                 CREATE TRIGGER audit_session_revoked
@@ -3102,12 +3136,13 @@ created_at TEXT NOT NULL,
                 WHEN OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
                 BEGIN
                     INSERT INTO session_security_events
-                        (id,user_id,device_id,auth_method,event_type,occurred_at)
+                        (id,user_id,session_ref,device_id,auth_method,event_type,occurred_at)
                     VALUES (
                         lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
                         lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
                         lower(hex(randomblob(6))),
-                        NEW.user_id,NEW.device_id,NEW.auth_method,'session.revoked',NEW.revoked_at
+                        NEW.user_id,NEW.audit_ref,NEW.device_id,NEW.auth_method,
+                        'session.revoked',NEW.revoked_at
                     );
                 END;
 
@@ -3116,12 +3151,13 @@ created_at TEXT NOT NULL,
                 WHEN datetime(OLD.expires_at) <= CURRENT_TIMESTAMP
                 BEGIN
                     INSERT INTO session_security_events
-                        (id,user_id,device_id,auth_method,event_type,occurred_at)
+                        (id,user_id,session_ref,device_id,auth_method,event_type,occurred_at)
                     VALUES (
                         lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
                         lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
                         lower(hex(randomblob(6))),
-                        OLD.user_id,OLD.device_id,OLD.auth_method,'session.expired',OLD.expires_at
+                        OLD.user_id,OLD.audit_ref,OLD.device_id,OLD.auth_method,
+                        'session.expired',OLD.expires_at
                     );
                 END;
                 """
