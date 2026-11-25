@@ -29,6 +29,8 @@ def _headers(token: str) -> dict[str, str]:
 
 def test_session_security_history_records_creation_and_revocation(client: TestClient):
     token, _ = _register_and_login(client, "lifecycle")
+    state = get_app_state()
+    user_id = state.identity.resolve_token(token)["id"]
 
     before_logout = client.get(
         "/api/v1/auth/security-events", headers=_headers(token)
@@ -51,9 +53,9 @@ def test_session_security_history_records_creation_and_revocation(client: TestCl
     )
     assert after_logout.status_code == 401
 
-    state = get_app_state()
-    user = state.identity.get_user_by_email(_register_and_login(client, "lookup")[1])
-    assert user is not None
+    events = state.session_security_events.list_owned(user_id, limit=100)
+    assert [event["event_type"] for event in events].count("session.created") == 1
+    assert [event["event_type"] for event in events].count("session.revoked") == 1
 
 
 def test_session_security_history_is_owner_scoped(client: TestClient):
