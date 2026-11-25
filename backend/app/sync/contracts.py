@@ -7,15 +7,12 @@ import base64
 from datetime import datetime
 from enum import Enum
 import hashlib
-import re
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 _B64 = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
-_SHA256 = re.compile(r"^[a-f0-9]{64}$")
-
 
 class SyncEntityType(str, Enum):
     MEMORY = "memory"
