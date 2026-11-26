@@ -30,15 +30,16 @@ are a coverage checklist, not a claim that PostgreSQL currently has parity.
    structurally implements the connection, transaction, and shutdown contract.
    This is an architectural seam, not a PostgreSQL adapter.
 2. **PostgreSQL-native migrations** — partially implemented in the isolated
-   ordered migration stream. Versions 1–18 currently cover SQLite migration
-   domains 1–27, including dispatch recovery, lookup authorization, execution
-   reconciliation, memory consent, learning history, agent lifecycle, capability
-   grants, tasks, messages, and bounded agent runs. Repository compatibility and full multi-instance invariant parity
-   remain outstanding. Port every remaining table, check, unique/index
-   constraint, foreign key, append-only rule, account-active guard, lifecycle
-   transition, notification outbox trigger, operator redrive audit, claim-token
-   fencing, recovery-abuse windows, and account-erasure behavior.
+   ordered migration stream. Versions 1–36 now cover SQLite migration domains
+   1–45, including dispatch recovery, memory consent, agent lifecycle,
+   integrations, device security, recovery notification delivery, operator
+   redrive, and abuse-window persistence. Repository compatibility and
+   full multi-instance invariant parity remain outstanding. Continue auditing
+   every repository and proving every constraint, unique/index constraint,
+   foreign key, append-only rule, account-active guard, lifecycle transition,
+   notification operation, and account-erasure behavior.
    Do not translate SQLite trigger SQL mechanically.
+
 3. **Repository compatibility** — still required. Audit every repository for
    SQLite-only SQL/API assumptions. Use explicit dialect-aware implementations
    where portability would obscure correctness. Preserve row shapes and
