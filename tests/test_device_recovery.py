@@ -480,6 +480,8 @@ def test_dead_letter_redrive_is_operator_audited_and_abuse_limits_are_shared(cli
     assert len(audit) == 1
     assert audit[0]["action"] == "redrive"
     assert audit[0]["operator_user_id"] == owner["id"]
+    assert audit[0]["attempts_before"] == 8
+    assert audit[0]["failure_code_before"] == "delivery_attempts_exhausted"
 
     monitor = state.security_recovery_abuse
     with ThreadPoolExecutor(max_workers=10) as pool:
@@ -489,6 +491,16 @@ def test_dead_letter_redrive_is_operator_audited_and_abuse_limits_are_shared(cli
         ))
     assert sum(allowed) == 5
     assert monitor.metrics()["blocked_attempts"] == 15
+    ip_limited = [
+        monitor.check_and_record(
+            f"ip-scope-{index}@example.com",
+            source_ip="203.0.113.9",
+            limit=5,
+            ip_limit=3,
+        )
+        for index in range(5)
+    ]
+    assert sum(ip_limited) == 3
 
 
 def test_security_notification_operator_api_requires_allowlisted_account(client, monkeypatch):
