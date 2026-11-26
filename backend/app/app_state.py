@@ -7,7 +7,10 @@ from backend.app.persistence.device_security_events import DeviceSecurityEventRe
 from backend.app.persistence.session_security_events import SessionSecurityEventRepository
 from backend.app.persistence.security_notifications import SecurityNotificationOutbox
 from backend.app.persistence.security_notification_operations import SecurityNotificationOperations
-from backend.app.persistence.security_recovery_abuse import SecurityRecoveryAbuseMonitor
+from backend.app.persistence.security_recovery_abuse import (
+    RedisSecurityRecoveryAbuseMonitor,
+    SecurityRecoveryAbuseMonitor,
+)
 from backend.app.devices.proof import DeviceProofRepository
 from backend.app.persistence.agents import AgentRepository
 from backend.app.persistence.agent_control import AgentControlRepository
@@ -41,7 +44,28 @@ class AppState:
         self.session_security_events = SessionSecurityEventRepository(self.database)
         self.security_notifications = SecurityNotificationOutbox(self.database)
         self.security_notification_operations = SecurityNotificationOperations(self.database)
-        self.security_recovery_abuse = SecurityRecoveryAbuseMonitor(self.database)
+        self._security_recovery_abuse_redis = None
+        if settings.security_recovery_abuse_backend == "redis":
+            try:
+                from redis import Redis
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Redis recovery abuse backend requires the redis package"
+                ) from exc
+            self._security_recovery_abuse_redis = Redis.from_url(
+                settings.security_recovery_abuse_redis_url.get_secret_value(),
+                decode_responses=True,
+                socket_connect_timeout=settings.security_recovery_abuse_redis_timeout_seconds,
+                socket_timeout=settings.security_recovery_abuse_redis_timeout_seconds,
+                health_check_interval=30,
+            )
+            self.security_recovery_abuse = RedisSecurityRecoveryAbuseMonitor(
+                self._security_recovery_abuse_redis,
+                hmac_key=settings.security_recovery_abuse_hmac_key.get_secret_value(),
+                key_prefix=settings.security_recovery_abuse_redis_key_prefix,
+            )
+        else:
+            self.security_recovery_abuse = SecurityRecoveryAbuseMonitor(self.database)
         self.device_proofs = DeviceProofRepository(self.database)
         self.identity = IdentityRepository(
             self.database,
@@ -97,6 +121,12 @@ class AppState:
             settings=settings,
         )
 
+    def close(self) -> None:
+        if self._security_recovery_abuse_redis is not None:
+            self._security_recovery_abuse_redis.close()
+            self._security_recovery_abuse_redis = None
+        self.database.shutdown()
+
 
 _app_state: AppState | None = None
 
@@ -115,7 +145,7 @@ def set_app_state(state: AppState) -> None:
     if previous is state:
         return
     if previous is not None:
-        previous.database.shutdown()
+        previous.close()
     _app_state = state
 
 
@@ -124,4 +154,4 @@ def reset_app_state() -> None:
     state = _app_state
     _app_state = None
     if state is not None:
-        state.database.shutdown()
+        state.close()
