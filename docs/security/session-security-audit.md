@@ -157,3 +157,17 @@ The transport and worker are covered by mocked SMTP and lifecycle tests. A real 
 ### Terminal failure handling (Migration 44)
 
 Migration 44 adds a terminal `failed` status, `failed_at`, and a non-sensitive `failure_code`. The worker permits at most eight delivery attempts. The final failed attempt is recorded rather than endlessly retried, and failed notifications are excluded from pending counts and future claims. This is an operational dead-letter state, not a guaranteed operator alert or automatic redrive mechanism; a secure owner/operator review and controlled requeue workflow remain future work.
+
+
+### Controlled dead-letter operations and shared recovery-abuse monitoring (Migration 45)
+
+Security operators authenticated through the existing security-operator email allowlist can inspect dead-letter metadata at
+`GET /api/v1/security-notifications/dead-letter`, review immutable operator events, and redrive an individual failed notification with a required reason through
+`POST /api/v1/security-notifications/dead-letter/{notification_id}/redrive`.
+Redrive is atomic, resets the delivery attempt counter, clears terminal failure fields, increments a redrive counter, and appends an immutable operator audit event. The list response deliberately omits recipient addresses and message payloads. Redrive is explicit and never automatic.
+
+`GET /api/v1/security-notifications/metrics` exposes aggregate queue counts, oldest active queue age, and aggregate recovery-abuse counters. It does not expose account identifiers, recipient addresses, or raw abuse scopes.
+
+Recovery challenge rate limiting now uses an atomic fixed-window counter in the application database rather than a process-local memory limiter. The persisted scope is a SHA-256 digest of normalized email plus device ID; raw identifiers are not stored. Processes sharing the same database coordinate their counters. This is cross-process/shared-database protection, not a claim of multi-region protection: deployments must use a genuinely shared, highly available database and separately test their network-edge controls. The current SQLite implementation does not provide a distributed multi-region rate-limiting service.
+
+The SMTP integration smoke test is opt-in and must be pointed at a dedicated test mailbox or SMTP sandbox using `AIBRAIN_SMTP_INTEGRATION=1` and `AIBRAIN_SECURITY_NOTIFICATION_SMTP_TEST_RECIPIENT`. It is intentionally skipped in ordinary test runs. No real provider credentials or recipient are committed.
