@@ -3338,6 +3338,45 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                42,
+                """
+                -- Recovery rotations are authorized by a single-use recovery
+                -- code plus possession of the replacement private key.
+                ALTER TABLE device_key_rotation_challenges
+                    ADD COLUMN recovery_code_id TEXT
+                    REFERENCES webauthn_recovery_codes(id) ON DELETE CASCADE;
+                CREATE INDEX idx_device_key_rotation_recovery_code
+                    ON device_key_rotation_challenges(recovery_code_id);
+
+                DROP TRIGGER IF EXISTS prevent_device_key_rotation_without_proof;
+                CREATE TRIGGER prevent_device_key_rotation_without_proof
+                BEFORE UPDATE OF public_key_b64, public_key_fingerprint ON devices
+                WHEN (NEW.public_key_fingerprint IS NOT OLD.public_key_fingerprint
+                   OR (OLD.public_key_b64 IS NOT NULL
+                       AND NEW.public_key_b64 IS NOT OLD.public_key_b64))
+                 AND NOT EXISTS (
+                    SELECT 1 FROM device_key_rotation_challenges c
+                    WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
+                      AND c.used_at IS NOT NULL AND c.applied_at IS NULL
+                      AND c.previous_fingerprint=OLD.public_key_fingerprint
+                      AND c.proposed_public_key_b64=NEW.public_key_b64
+                      AND c.proposed_fingerprint=NEW.public_key_fingerprint
+                      AND (
+                        c.recovery_code_id IS NULL
+                        OR EXISTS (
+                            SELECT 1 FROM webauthn_recovery_codes r
+                            WHERE r.id=c.recovery_code_id
+                              AND r.user_id=c.user_id
+                              AND r.used_at IS NOT NULL
+                        )
+                      )
+                 )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device key replacement requires verified rotation or recovery');
+                END;
+                """
+            ),
         )
 
         with self._lock:
