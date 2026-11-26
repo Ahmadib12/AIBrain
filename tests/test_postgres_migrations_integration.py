@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 13
-    assert runner.migrate() == 13
+    assert runner.migrate() == 18
+    assert runner.migrate() == 18
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -269,6 +269,11 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (11, "tool_execution_reconciliation_events"),
             (12, "memory_consent_lifecycle_and_memory_binding"),
             (13, "learning_adaptation_events_and_evaluations"),
+            (14, "agent_identity_and_registration_events"),
+            (15, "agent_lifecycle_event_guards"),
+            (16, "agent_capability_grants_tasks_messages_and_controls"),
+            (17, "agent_task_transition_and_definition_guards"),
+            (18, "agent_runs_steps_and_event_history"),
         ]
 
 
@@ -280,7 +285,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 13
+    assert runner.migrate() == 18
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -424,7 +429,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 13
+    assert runner.migrate() == 18
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
@@ -624,7 +629,7 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 13
+    assert runner.migrate() == 18
 
     suffix = str(uuid.uuid4())
     user_id = "memory-learning-owner-" + suffix
