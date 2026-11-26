@@ -210,7 +210,208 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             BEFORE INSERT ON tool_authorizations
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
         """,
+    ),,
+
+    PostgresMigration(
+        version=3,
+        name="tool_execution_attempts_bindings_and_dispatch_audit",
+        sql="""
+        CREATE TABLE tool_execution_attempts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL UNIQUE REFERENCES tool_requests(id) ON DELETE CASCADE,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL CHECK (status IN (
+                'claimed', 'succeeded', 'failed', 'outcome_unknown'
+            )),
+            claimed_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT,
+            error_code TEXT,
+            CHECK (
+                (status = 'claimed' AND finished_at IS NULL)
+                OR
+                (status IN ('succeeded', 'failed', 'outcome_unknown')
+                    AND finished_at IS NOT NULL)
+            )
+        );
+        CREATE INDEX idx_tool_execution_attempts_status_claimed
+            ON tool_execution_attempts(status, claimed_at);
+        CREATE INDEX idx_tool_execution_attempts_user
+            ON tool_execution_attempts(user_id);
+
+        CREATE FUNCTION aibrain_validate_execution_attempt()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM tool_requests r
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = NEW.request_id
+                  AND r.user_id = NEW.user_id
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'tool execution attempt requires an active request owner'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_tool_execution_attempt
+            BEFORE INSERT ON tool_execution_attempts
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_execution_attempt();
+
+        CREATE TABLE tool_execution_bindings (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL UNIQUE REFERENCES tool_requests(id) ON DELETE CASCADE,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+            payload_json TEXT NOT NULL,
+            tool_contract_fingerprint TEXT NOT NULL
+                CHECK (length(tool_contract_fingerprint) = 64),
+            adapter_id TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            provider_scope TEXT NOT NULL,
+            capabilities_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_tool_execution_bindings_user
+            ON tool_execution_bindings(user_id);
+
+        CREATE FUNCTION aibrain_validate_execution_binding()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM tool_requests r
+                JOIN tool_execution_attempts a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = NEW.request_id
+                  AND r.user_id = NEW.user_id
+                  AND r.status = 'executing'
+                  AND r.consumed_at IS NOT NULL
+                  AND a.status = 'claimed'
+                  AND a.idempotency_key = NEW.idempotency_key
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'dispatch binding requires an active claimed execution'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_tool_execution_binding
+            BEFORE INSERT ON tool_execution_bindings
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_execution_binding();
+
+        CREATE FUNCTION aibrain_reject_immutable_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION '% rows are immutable', TG_TABLE_NAME
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_tool_execution_binding_update
+            BEFORE UPDATE ON tool_execution_bindings
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+
+        CREATE TABLE tool_dispatch_audit_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL REFERENCES tool_requests(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL CHECK (event_type IN (
+                'dispatch_started', 'dispatch_succeeded', 'dispatch_failed',
+                'dispatch_unknown', 'outcome_lookup'
+            )),
+            action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+            details_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_tool_dispatch_audit_user
+            ON tool_dispatch_audit_events(user_id, created_at);
+
+        CREATE FUNCTION aibrain_validate_dispatch_audit_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM tool_requests r
+                JOIN tool_execution_attempts a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = NEW.request_id
+                  AND r.user_id = NEW.user_id
+                  AND u.deleted_at IS NULL
+                  AND (
+                    (
+                      NEW.event_type = 'dispatch_started'
+                      AND r.status = 'executing'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'claimed'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM tool_dispatch_audit_events p
+                        WHERE p.request_id = r.id AND p.user_id = r.user_id
+                          AND p.event_type = 'dispatch_started'
+                      )
+                      AND EXISTS (
+                        SELECT 1 FROM tool_execution_bindings b
+                        WHERE b.request_id = r.id AND b.user_id = r.user_id
+                          AND b.action_digest = NEW.action_digest
+                          AND b.idempotency_key = r.id
+                      )
+                    )
+                    OR
+                    (
+                      NEW.event_type IN (
+                        'dispatch_succeeded', 'dispatch_failed', 'dispatch_unknown'
+                      )
+                      AND r.status = 'executing'
+                      AND r.consumed_at IS NOT NULL
+                      AND a.status = 'claimed'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM tool_dispatch_audit_events p
+                        WHERE p.request_id = r.id AND p.user_id = r.user_id
+                          AND p.event_type IN (
+                            'dispatch_succeeded', 'dispatch_failed', 'dispatch_unknown'
+                          )
+                      )
+                      AND EXISTS (
+                        SELECT 1 FROM tool_dispatch_audit_events s
+                        WHERE s.request_id = r.id AND s.user_id = r.user_id
+                          AND s.event_type = 'dispatch_started'
+                          AND s.action_digest = NEW.action_digest
+                      )
+                    )
+                    OR
+                    (
+                      NEW.event_type = 'outcome_lookup'
+                      AND r.status = 'outcome_unknown'
+                      AND a.status = 'outcome_unknown'
+                      AND EXISTS (
+                        SELECT 1 FROM tool_dispatch_audit_events s
+                        WHERE s.request_id = r.id AND s.user_id = r.user_id
+                          AND s.event_type = 'dispatch_started'
+                          AND s.action_digest = NEW.action_digest
+                      )
+                    )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'dispatch audit event violates execution lifecycle'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_tool_dispatch_audit_event
+            BEFORE INSERT ON tool_dispatch_audit_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_dispatch_audit_event();
+        CREATE TRIGGER prevent_tool_dispatch_audit_update
+            BEFORE UPDATE ON tool_dispatch_audit_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        """,
     ),
+
 )
 
 
