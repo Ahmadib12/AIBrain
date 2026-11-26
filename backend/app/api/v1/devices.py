@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
-from backend.app.auth.rate_limit import LoginRateLimiter
 from backend.app.app_state import get_app_state
 from backend.app.devices.contracts import (
     DeviceCapabilityReport,
@@ -16,7 +15,6 @@ from backend.app.devices.contracts import (
 
 
 router = APIRouter(prefix="/devices", tags=["devices"])
-_recovery_rate_limiter = LoginRateLimiter(limit=5, window_seconds=300)
 
 
 class PublicKeyRegistrationRequest(BaseModel):
@@ -306,7 +304,8 @@ async def create_device_recovery_challenge(
 ) -> dict:
     """Start lost-device recovery using a one-time code and replacement key."""
     email_key = request.email.strip().lower()
-    if not _recovery_rate_limiter.check_and_record(email_key):
+    state = get_app_state()
+    if not state.security_recovery_abuse.check_and_record(email_key, str(device_id)):
         raise HTTPException(
             status_code=429,
             detail={
@@ -314,8 +313,6 @@ async def create_device_recovery_challenge(
                 "message": "Device recovery is temporarily unavailable",
             },
         )
-
-    state = get_app_state()
     owner = state.identity.get_user_by_email(email_key)
     if owner is None:
         raise HTTPException(
