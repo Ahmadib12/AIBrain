@@ -164,7 +164,7 @@ Migration 44 adds a terminal `failed` status, `failed_at`, and a non-sensitive `
 Security operators authenticated through the existing security-operator email allowlist can inspect dead-letter metadata at
 `GET /api/v1/security-notifications/dead-letter`, review immutable operator events, and redrive an individual failed notification with a required reason through
 `POST /api/v1/security-notifications/dead-letter/{notification_id}/redrive`.
-Redrive is atomic, resets the delivery attempt counter, clears terminal failure fields, increments a redrive counter, and appends an immutable operator audit event. The list response deliberately omits recipient addresses and message payloads. Redrive is explicit and never automatic.
+Redrive is atomic, resets the delivery attempt counter, clears terminal failure fields, increments a redrive counter, and appends an immutable operator audit event. The list response deliberately omits recipient addresses and message payloads. Redrive is explicit and never automatic. The audit event preserves the pre-redrive attempt count and terminal failure code.
 
 `GET /api/v1/security-notifications/metrics` exposes aggregate queue counts, oldest active queue age, and aggregate recovery-abuse counters. It does not expose account identifiers, recipient addresses, or raw abuse scopes.
 
