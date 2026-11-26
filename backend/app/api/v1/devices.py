@@ -2,7 +2,7 @@
 import sqlite3
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
@@ -301,11 +301,15 @@ async def verify_device_session(
 async def create_device_recovery_challenge(
     device_id: UUID,
     request: DeviceRecoveryChallengeRequest,
+    http_request: Request,
 ) -> dict:
     """Start lost-device recovery using a one-time code and replacement key."""
     email_key = request.email.strip().lower()
     state = get_app_state()
-    if not state.security_recovery_abuse.check_and_record(email_key):
+    if not state.security_recovery_abuse.check_and_record(
+        email_key,
+        source_ip=http_request.client.host if http_request.client else None,
+    ):
         raise HTTPException(
             status_code=429,
             detail={
