@@ -51,4 +51,31 @@ caller does not invalidate its own request context mid-operation.
 
 This is an application-level session inventory and revocation control. It does
 not yet provide device recovery, cryptographic key rotation, or remote device
-attestation.
+attestation.\n
+
+## Device key rotation
+
+Migration 41 adds a dedicated rotation challenge store and the
+`device.key_rotated` immutable audit event. Rotation is available only for an
+active, already-keyed device owned by the authenticated account.
+
+The owner submits the replacement Ed25519 public key to
+`POST /api/v1/devices/{device_id}/key-rotation/challenge`. The server creates a
+five-minute, one-use challenge bound to the device, owner, replacement key
+fingerprint, and nonce. The device must sign the exact returned message with
+both its existing private key and the replacement private key. The signatures
+are submitted to
+`POST /api/v1/devices/{device_id}/key-rotation/verify`.
+
+The server verifies both signatures inside an immediate transaction, consumes
+the challenge, replaces the public key and fingerprint, revokes every active
+session bound to that device, and appends a key-rotation audit event containing
+only the previous and new public-key fingerprints. The database rejects key
+replacement unless a matching consumed rotation challenge is awaiting its
+single application. The event contains no private key, signature, nonce, or
+bearer token.
+
+This flow protects a device when both old-key and replacement-key possession
+are available. It is not a lost-device recovery mechanism: when the old private
+key is unavailable, rotation must not be bypassed by an ordinary account
+session. Recovery requires a separate high-assurance process.
