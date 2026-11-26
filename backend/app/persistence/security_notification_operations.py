@@ -41,7 +41,7 @@ class SecurityNotificationOperations:
             changed = connection.execute(
                 """
                 UPDATE security_notification_outbox
-                SET status='pending', attempts=0, available_at=?, claimed_at=NULL,
+                SET status='pending', attempts=0, available_at=?, claimed_at=NULL, claim_token=NULL,
                     failed_at=NULL, failure_code=NULL,
                     redrive_count=redrive_count+1
                 WHERE id=? AND status='failed'
