@@ -12,6 +12,13 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE users" in MIGRATIONS[0].sql
     assert "CREATE TABLE sessions" in MIGRATIONS[0].sql
     assert "REFERENCES users(id)" in MIGRATIONS[0].sql
+    assert MIGRATIONS[1].version == 2
+    assert "CREATE TABLE memory_items" in MIGRATIONS[1].sql
+    assert "CREATE TABLE webauthn_credentials" in MIGRATIONS[1].sql
+    assert "CREATE TABLE webauthn_challenges" in MIGRATIONS[1].sql
+    assert "CREATE TABLE webauthn_recovery_codes" in MIGRATIONS[1].sql
+    assert "CREATE TABLE tool_authorizations" in MIGRATIONS[1].sql
+    assert "aibrain_require_active_owner" in MIGRATIONS[1].sql
 
 
 def test_postgres_migration_versions_must_be_unique_and_increasing():
@@ -55,7 +62,7 @@ def test_postgres_migration_runner_uses_advisory_lock_and_transactions():
         def fetchall(self):
             return []
         def fetchone(self):
-            return (1,)
+            return (len(MIGRATIONS),)
         def transaction(self):
             return FakeTransaction()
         def commit(self):
@@ -70,7 +77,7 @@ def test_postgres_migration_runner_uses_advisory_lock_and_transactions():
         "postgresql://example.invalid/aibrain",
         connect=lambda url: connection,
     )
-    assert runner.migrate() == 1
+    assert runner.migrate() == len(MIGRATIONS)
     statements = [entry[1] for entry in calls if entry[0] == "execute"]
     assert any("pg_advisory_lock" in statement for statement in statements)
     assert any("CREATE TABLE users" in statement for statement in statements)
