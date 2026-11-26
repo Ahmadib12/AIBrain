@@ -33,7 +33,7 @@ class SecurityNotificationOperations:
         with self.database.transaction(immediate=True):
             connection = self.database.connect()
             row = connection.execute(
-                "SELECT id FROM security_notification_outbox WHERE id=? AND status='failed'",
+                "SELECT id, attempts, failure_code FROM security_notification_outbox WHERE id=? AND status='failed'",
                 (notification_id,),
             ).fetchone()
             if row is None:
@@ -53,10 +53,14 @@ class SecurityNotificationOperations:
             connection.execute(
                 """
                 INSERT INTO security_notification_operator_events
-                    (id, notification_id, operator_user_id, action, reason, created_at)
-                VALUES (?, ?, ?, 'redrive', ?, ?)
+                    (id, notification_id, operator_user_id, action, reason,
+                     attempts_before, failure_code_before, created_at)
+                VALUES (?, ?, ?, 'redrive', ?, ?, ?, ?)
                 """,
-                (str(uuid4()), notification_id, operator_user_id, reason, now),
+                (
+                    str(uuid4()), notification_id, operator_user_id, reason,
+                    int(row["attempts"]), row["failure_code"], now,
+                ),
             )
             return True
 
@@ -65,7 +69,7 @@ class SecurityNotificationOperations:
             raise ValueError("Audit page size must be between 1 and 100")
         rows = self.database.connect().execute(
             """
-            SELECT id, notification_id, operator_user_id, action, reason, created_at
+            SELECT id, notification_id, operator_user_id, action, reason, attempts_before, failure_code_before, created_at
             FROM security_notification_operator_events
             WHERE notification_id=?
             ORDER BY created_at DESC, id
