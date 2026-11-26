@@ -6,10 +6,12 @@ session advisory lock to serialize migration runners, and one transaction per
 migration. Migration versions are ordered and checked for unknown applied
 versions; a failed migration is rolled back and is not recorded as applied.
 
-Migration 1 establishes the PostgreSQL identity/session baseline equivalent
-to the original SQLite identity schema. This is deliberately only the first
-migration. It is **not** schema parity with SQLite migration 45 and does not
-make PostgreSQL selectable by the application.
+Migration 1 establishes the PostgreSQL identity/session baseline. Migration 2
+ports memory, observations, adaptations, audit events, the current tool-request
+shape, WebAuthn credentials/challenges/recovery codes, and tool authorizations.
+It also adds a shared active-account insert guard for user-owned records.
+These are the first foundational slices, not full parity with SQLite migration
+45, and do not make PostgreSQL selectable by the application.
 
 Install the optional driver with:
 
