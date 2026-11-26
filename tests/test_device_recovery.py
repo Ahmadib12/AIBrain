@@ -389,3 +389,103 @@ def test_recovery_code_cannot_be_used_for_another_owners_device(client):
     )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "DEVICE_RECOVERY_REJECTED"
+
+
+def test_notification_claims_are_multi_worker_safe_and_crash_recoverable(client):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from backend.app.persistence.security_notifications import SecurityNotificationOutbox
+
+    email, _password, token = _account(client)
+    device_id, _key = _enroll_active_device(client, token)
+    state = get_app_state()
+    owner = state.identity.resolve_token(token)
+    event_id = str(uuid4())
+    with state.database.transaction():
+        state.database.connect().execute(
+            """
+            INSERT INTO device_security_events (
+                id, user_id, device_id, event_type, occurred_at, details_json
+            ) VALUES (?, ?, ?, 'device.key_rotated', ?, ?)
+            """,
+            (event_id, owner["id"], device_id,
+             datetime.now(timezone.utc).isoformat(), '{"recovery":true}'),
+        )
+
+    worker_a = SecurityNotificationOutbox(state.database)
+    worker_b = SecurityNotificationOutbox(state.database)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda repo: repo.claim_batch(limit=1), (worker_a, worker_b)))
+    claimed = [item for batch in results for item in batch]
+    assert len(claimed) == 1
+    notification_id = claimed[0]["id"]
+
+    # Simulate process death after claim; an expired lease is reclaimed once.
+    with state.database.transaction():
+        state.database.connect().execute(
+            "UPDATE security_notification_outbox SET claimed_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", notification_id),
+        )
+    recovered = worker_b.claim_batch(limit=1)
+    assert len(recovered) == 1
+    assert recovered[0]["id"] == notification_id
+    assert recovered[0]["attempts"] == 2
+
+
+def test_dead_letter_redrive_is_operator_audited_and_abuse_limits_are_shared(client):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from backend.app.persistence.security_notifications import SecurityNotificationOutbox
+
+    email, _password, token = _account(client)
+    device_id, _key = _enroll_active_device(client, token)
+    state = get_app_state()
+    owner = state.identity.resolve_token(token)
+    event_id = str(uuid4())
+    with state.database.transaction():
+        state.database.connect().execute(
+            """
+            INSERT INTO device_security_events (
+                id, user_id, device_id, event_type, occurred_at, details_json
+            ) VALUES (?, ?, ?, 'device.key_rotated', ?, ?)
+            """,
+            (event_id, owner["id"], device_id,
+             datetime.now(timezone.utc).isoformat(), '{"recovery":true}'),
+        )
+    row = state.database.connect().execute(
+        "SELECT id FROM security_notification_outbox WHERE event_id=?", (event_id,)
+    ).fetchone()
+    notification_id = row["id"]
+    repo = SecurityNotificationOutbox(state.database)
+    claimed = repo.claim_batch(limit=1)
+    assert len(claimed) == 1
+    with state.database.transaction():
+        state.database.connect().execute(
+            "UPDATE security_notification_outbox SET attempts=8 WHERE id=?",
+            (notification_id,),
+        )
+    # The claimed row is now at the terminal threshold.
+    assert repo.release_for_retry(notification_id, delay_seconds=30) is True
+    assert state.security_notification_operations.list_dead_letters(limit=10)[0]["id"] == notification_id
+    assert state.security_notification_operations.redrive(
+        notification_id, operator_user_id=owner["id"],
+        reason="Owner confirmed this alert should be delivered again",
+    ) is True
+    refreshed = state.database.connect().execute(
+        "SELECT status, attempts, redrive_count FROM security_notification_outbox WHERE id=?",
+        (notification_id,),
+    ).fetchone()
+    assert dict(refreshed) == {"status": "pending", "attempts": 0, "redrive_count": 1}
+    audit = state.security_notification_operations.notification_events(notification_id)
+    assert len(audit) == 1
+    assert audit[0]["action"] == "redrive"
+    assert audit[0]["operator_user_id"] == owner["id"]
+
+    monitor = state.security_recovery_abuse
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        allowed = list(pool.map(
+            lambda _n: monitor.check_and_record(email, device_id, limit=5, window_seconds=300),
+            range(20),
+        ))
+    assert sum(allowed) == 5
+    assert monitor.metrics()["blocked_attempts"] == 15
