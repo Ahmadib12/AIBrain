@@ -3236,8 +3236,9 @@ created_at TEXT NOT NULL,
                 END;
                 CREATE TRIGGER prevent_device_key_rotation_without_proof
                 BEFORE UPDATE OF public_key_b64, public_key_fingerprint ON devices
-                WHEN (NEW.public_key_b64 IS NOT OLD.public_key_b64
-                   OR NEW.public_key_fingerprint IS NOT OLD.public_key_fingerprint)
+                WHEN (NEW.public_key_fingerprint IS NOT OLD.public_key_fingerprint
+                   OR (OLD.public_key_b64 IS NOT NULL
+                       AND NEW.public_key_b64 IS NOT OLD.public_key_b64))
                  AND NOT EXISTS (
                     SELECT 1 FROM device_key_rotation_challenges c
                     WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
