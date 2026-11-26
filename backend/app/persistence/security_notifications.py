@@ -130,6 +130,7 @@ class SecurityNotificationOutbox:
         counts = {"pending": 0, "processing": 0, "delivered": 0, "failed": 0}
         counts.update({row["status"]: int(row["total"]) for row in rows})
         return counts
+
     def pending_count(self) -> int:
         row = self.database.connect().execute(
             "SELECT COUNT(*) AS total FROM security_notification_outbox "
