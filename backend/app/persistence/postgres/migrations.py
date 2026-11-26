@@ -169,7 +169,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE FUNCTION aibrain_require_active_owner()
         RETURNS trigger
         LANGUAGE plpgsql
-        AS $
+        AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users
@@ -180,7 +180,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
 
         CREATE TRIGGER prevent_session_for_deleted_user
             BEFORE INSERT ON sessions
