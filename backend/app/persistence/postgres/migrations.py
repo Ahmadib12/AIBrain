@@ -661,7 +661,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_tool_dispatch_recovery_request
             ON tool_dispatch_recovery_events(request_id, created_at);
         CREATE FUNCTION aibrain_validate_dispatch_recovery_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -694,17 +694,17 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_tool_dispatch_recovery_event
             BEFORE INSERT ON tool_dispatch_recovery_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_dispatch_recovery_event();
         CREATE FUNCTION aibrain_reject_dispatch_recovery_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'tool dispatch recovery events are immutable'
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_tool_dispatch_recovery_update
             BEFORE UPDATE ON tool_dispatch_recovery_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_dispatch_recovery_mutation();
@@ -726,7 +726,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_tool_dispatch_lookup_authorizations_request
             ON tool_dispatch_lookup_authorizations(user_id, request_id, created_at);
         CREATE FUNCTION aibrain_validate_dispatch_lookup_authorization()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -761,17 +761,17 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_tool_dispatch_lookup_authorization
             BEFORE INSERT ON tool_dispatch_lookup_authorizations
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_dispatch_lookup_authorization();
         CREATE FUNCTION aibrain_reject_dispatch_lookup_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'tool dispatch lookup authorizations are immutable'
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_update
             BEFORE UPDATE ON tool_dispatch_lookup_authorizations
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_dispatch_lookup_mutation();
@@ -782,7 +782,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="dispatch_audit_recovery_and_lookup_erasure_guards",
         sql="""
         CREATE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users
@@ -793,7 +793,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_tool_dispatch_audit_delete
             BEFORE DELETE ON tool_dispatch_audit_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure();
@@ -869,7 +869,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         );
 
         CREATE FUNCTION aibrain_validate_execution_reconciliation_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -893,18 +893,18 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_tool_execution_reconciliation_event
             BEFORE INSERT ON tool_execution_reconciliation_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_execution_reconciliation_event();
 
         CREATE FUNCTION aibrain_reject_reconciliation_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'tool execution reconciliation events are immutable'
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_tool_execution_reconciliation_update
             BEFORE UPDATE ON tool_execution_reconciliation_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_reconciliation_update();
