@@ -829,7 +829,7 @@ def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
     assert {
         "id", "device_id", "user_id", "nonce_hash", "previous_fingerprint",
         "proposed_public_key_b64", "proposed_fingerprint",
-        "expires_at", "used_at", "applied_at", "created_at",
+        "expires_at", "used_at", "applied_at", "created_at", "recovery_code_id",
     } <= columns
     event_sql = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='device_security_events'"
@@ -841,6 +841,13 @@ def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
         ).fetchall()
     }
     assert "prevent_device_key_rotation_without_proof" in trigger_names
+    recovery_guard = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+        "AND name='prevent_device_key_rotation_without_proof'"
+    ).fetchone()["sql"]
+    assert "recovery_code_id" in recovery_guard
+    assert "web_authn_recovery_codes" not in recovery_guard
+    assert "webauthn_recovery_codes" in recovery_guard
     assert "prevent_device_security_event_update" in trigger_names
     assert "prevent_device_security_event_delete" in trigger_names
     assert "audit_device_enrollment" in trigger_names
