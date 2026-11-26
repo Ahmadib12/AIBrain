@@ -20,6 +20,11 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE tool_authorizations" in MIGRATIONS[1].sql
     assert "aibrain_require_active_owner" in MIGRATIONS[1].sql
     assert "AS $" in MIGRATIONS[1].sql
+    assert MIGRATIONS[2].version == 3
+    assert "CREATE TABLE tool_execution_attempts" in MIGRATIONS[2].sql
+    assert "CREATE TABLE tool_execution_bindings" in MIGRATIONS[2].sql
+    assert "CREATE TABLE tool_dispatch_audit_events" in MIGRATIONS[2].sql
+    assert "aibrain_validate_dispatch_audit_event" in MIGRATIONS[2].sql
 
 
 def test_postgres_migration_versions_must_be_unique_and_increasing():
