@@ -96,6 +96,7 @@ if actual_window_start ~= expected_window_start then
 end
 local scope_count = tonumber(ARGV[4])
 local blocked = 0
+local blocked_scopes = 0
 local active_scopes = 0
 for i = 1, scope_count do
     local scope_key = KEYS[i + 1]
@@ -107,14 +108,15 @@ for i = 1, scope_count do
     end
     if count > scope_limit then
         blocked = 1
+        blocked_scopes = blocked_scopes + 1
     end
 end
 redis.call('HINCRBY', KEYS[1], 'attempts', 1)
 if active_scopes > 0 then
     redis.call('HINCRBY', KEYS[1], 'active_scopes', active_scopes)
 end
-if blocked == 1 then
-    redis.call('HINCRBY', KEYS[1], 'blocked_attempts', 1)
+if blocked_scopes > 0 then
+    redis.call('HINCRBY', KEYS[1], 'blocked_attempts', blocked_scopes)
 end
 redis.call('EXPIRE', KEYS[1], ttl)
 return {1 - blocked, blocked}
