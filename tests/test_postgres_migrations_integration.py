@@ -13,7 +13,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 3
+    assert runner.migrate() == 7
     assert runner.migrate() == 3
 
     user_id = str(uuid.uuid4())
@@ -244,4 +244,152 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (1, "core_identity"),
             (2, "memory_tool_requests_and_passkey_authorization"),
             (3, "tool_execution_attempts_bindings_and_dispatch_audit"),
+            (4, "external_adapter_certifications_and_revocations"),
+            (5, "external_adapter_evidence_packages_and_artifacts"),
+            (6, "trusted_runner_keys_and_evidence_attestations"),
+            (7, "security_operator_audit_events"),
         ]
+
+
+
+def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+
+    psycopg = pytest.importorskip("psycopg")
+    runner = PostgresMigrationRunner(database_url)
+    assert runner.migrate() == 7
+
+    suffix = str(uuid.uuid4())
+    timestamp = "2026-01-01T00:00:00+00:00"
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, email, password_salt, password_hash, created_at
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            ("evidence-owner-" + suffix, "evidence-" + suffix + "@example.invalid",
+             "salt", "hash", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO external_adapter_certifications (
+                id, provider_id, adapter_id, adapter_version, provider_scope,
+                tool_id, tool_contract_fingerprint, capabilities_json,
+                test_suite_version, conformance_results_json, test_report_sha256,
+                evidence_references_json, verified_at, expires_at, approved_by,
+                created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            ("cert-" + suffix, "provider", "adapter", "1.0", "scope", "tool",
+             "a" * 64, "[]", "suite-1", "{}", "b" * 64, "[]",
+             timestamp, "2027-01-01T00:00:00+00:00", "operator", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO external_adapter_certification_revocations (
+                id, certification_id, revoked_by, reason, created_at
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            ("cert-revoke-" + suffix, "cert-" + suffix, "operator",
+             "test revocation", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO external_adapter_evidence_packages (
+                id, provider_id, adapter_id, adapter_version, provider_scope,
+                tool_id, tool_contract_fingerprint, capabilities_json,
+                test_suite_version, sandbox_environment, manifest_json,
+                manifest_sha256, artifact_hashes_json, conformance_results_json,
+                executed_at, verified_at, expires_at, provenance, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            ("package-" + suffix, "provider", "adapter", "1.0", "scope", "tool",
+             "a" * 64, "[]", "suite-1", "isolated", "{}", "c" * 64, "{}",
+             "{}", timestamp, timestamp, "2027-01-01T00:00:00+00:00",
+             "unattested", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO external_adapter_evidence_artifacts (
+                id, package_id, artifact_name, sha256, content
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            ("artifact-" + suffix, "package-" + suffix, "report.json",
+             "d" * 64, b'{"ok":true}'),
+        )
+        connection.execute(
+            """
+            INSERT INTO trusted_runner_keys (
+                key_id, runner_id, provider_id, adapter_id, adapter_version,
+                provider_scope, tool_id, tool_contract_fingerprint, algorithm,
+                public_key, valid_from, valid_until, registered_by, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            ("runner-key-" + suffix, "runner", "provider", "adapter", "1.0",
+             "scope", "tool", "a" * 64, "Ed25519", bytes(range(32)),
+             "2026-01-01T00:00:00+00:00", "2027-01-01T00:00:00+00:00",
+             "operator", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO external_adapter_evidence_attestations (
+                id, package_id, key_id, runner_id, nonce, payload_json,
+                payload_sha256, signature, verified_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            ("attestation-" + suffix, "package-" + suffix, "runner-key-" + suffix,
+             "runner", "nonce-" + suffix, "{}", "e" * 64, "signature", timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO security_operator_audit_events (
+                id, actor_user_id, actor_email, action, target_type, target_id,
+                outcome, details_json, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            ("operator-audit-" + suffix, "evidence-owner-" + suffix,
+             "operator@example.invalid", "evidence.approve", "certification",
+             "cert-" + suffix, "succeeded", "{}", timestamp),
+        )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE external_adapter_certifications SET approved_by=%s WHERE id=%s",
+                    ("tampered", "cert-" + suffix),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE external_adapter_evidence_artifacts SET content=%s WHERE id=%s",
+                    (b"tampered", "artifact-" + suffix),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "DELETE FROM trusted_runner_keys WHERE key_id=%s",
+                    ("runner-key-" + suffix,),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "DELETE FROM security_operator_audit_events WHERE id=%s",
+                    ("operator-audit-" + suffix,),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO trusted_runner_keys (
+                        key_id, runner_id, provider_id, adapter_id, adapter_version,
+                        provider_scope, tool_id, tool_contract_fingerprint, algorithm,
+                        public_key, valid_from, valid_until, registered_by, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("invalid-key-" + suffix, "runner", "provider", "adapter",
+                     "1.0", "scope", "tool", "a" * 64, "Ed25519", b"short",
+                     timestamp, "2027-01-01T00:00:00+00:00", "operator", timestamp),
+                )
