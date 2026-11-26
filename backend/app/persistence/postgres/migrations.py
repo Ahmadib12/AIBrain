@@ -1203,7 +1203,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_agent_events_owner_agent
             ON agent_events(user_id, agent_id, created_at, id);
         CREATE FUNCTION aibrain_validate_agent_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users WHERE id = NEW.user_id AND deleted_at IS NULL
@@ -1213,11 +1213,11 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_insert BEFORE INSERT ON agents
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_insert();
         CREATE FUNCTION aibrain_reject_agent_identity_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id
                OR NEW.user_id IS DISTINCT FROM OLD.user_id
@@ -1226,11 +1226,11 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_identity_update BEFORE UPDATE ON agents
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_identity_update();
         CREATE FUNCTION aibrain_validate_agent_event_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.actor_user_id <> NEW.user_id OR NOT EXISTS (
                 SELECT 1 FROM agents a JOIN users u ON u.id = a.user_id
@@ -1241,19 +1241,19 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_event_insert BEFORE INSERT ON agent_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_event_insert();
         CREATE FUNCTION aibrain_reject_agent_event_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'agent events are immutable' USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_event_update BEFORE UPDATE ON agent_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_event_mutation();
         CREATE TRIGGER prevent_agent_event_delete BEFORE DELETE ON agent_events
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_event_mutation();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         """,
     ),
     PostgresMigration(
@@ -1261,7 +1261,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="agent_lifecycle_event_guards",
         sql="""
         CREATE OR REPLACE FUNCTION aibrain_validate_agent_event_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE
             current_status TEXT;
             initial_status TEXT;
@@ -1300,12 +1300,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         ALTER TABLE agent_events DROP CONSTRAINT IF EXISTS agent_events_event_type_check;
         ALTER TABLE agent_events ADD CONSTRAINT agent_events_event_type_check
             CHECK (event_type IN ('registered','activated','suspended','resumed','terminated'));
         CREATE FUNCTION aibrain_validate_agent_status_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status IS DISTINCT FROM OLD.status THEN
                 IF OLD.status = 'terminated' OR NOT EXISTS (
@@ -1325,7 +1325,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_status_transition BEFORE UPDATE OF status ON agents
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_status_transition();
         """,
@@ -1406,8 +1406,23 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_agent_control_events_owner_agent
             ON agent_control_events(user_id, agent_id, created_at, id);
 
-        CREATE FUNCTION aibrain_validate_agent_grant()
+        CREATE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
         RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'agent records may only be deleted during account erasure'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN OLD;
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_delete BEFORE DELETE ON agents
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
+
+        CREATE FUNCTION aibrain_validate_agent_grant()
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
@@ -1418,13 +1433,15 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_grant_insert BEFORE INSERT ON agent_capability_grants
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_grant();
         CREATE TRIGGER prevent_agent_grant_update BEFORE UPDATE ON agent_capability_grants
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_grant_delete BEFORE DELETE ON agent_capability_grants
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         CREATE FUNCTION aibrain_validate_agent_revocation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM agent_capability_grants g
@@ -1436,14 +1453,16 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_revocation_insert BEFORE INSERT ON agent_capability_revocations
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_revocation();
         CREATE TRIGGER prevent_agent_revocation_update BEFORE UPDATE ON agent_capability_revocations
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_revocation_delete BEFORE DELETE ON agent_capability_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
 
         CREATE FUNCTION aibrain_validate_agent_task_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE item JSONB;
         BEGIN
             IF NOT EXISTS (
@@ -1470,11 +1489,11 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END LOOP;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_task_insert BEFORE INSERT ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_task_insert();
         CREATE FUNCTION aibrain_reject_agent_task_identity_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
                OR NEW.agent_id IS DISTINCT FROM OLD.agent_id
@@ -1483,13 +1502,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_task_identity_update BEFORE UPDATE ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_task_identity_update();
         CREATE TRIGGER prevent_agent_task_update BEFORE UPDATE ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
         CREATE FUNCTION aibrain_validate_agent_task_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.actor_user_id <> NEW.user_id OR NOT EXISTS (
                 SELECT 1 FROM agent_tasks t JOIN users u ON u.id=t.user_id
@@ -1500,15 +1519,15 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_task_event_insert BEFORE INSERT ON agent_task_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_task_event();
         CREATE TRIGGER prevent_agent_task_event_update BEFORE UPDATE ON agent_task_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
         CREATE TRIGGER prevent_agent_task_event_delete BEFORE DELETE ON agent_task_events
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         CREATE FUNCTION aibrain_validate_agent_task_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status IS DISTINCT FROM OLD.status AND NOT EXISTS (
                 SELECT 1 FROM agent_task_events e
@@ -1521,12 +1540,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_task_transition BEFORE UPDATE OF status ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_task_transition();
 
         CREATE FUNCTION aibrain_validate_agent_message()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM agents s JOIN agents r ON r.id=NEW.recipient_agent_id
@@ -1543,16 +1562,16 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_message_insert BEFORE INSERT ON agent_messages
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_message();
         CREATE TRIGGER prevent_agent_message_update BEFORE UPDATE ON agent_messages
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
         CREATE TRIGGER prevent_agent_message_delete BEFORE DELETE ON agent_messages
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
 
         CREATE FUNCTION aibrain_validate_agent_control_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
@@ -1562,13 +1581,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_control_event_insert BEFORE INSERT ON agent_control_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_control_event();
         CREATE TRIGGER prevent_agent_control_event_update BEFORE UPDATE ON agent_control_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
         CREATE TRIGGER prevent_agent_control_event_delete BEFORE DELETE ON agent_control_events
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         """,
     ),
     PostgresMigration(
@@ -1576,7 +1595,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="agent_task_transition_and_definition_guards",
         sql="""
         CREATE OR REPLACE FUNCTION aibrain_validate_agent_task_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE current_status TEXT;
             from_status TEXT;
             to_status TEXT;
@@ -1600,9 +1619,9 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE FUNCTION aibrain_reject_agent_task_definition_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.title IS DISTINCT FROM OLD.title OR NEW.goal IS DISTINCT FROM OLD.goal
                OR NEW.context_json IS DISTINCT FROM OLD.context_json
@@ -1615,7 +1634,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         DROP TRIGGER prevent_agent_task_update ON agent_tasks;
         CREATE TRIGGER prevent_agent_task_content_update BEFORE UPDATE ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_task_definition_update();
@@ -1673,7 +1692,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_agent_run_events_owner_run
             ON agent_run_events(user_id,run_id,created_at,id);
         CREATE FUNCTION aibrain_validate_agent_run_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM agents a
@@ -1690,11 +1709,11 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_insert BEFORE INSERT ON agent_runs
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_insert();
         CREATE FUNCTION aibrain_reject_agent_run_definition_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
                OR NEW.agent_id IS DISTINCT FROM OLD.agent_id OR NEW.task_id IS DISTINCT FROM OLD.task_id
@@ -1706,13 +1725,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_run_definition_update BEFORE UPDATE ON agent_runs
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_run_definition_update();
         CREATE TRIGGER prevent_agent_run_delete BEFORE DELETE ON agent_runs
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         CREATE FUNCTION aibrain_validate_agent_run_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.actor_user_id <> NEW.user_id OR NOT EXISTS (
                 SELECT 1 FROM agent_runs r JOIN users u ON u.id=r.user_id
@@ -1722,15 +1741,15 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_event_insert BEFORE INSERT ON agent_run_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_event();
         CREATE TRIGGER prevent_agent_run_event_update BEFORE UPDATE ON agent_run_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
         CREATE TRIGGER prevent_agent_run_event_delete BEFORE DELETE ON agent_run_events
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         CREATE FUNCTION aibrain_validate_agent_run_status_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status IS DISTINCT FROM OLD.status AND NOT EXISTS (
                 SELECT 1 FROM agent_run_events e
@@ -1743,11 +1762,11 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_status_transition BEFORE UPDATE OF status ON agent_runs
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_status_transition();
         CREATE FUNCTION aibrain_validate_agent_run_step_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM agent_runs r JOIN users u ON u.id=r.user_id
@@ -1757,11 +1776,11 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_step_insert BEFORE INSERT ON agent_run_steps
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_step_insert();
         CREATE FUNCTION aibrain_reject_agent_run_step_definition_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
                OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.ordinal IS DISTINCT FROM OLD.ordinal
@@ -1774,13 +1793,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_run_step_definition_update BEFORE UPDATE ON agent_run_steps
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_run_step_definition_update();
         CREATE TRIGGER prevent_agent_run_step_delete BEFORE DELETE ON agent_run_steps
-            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         CREATE FUNCTION aibrain_validate_agent_run_step_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status IS DISTINCT FROM OLD.status AND NOT EXISTS (
                 SELECT 1 FROM agent_run_events e
@@ -1800,7 +1819,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_step_status_transition
             BEFORE UPDATE OF status ON agent_run_steps
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_step_transition();
