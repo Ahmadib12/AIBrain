@@ -38,7 +38,7 @@ class SecurityNotificationDeliveryWorker:
                 except Exception:
                     logger.error("Security notification retry scheduling failed")
                 else:
-                    logger.warning("Security notification delivery failed; retry scheduled")
+                    logger.warning("Security notification delivery attempt failed; queue state updated")
                 continue
             marked = await asyncio.to_thread(self.repository.mark_delivered, notification_id)
             if marked:
