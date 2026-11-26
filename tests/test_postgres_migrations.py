@@ -113,7 +113,13 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "enqueue_device_recovery_notification" in MIGRATIONS[33].sql
     assert MIGRATIONS[34].version == 35
     assert "failed_at" in MIGRATIONS[34].sql
-    for migration in MIGRATIONS[1:35]:
+    assert MIGRATIONS[35].version == 36
+    assert "redrive_count" in MIGRATIONS[35].sql
+    assert "claim_token" in MIGRATIONS[35].sql
+    assert "security_notification_operator_events" in MIGRATIONS[35].sql
+    assert "prevent_security_notification_operator_event_update" in MIGRATIONS[35].sql
+    assert "security_recovery_abuse_windows" in MIGRATIONS[35].sql
+    for migration in MIGRATIONS[1:36]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
