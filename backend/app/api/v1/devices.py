@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
 from backend.app.app_state import get_app_state
+from backend.app.persistence.security_recovery_abuse import RecoveryAbuseUnavailable
 from backend.app.devices.contracts import (
     DeviceCapabilityReport,
     DeviceRecord,
@@ -306,10 +307,22 @@ async def create_device_recovery_challenge(
     """Start lost-device recovery using a one-time code and replacement key."""
     email_key = request.email.strip().lower()
     state = get_app_state()
-    if not state.security_recovery_abuse.check_and_record(
-        email_key,
-        source_ip=http_request.client.host if http_request.client else None,
-    ):
+    try:
+        allowed = state.security_recovery_abuse.check_and_record(
+            email_key,
+            source_ip=http_request.client.host if http_request.client else None,
+        )
+    except RecoveryAbuseUnavailable:
+        # Never fall back to per-process or SQLite counters when the shared
+        # production backend is unavailable: that would bypass global limits.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "DEVICE_RECOVERY_PROTECTION_UNAVAILABLE",
+                "message": "Device recovery is temporarily unavailable",
+            },
+        ) from None
+    if not allowed:
         raise HTTPException(
             status_code=429,
             detail={
