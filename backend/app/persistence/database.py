@@ -3438,8 +3438,6 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
-        )
-            ),
             (
                 44,
                 """
