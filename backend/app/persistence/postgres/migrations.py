@@ -2995,6 +2995,51 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         """,
     ),
 
+    PostgresMigration(
+        version=36,
+        name="security_notification_operations_and_recovery_abuse_windows",
+        sql="""
+        ALTER TABLE security_notification_outbox
+            ADD COLUMN redrive_count INTEGER NOT NULL DEFAULT 0
+            CHECK (redrive_count >= 0);
+        ALTER TABLE security_notification_outbox
+            ADD COLUMN claim_token TEXT;
+        CREATE UNIQUE INDEX idx_security_notification_claim_token
+            ON security_notification_outbox(claim_token)
+            WHERE claim_token IS NOT NULL;
+
+        CREATE TABLE security_notification_operator_events (
+            id TEXT PRIMARY KEY,
+            notification_id TEXT NOT NULL
+                REFERENCES security_notification_outbox(id) ON DELETE CASCADE,
+            operator_user_id TEXT NOT NULL
+                REFERENCES users(id) ON DELETE CASCADE,
+            action TEXT NOT NULL CHECK (action IN ('redrive')),
+            reason TEXT NOT NULL CHECK (length(reason) BETWEEN 10 AND 500),
+            attempts_before INTEGER NOT NULL CHECK (attempts_before >= 0),
+            failure_code_before TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_security_notification_operator_events_notification
+            ON security_notification_operator_events(notification_id, created_at);
+        CREATE TRIGGER prevent_security_notification_operator_event_update
+            BEFORE UPDATE ON security_notification_operator_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+
+        CREATE TABLE security_recovery_abuse_windows (
+            scope_hash TEXT NOT NULL CHECK (length(scope_hash) = 64),
+            window_start BIGINT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+            blocked_attempts INTEGER NOT NULL DEFAULT 0
+                CHECK (blocked_attempts >= 0),
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(scope_hash, window_start)
+        );
+        CREATE INDEX idx_security_recovery_abuse_window
+            ON security_recovery_abuse_windows(window_start);
+        """,
+    ),
+
 )
 
 
