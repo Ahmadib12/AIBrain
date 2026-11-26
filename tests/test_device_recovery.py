@@ -430,6 +430,16 @@ def test_notification_claims_are_multi_worker_safe_and_crash_recoverable(client)
     assert len(recovered) == 1
     assert recovered[0]["id"] == notification_id
     assert recovered[0]["attempts"] == 2
+    assert recovered[0]["claim_token"] != claimed[0]["claim_token"]
+    assert worker_a.renew_claim(
+        notification_id, claim_token=claimed[0]["claim_token"]
+    ) is False
+    assert worker_a.mark_delivered(
+        notification_id, claim_token=claimed[0]["claim_token"]
+    ) is False
+    assert worker_b.mark_delivered(
+        notification_id, claim_token=recovered[0]["claim_token"]
+    ) is True
 
 
 def test_dead_letter_redrive_is_operator_audited_and_abuse_limits_are_shared(client):
