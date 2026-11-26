@@ -274,6 +274,10 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (16, "agent_capability_grants_tasks_messages_and_controls"),
             (17, "agent_task_transition_and_definition_guards"),
             (18, "agent_runs_steps_and_event_history"),
+            (19, "integration_connections_grants_and_events"),
+            (20, "integration_secret_vault_and_terminal_erasure"),
+            (21, "agent_run_integration_bindings"),
+            (22, "agent_run_integration_dispatch_lifecycle"),
         ]
 
 
