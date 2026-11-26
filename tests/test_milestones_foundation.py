@@ -843,6 +843,11 @@ def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
     assert "prevent_device_key_rotation_without_proof" in trigger_names
     assert "prevent_device_security_event_update" in trigger_names
     assert "prevent_device_security_event_delete" in trigger_names
+    assert "audit_device_enrollment" in trigger_names
+    assert "audit_device_key_registration" in trigger_names
+    assert "audit_device_activation" in trigger_names
+    assert "audit_device_revocation" in trigger_names
+    assert "audit_device_session" in trigger_names
 
 
 def test_streaming_intelligence_endpoint_is_available(client: TestClient) -> None:
