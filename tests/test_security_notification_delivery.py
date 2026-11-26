@@ -78,8 +78,9 @@ class FakeRepository:
         self.batch = batch
         self.delivered = []
         self.retries = []
-    def claim_batch(self, *, limit):
+    def claim_batch(self, *, limit, lease_seconds=300):
         assert limit == 10
+        assert lease_seconds >= 300
         return tuple(self.batch)
     def mark_delivered(self, notification_id):
         self.delivered.append(notification_id)
