@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         if (
             not self.security_recovery_abuse_redis_key_prefix
             or len(self.security_recovery_abuse_redis_key_prefix) > 128
-            or any(ch.isspace() for ch in self.security_recovery_abuse_redis_key_prefix)
+            or any(ch.isspace() for ch in self.security_recovery_abuse_redis_key_prefix)\n            or "{" in self.security_recovery_abuse_redis_key_prefix\n            or "}" in self.security_recovery_abuse_redis_key_prefix
         ):
             raise ValueError("Recovery abuse Redis key prefix is invalid")
         return self
