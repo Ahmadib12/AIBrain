@@ -61,8 +61,9 @@ active, already-keyed device owned by the authenticated account.
 
 The owner submits the replacement Ed25519 public key to
 `POST /api/v1/devices/{device_id}/key-rotation/challenge`. The server creates a
-five-minute, one-use challenge bound to the device, owner, replacement key
-fingerprint, and nonce. The device must sign the exact returned message with
+five-minute, one-use challenge bound to the device, owner, current key
+fingerprint, replacement key fingerprint, and nonce. This prevents a challenge
+issued for an earlier key version from being reused after another rotation. The device must sign the exact returned message with
 both its existing private key and the replacement private key. The signatures
 are submitted to
 `POST /api/v1/devices/{device_id}/key-rotation/verify`.
