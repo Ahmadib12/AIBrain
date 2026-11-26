@@ -3,7 +3,6 @@
 The outbox stores only the destination and a minimal event payload. Delivery is
 performed by a separate worker/adapter; database transactions never send email.
 """
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from backend.app.persistence.database import Database
