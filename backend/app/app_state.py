@@ -122,10 +122,13 @@ class AppState:
         )
 
     def close(self) -> None:
-        if self._security_recovery_abuse_redis is not None:
-            self._security_recovery_abuse_redis.close()
-            self._security_recovery_abuse_redis = None
-        self.database.shutdown()
+        redis_client = self._security_recovery_abuse_redis
+        self._security_recovery_abuse_redis = None
+        try:
+            if redis_client is not None:
+                redis_client.close()
+        finally:
+            self.database.shutdown()
 
 
 _app_state: AppState | None = None
