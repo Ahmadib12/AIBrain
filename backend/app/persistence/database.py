@@ -3536,12 +3536,6 @@ created_at TEXT NOT NULL,
                 BEGIN
                     SELECT RAISE(ABORT, 'security notification operator events are immutable');
                 END;
-                CREATE TRIGGER prevent_security_notification_operator_event_delete
-                BEFORE DELETE ON security_notification_operator_events
-                BEGIN
-                    SELECT RAISE(ABORT, 'security notification operator events are immutable');
-                END;
-
                 CREATE TABLE security_recovery_abuse_windows (
                     scope_hash TEXT NOT NULL CHECK (length(scope_hash) = 64),
                     window_start INTEGER NOT NULL,
