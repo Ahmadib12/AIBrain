@@ -6,6 +6,8 @@ from backend.app.persistence.devices import DeviceRepository
 from backend.app.persistence.device_security_events import DeviceSecurityEventRepository
 from backend.app.persistence.session_security_events import SessionSecurityEventRepository
 from backend.app.persistence.security_notifications import SecurityNotificationOutbox
+from backend.app.persistence.security_notification_operations import SecurityNotificationOperations
+from backend.app.persistence.security_recovery_abuse import SecurityRecoveryAbuseMonitor
 from backend.app.devices.proof import DeviceProofRepository
 from backend.app.persistence.agents import AgentRepository
 from backend.app.persistence.agent_control import AgentControlRepository
@@ -38,6 +40,8 @@ class AppState:
         self.device_security_events = DeviceSecurityEventRepository(self.database)
         self.session_security_events = SessionSecurityEventRepository(self.database)
         self.security_notifications = SecurityNotificationOutbox(self.database)
+        self.security_notification_operations = SecurityNotificationOperations(self.database)
+        self.security_recovery_abuse = SecurityRecoveryAbuseMonitor(self.database)
         self.device_proofs = DeviceProofRepository(self.database)
         self.identity = IdentityRepository(
             self.database,
