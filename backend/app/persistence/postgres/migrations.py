@@ -412,6 +412,239 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         """,
     ),
 
+    PostgresMigration(
+        version=4,
+        name="external_adapter_certifications_and_revocations",
+        sql="""
+        CREATE TABLE external_adapter_certifications (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            adapter_id TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            provider_scope TEXT NOT NULL,
+            tool_id TEXT NOT NULL,
+            tool_contract_fingerprint TEXT NOT NULL
+                CHECK (length(tool_contract_fingerprint) = 64),
+            capabilities_json TEXT NOT NULL,
+            test_suite_version TEXT NOT NULL,
+            conformance_results_json TEXT NOT NULL,
+            test_report_sha256 TEXT NOT NULL
+                CHECK (length(test_report_sha256) = 64),
+            evidence_references_json TEXT NOT NULL,
+            verified_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            approved_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_external_adapter_certification_lookup
+            ON external_adapter_certifications(
+                provider_id, adapter_id, adapter_version, provider_scope,
+                tool_id, tool_contract_fingerprint, expires_at
+            );
+        CREATE TABLE external_adapter_certification_revocations (
+            id TEXT PRIMARY KEY,
+            certification_id TEXT NOT NULL
+                REFERENCES external_adapter_certifications(id) ON DELETE CASCADE,
+            revoked_by TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_external_adapter_certification_revocations
+            ON external_adapter_certification_revocations(certification_id);
+        CREATE FUNCTION aibrain_reject_certification_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_external_adapter_certification_update
+            BEFORE UPDATE ON external_adapter_certifications
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_certification_mutation();
+        CREATE TRIGGER prevent_external_adapter_certification_delete
+            BEFORE DELETE ON external_adapter_certifications
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_certification_mutation();
+        CREATE TRIGGER prevent_external_adapter_revocation_update
+            BEFORE UPDATE ON external_adapter_certification_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_certification_mutation();
+        CREATE TRIGGER prevent_external_adapter_revocation_delete
+            BEFORE DELETE ON external_adapter_certification_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_certification_mutation();
+        """,
+    ),
+    PostgresMigration(
+        version=5,
+        name="external_adapter_evidence_packages_and_artifacts",
+        sql="""
+        CREATE TABLE external_adapter_evidence_packages (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            adapter_id TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            provider_scope TEXT NOT NULL,
+            tool_id TEXT NOT NULL,
+            tool_contract_fingerprint TEXT NOT NULL
+                CHECK (length(tool_contract_fingerprint) = 64),
+            capabilities_json TEXT NOT NULL,
+            test_suite_version TEXT NOT NULL,
+            sandbox_environment TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+            artifact_hashes_json TEXT NOT NULL,
+            conformance_results_json TEXT NOT NULL,
+            executed_at TEXT NOT NULL,
+            verified_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            provenance TEXT NOT NULL DEFAULT 'unattested'
+                CHECK (provenance IN ('unattested', 'runner_attested', 'provider_signed')),
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE external_adapter_evidence_artifacts (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL
+                REFERENCES external_adapter_evidence_packages(id) ON DELETE CASCADE,
+            artifact_name TEXT NOT NULL,
+            sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+            content BYTEA NOT NULL,
+            UNIQUE(package_id, artifact_name)
+        );
+        CREATE INDEX idx_external_adapter_evidence_binding
+            ON external_adapter_evidence_packages(
+                provider_id, adapter_id, adapter_version, provider_scope,
+                tool_id, tool_contract_fingerprint, expires_at
+            );
+        CREATE FUNCTION aibrain_reject_evidence_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_external_adapter_evidence_update
+            BEFORE UPDATE ON external_adapter_evidence_packages
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_evidence_mutation();
+        CREATE TRIGGER prevent_external_adapter_evidence_delete
+            BEFORE DELETE ON external_adapter_evidence_packages
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_evidence_mutation();
+        CREATE TRIGGER prevent_external_adapter_evidence_artifact_update
+            BEFORE UPDATE ON external_adapter_evidence_artifacts
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_evidence_mutation();
+        CREATE TRIGGER prevent_external_adapter_evidence_artifact_delete
+            BEFORE DELETE ON external_adapter_evidence_artifacts
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_evidence_mutation();
+        """,
+    ),
+    PostgresMigration(
+        version=6,
+        name="trusted_runner_keys_and_evidence_attestations",
+        sql="""
+        CREATE TABLE trusted_runner_keys (
+            key_id TEXT PRIMARY KEY,
+            runner_id TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            adapter_id TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            provider_scope TEXT NOT NULL,
+            tool_id TEXT NOT NULL,
+            tool_contract_fingerprint TEXT NOT NULL
+                CHECK (length(tool_contract_fingerprint) = 64),
+            algorithm TEXT NOT NULL CHECK (algorithm = 'Ed25519'),
+            public_key BYTEA NOT NULL CHECK (octet_length(public_key) = 32),
+            valid_from TEXT NOT NULL,
+            valid_until TEXT NOT NULL,
+            registered_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(public_key),
+            CHECK (valid_until > valid_from)
+        );
+        CREATE INDEX idx_trusted_runner_keys_runner
+            ON trusted_runner_keys(runner_id, valid_until);
+        CREATE TABLE trusted_runner_key_revocations (
+            id TEXT PRIMARY KEY,
+            key_id TEXT NOT NULL REFERENCES trusted_runner_keys(key_id),
+            revoked_by TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_trusted_runner_key_revocations
+            ON trusted_runner_key_revocations(key_id);
+        CREATE TABLE external_adapter_evidence_attestations (
+            id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL UNIQUE
+                REFERENCES external_adapter_evidence_packages(id) ON DELETE CASCADE,
+            key_id TEXT NOT NULL REFERENCES trusted_runner_keys(key_id),
+            runner_id TEXT NOT NULL,
+            nonce TEXT NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 64),
+            signature TEXT NOT NULL,
+            verified_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_evidence_attestation_key
+            ON external_adapter_evidence_attestations(key_id);
+        CREATE FUNCTION aibrain_reject_runner_key_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_trusted_runner_key_update
+            BEFORE UPDATE ON trusted_runner_keys
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
+        CREATE TRIGGER prevent_trusted_runner_key_delete
+            BEFORE DELETE ON trusted_runner_keys
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
+        CREATE TRIGGER prevent_runner_key_revocation_update
+            BEFORE UPDATE ON trusted_runner_key_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
+        CREATE TRIGGER prevent_runner_key_revocation_delete
+            BEFORE DELETE ON trusted_runner_key_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
+        CREATE TRIGGER prevent_evidence_attestation_update
+            BEFORE UPDATE ON external_adapter_evidence_attestations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
+        CREATE TRIGGER prevent_evidence_attestation_delete
+            BEFORE DELETE ON external_adapter_evidence_attestations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
+        """,
+    ),
+    PostgresMigration(
+        version=7,
+        name="security_operator_audit_events",
+        sql="""
+        CREATE TABLE security_operator_audit_events (
+            id TEXT PRIMARY KEY,
+            actor_user_id TEXT NOT NULL REFERENCES users(id),
+            actor_email TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN ('succeeded')),
+            details_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_security_operator_audit_actor
+            ON security_operator_audit_events(actor_user_id, created_at);
+        CREATE INDEX idx_security_operator_audit_target
+            ON security_operator_audit_events(target_type, target_id, created_at);
+        CREATE FUNCTION aibrain_reject_operator_audit_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION 'security operator audit events are immutable'
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_security_operator_audit_update
+            BEFORE UPDATE ON security_operator_audit_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_operator_audit_mutation();
+        CREATE TRIGGER prevent_security_operator_audit_delete
+            BEFORE DELETE ON security_operator_audit_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_operator_audit_mutation();
+        """,
+    ),
+
+
 )
 
 
