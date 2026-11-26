@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1.auth import get_current_user
+from backend.app.auth.rate_limit import LoginRateLimiter
 from backend.app.app_state import get_app_state
 from backend.app.devices.contracts import (
     DeviceCapabilityReport,
@@ -15,6 +16,7 @@ from backend.app.devices.contracts import (
 
 
 router = APIRouter(prefix="/devices", tags=["devices"])
+_recovery_rate_limiter = LoginRateLimiter(limit=5, window_seconds=300)
 
 
 class PublicKeyRegistrationRequest(BaseModel):
@@ -81,6 +83,19 @@ async def register_device_public_key(
             detail={"code": "DEVICE_KEY_REJECTED", "message": "Public key does not match the enrolled fingerprint"},
         ) from None
 
+
+
+class DeviceRecoveryChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    email: str = Field(min_length=3, max_length=320)
+    recovery_code: str = Field(min_length=20, max_length=128)
+    new_public_key_b64: str = Field(min_length=40, max_length=64)
+
+
+class DeviceRecoveryVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    nonce: str = Field(min_length=20, max_length=128)
+    new_signature_b64: str = Field(min_length=80, max_length=100)
 
 
 class KeyRotationChallengeRequest(BaseModel):
@@ -282,6 +297,89 @@ async def verify_device_session(
         ) from None
     return {"access_token": token, "user": authenticated_user}
 
+
+
+@router.post("/{device_id}/recovery/challenge", response_model=dict)
+async def create_device_recovery_challenge(
+    device_id: UUID,
+    request: DeviceRecoveryChallengeRequest,
+) -> dict:
+    """Start lost-device recovery using a one-time code and replacement key."""
+    email_key = request.email.strip().lower()
+    if not _recovery_rate_limiter.check_and_record(email_key):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "DEVICE_RECOVERY_RATE_LIMITED",
+                "message": "Device recovery is temporarily unavailable",
+            },
+        )
+
+    state = get_app_state()
+    owner = state.identity.get_user_by_email(email_key)
+    if owner is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "DEVICE_RECOVERY_REJECTED",
+                "message": "Device recovery could not be started",
+            },
+        )
+    try:
+        result = state.device_proofs.create_recovery_rotation_challenge(
+            owner["id"],
+            str(device_id),
+            request.recovery_code,
+            request.new_public_key_b64,
+        )
+    except (LookupError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "DEVICE_RECOVERY_REJECTED",
+                "message": "Device recovery could not be started",
+            },
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "DEVICE_RECOVERY_RATE_LIMITED",
+                "message": "Device recovery is temporarily unavailable",
+            },
+        ) from None
+
+    _recovery_rate_limiter.reset(email_key)
+    return result
+
+
+@router.post("/{device_id}/recovery/verify", response_model=dict)
+async def verify_device_recovery(
+    device_id: UUID,
+    request: DeviceRecoveryVerifyRequest,
+    challenge_id: UUID,
+) -> dict:
+    """Consume the recovery code and rotate the device key atomically."""
+    try:
+        fingerprint = get_app_state().device_proofs.verify_and_recover_key(
+            str(device_id),
+            str(challenge_id),
+            request.nonce,
+            request.new_signature_b64,
+        )
+    except (LookupError, PermissionError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "DEVICE_RECOVERY_REJECTED",
+                "message": "Device recovery could not be verified",
+            },
+        ) from None
+    return {
+        "status": "recovered",
+        "device_id": str(device_id),
+        "new_public_key_fingerprint": fingerprint,
+    }
 
 
 @router.post("/{device_id}/login/challenge", response_model=dict)
