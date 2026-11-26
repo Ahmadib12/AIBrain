@@ -100,7 +100,20 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert MIGRATIONS[29].version == 30
     assert "validate_session_device_binding" in MIGRATIONS[29].sql
     assert "session revocation is irreversible" in MIGRATIONS[29].sql
-    for migration in MIGRATIONS[1:30]:
+    assert MIGRATIONS[30].version == 31
+    assert "CREATE TABLE session_security_events" in MIGRATIONS[30].sql
+    assert "audit_session_created" in MIGRATIONS[30].sql
+    assert MIGRATIONS[31].version == 32
+    assert "CREATE TABLE device_key_rotation_challenges" in MIGRATIONS[31].sql
+    assert "device key replacement requires verified rotation" in MIGRATIONS[31].sql
+    assert MIGRATIONS[32].version == 33
+    assert "recovery_code_id" in MIGRATIONS[32].sql
+    assert MIGRATIONS[33].version == 34
+    assert "CREATE TABLE security_notification_outbox" in MIGRATIONS[33].sql
+    assert "enqueue_device_recovery_notification" in MIGRATIONS[33].sql
+    assert MIGRATIONS[34].version == 35
+    assert "failed_at" in MIGRATIONS[34].sql
+    for migration in MIGRATIONS[1:35]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
