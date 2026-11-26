@@ -283,6 +283,10 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (24, "device_registry"),
             (25, "device_public_keys_and_auth_challenges"),
             (26, "device_session_binding_schema"),
+            (27, "device_security_events_initial"),
+            (28, "device_security_event_history_and_atomic_audit"),
+            (29, "device_identity_and_lifecycle_guards"),
+            (30, "session_device_binding_and_revocation_guards"),
         ]
 
 
