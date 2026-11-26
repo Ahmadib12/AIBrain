@@ -29,3 +29,26 @@ Event rows are immutable and cannot be individually deleted. They are erased onl
 ## Verification boundary
 
 The migration and tests verify local SQLite trigger atomicity, immutable session correlation, owner scoping, bounded pagination, logout revocation, and cleanup-time expiry events. They do not provide remote log shipping, tamper evidence against a privileged database administrator, anomaly detection, or a production incident-response pipeline.
+
+
+## Session inventory and selective revocation
+
+Authenticated owners can inspect currently valid sessions through
+`GET /api/v1/auth/sessions`. Each entry contains the opaque session reference,
+optional device ID, authentication method, creation and expiry timestamps, and
+an `is_current` marker derived by comparing the request's bearer-token hash
+with the stored session hash. Bearer tokens and token hashes are never returned.
+Expired, revoked, and device-invalid sessions are excluded.
+
+An owner can revoke one other active session through
+`DELETE /api/v1/auth/sessions/{session_ref}`. The operation is owner-scoped and
+uses an immediate database transaction; a successful state change causes the
+Migration 40 trigger to append the matching `session.revoked` event atomically.
+Unknown, expired, revoked, and cross-owner references all return the same
+not-found response. The session making the request cannot be revoked through
+this endpoint; it must be ended through `POST /api/v1/auth/logout` so the
+caller does not invalidate its own request context mid-operation.
+
+This is an application-level session inventory and revocation control. It does
+not yet provide device recovery, cryptographic key rotation, or remote device
+attestation.
