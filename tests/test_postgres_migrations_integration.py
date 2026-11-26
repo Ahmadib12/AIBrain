@@ -615,3 +615,214 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
             )
             connection.execute("DELETE FROM tool_requests WHERE user_id=%s", (user_id,))
             connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
+
+
+def test_real_postgres_memory_consent_and_learning_history_guards():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+
+    psycopg = pytest.importorskip("psycopg")
+    runner = PostgresMigrationRunner(database_url)
+    assert runner.migrate() == 13
+
+    suffix = str(uuid.uuid4())
+    user_id = "memory-learning-owner-" + suffix
+    adaptation_id = "adaptation-learning-" + suffix
+    pending_adaptation_id = "adaptation-pending-" + suffix
+    consent_id = "memory-consent-" + suffix
+    replacement_consent_id = "memory-consent-replacement-" + suffix
+    timestamp = "2026-01-01T00:00:00+00:00"
+    future = "2027-01-01T00:00:00+00:00"
+
+    with psycopg.connect(database_url) as connection:
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO users (id, email, password_salt, password_hash, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (user_id, user_id + "@example.invalid", "salt", "hash", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO adaptations (
+                    id, user_id, proposal_json, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (adaptation_id, user_id, '{"change":"safe"}', "pending", timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO adaptations (
+                    id, user_id, proposal_json, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (pending_adaptation_id, user_id, '{"change":"not-approved"}',
+                 "pending", timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_consents (
+                    id, user_id, purpose, policy_version, retention_days, granted_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (consent_id, user_id, "personal_memory", 1, 90, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_items (
+                    id, user_id, memory_type, key, value_json, source,
+                    confidence, status, created_at, updated_at, consent_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                ("memory-" + suffix, user_id, "preference", "theme", '"dark"',
+                 "user", 1.0, "active", timestamp, timestamp, consent_id),
+            )
+
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO memory_consents (
+                        id, user_id, purpose, policy_version, retention_days, granted_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    ("duplicate-consent-" + suffix, user_id,
+                     "personal_memory", 1, 30, timestamp),
+                )
+
+        with connection.transaction():
+            connection.execute(
+                "UPDATE memory_consents SET retention_days=%s WHERE id=%s",
+                (180, consent_id),
+            )
+            connection.execute(
+                "UPDATE memory_consents SET revoked_at=%s WHERE id=%s",
+                (timestamp, consent_id),
+            )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE memory_consents SET revoked_at=NULL WHERE id=%s",
+                    (consent_id,),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE memory_consents SET retention_days=%s WHERE id=%s",
+                    (365, consent_id),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "DELETE FROM memory_consents WHERE id=%s",
+                    (consent_id,),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE memory_items SET status=%s WHERE id=%s",
+                    ("archived", "memory-" + suffix),
+                )
+
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO memory_consents (
+                    id, user_id, purpose, policy_version, retention_days, granted_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (replacement_consent_id, user_id, "personal_memory", 1, 365, future),
+            )
+            connection.execute(
+                "UPDATE memory_items SET consent_id=%s WHERE id=%s",
+                (replacement_consent_id, "memory-" + suffix),
+            )
+            connection.execute(
+                "UPDATE adaptations SET status=%s WHERE id=%s",
+                ("approved", adaptation_id),
+            )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE adaptations SET status=%s WHERE id=%s",
+                    ("pending", adaptation_id),
+                )
+
+        event_id = "learning-event-" + suffix
+        evaluation_id = "learning-evaluation-" + suffix
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO learning_adaptation_events (
+                    id, user_id, adaptation_id, event_type, details_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (event_id, user_id, adaptation_id, "approved", '{"source":"user"}', timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO learning_evaluations (
+                    id, user_id, adaptation_id, outcome, metric, baseline_value,
+                    observed_value, confidence, evidence_json, source, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (evaluation_id, user_id, adaptation_id, "improved", "task_success",
+                 0.5, 0.8, 0.9, '{"sample_count":3}', "user_reported", future),
+            )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO learning_evaluations (
+                        id, user_id, adaptation_id, outcome, metric, baseline_value,
+                        observed_value, confidence, evidence_json, source, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("invalid-evaluation-" + suffix, user_id, pending_adaptation_id,
+                     "improved", "task_success", 0.5, 0.8, 0.9, "{}",
+                     "user_reported", future),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE learning_adaptation_events SET details_json=%s WHERE id=%s",
+                    ('{"tampered":true}', event_id),
+                )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "DELETE FROM learning_evaluations WHERE id=%s",
+                    (evaluation_id,),
+                )
+
+        with connection.transaction():
+            connection.execute(
+                "UPDATE users SET deleted_at=%s WHERE id=%s",
+                (future, user_id),
+            )
+            connection.execute(
+                "DELETE FROM learning_adaptation_events WHERE id=%s",
+                (event_id,),
+            )
+            connection.execute(
+                "DELETE FROM learning_evaluations WHERE id=%s",
+                (evaluation_id,),
+            )
+            connection.execute(
+                "DELETE FROM memory_items WHERE id=%s",
+                ("memory-" + suffix,),
+            )
+            connection.execute(
+                "DELETE FROM memory_consents WHERE user_id=%s",
+                (user_id,),
+            )
+            connection.execute(
+                "DELETE FROM adaptations WHERE user_id=%s",
+                (user_id,),
+            )
+            connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
