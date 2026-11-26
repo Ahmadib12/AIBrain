@@ -249,6 +249,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             connection.execute("DELETE FROM memory_items WHERE id=%s", ("memory-" + user_id,))
             connection.execute("DELETE FROM memory_consents WHERE id=%s", (consent_id,))
             connection.execute("DELETE FROM sessions WHERE token_hash=%s", ("token-" + user_id,))
+            connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (timestamp, user_id))
             connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
             connection.execute("DELETE FROM users WHERE id=%s", (deleted_user_id,))
 
@@ -1341,6 +1342,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
 
                 connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (future, owner))
                 connection.execute("DELETE FROM users WHERE id=%s", (owner,))
+                connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (future, other))
                 connection.execute("DELETE FROM users WHERE id=%s", (other,))
                 raise RollbackFixture()
         except RollbackFixture:
