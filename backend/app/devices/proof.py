@@ -1,6 +1,7 @@
 """Ed25519 proof-of-possession for pending device enrollment."""
 import base64
 import hashlib
+import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
