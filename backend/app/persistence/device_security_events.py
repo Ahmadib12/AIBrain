@@ -13,6 +13,7 @@ _ALLOWED_EVENTS = frozenset({
     "device.revoked",
     "device.session_authenticated",
     "device.login_authenticated",
+    "device.key_rotated",
 })
 
 
