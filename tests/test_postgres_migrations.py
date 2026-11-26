@@ -39,7 +39,15 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "prevent_tool_dispatch_audit_delete" in MIGRATIONS[9].sql
     assert MIGRATIONS[10].version == 11
     assert "CREATE TABLE tool_execution_reconciliation_events" in MIGRATIONS[10].sql
-    for migration in MIGRATIONS[1:11]:
+    assert MIGRATIONS[11].version == 12
+    assert "CREATE TABLE memory_consents" in MIGRATIONS[11].sql
+    assert "idx_memory_active_consent" in MIGRATIONS[11].sql
+    assert "validate_memory_consent_insert" in MIGRATIONS[11].sql
+    assert MIGRATIONS[12].version == 13
+    assert "CREATE TABLE learning_adaptation_events" in MIGRATIONS[12].sql
+    assert "CREATE TABLE learning_evaluations" in MIGRATIONS[12].sql
+    assert "validate_learning_adaptation_transition" in MIGRATIONS[12].sql
+    for migration in MIGRATIONS[1:13]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
