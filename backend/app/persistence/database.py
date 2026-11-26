@@ -3524,6 +3524,8 @@ created_at TEXT NOT NULL,
                     operator_user_id TEXT NOT NULL,
                     action TEXT NOT NULL CHECK (action IN ('redrive')),
                     reason TEXT NOT NULL CHECK (length(reason) BETWEEN 10 AND 500),
+                    attempts_before INTEGER NOT NULL CHECK (attempts_before >= 0),
+                    failure_code_before TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(notification_id)
                         REFERENCES security_notification_outbox(id) ON DELETE CASCADE,
