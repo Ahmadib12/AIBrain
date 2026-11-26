@@ -210,3 +210,114 @@ def test_session_security_events_are_immutable_and_rollback_with_session(client:
             )
             raise RuntimeError("rollback session")
     assert len(state.session_security_events.list_owned(user_id)) == before
+
+
+def test_session_inventory_marks_current_session_and_hides_credentials(client: TestClient):
+    current_token, email = _register_and_login(client, "inventory")
+    second_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "safe-password-123"},
+    )
+    assert second_login.status_code == 200
+    second_token = second_login.json()["access_token"]
+
+    inventory = client.get(
+        "/api/v1/auth/sessions", headers=_headers(current_token)
+    )
+    assert inventory.status_code == 200
+    sessions = inventory.json()
+    assert len(sessions) == 2
+    assert sum(session["is_current"] for session in sessions) == 1
+    assert all("token" not in session and "token_hash" not in session for session in sessions)
+    assert {session["auth_method"] for session in sessions} == {"account"}
+    assert all(session["session_ref"] for session in sessions)
+    assert all(session["created_at"] and session["expires_at"] for session in sessions)
+
+    second_session = next(session for session in sessions if not session["is_current"])
+    state = get_app_state()
+    owner_id = state.identity.resolve_token(current_token)["id"]
+
+    revoked = client.delete(
+        f"/api/v1/auth/sessions/{second_session['session_ref']}",
+        headers=_headers(current_token),
+    )
+    assert revoked.status_code == 200
+    assert revoked.json() == {
+        "status": "revoked",
+        "session_ref": second_session["session_ref"],
+    }
+
+    # The other session is invalidated, while the current session remains usable.
+    assert client.get("/api/v1/auth/me", headers=_headers(second_token)).status_code == 401
+    assert client.get("/api/v1/auth/me", headers=_headers(current_token)).status_code == 200
+    remaining = client.get(
+        "/api/v1/auth/sessions", headers=_headers(current_token)
+    )
+    assert remaining.status_code == 200
+    assert len(remaining.json()) == 1
+    assert remaining.json()[0]["is_current"] is True
+
+    events = state.session_security_events.list_owned(owner_id, limit=100)
+    revoked_events = [
+        event for event in events
+        if event["event_type"] == "session.revoked"
+        and event["session_ref"] == second_session["session_ref"]
+    ]
+    assert len(revoked_events) == 1
+
+    repeated = client.delete(
+        f"/api/v1/auth/sessions/{second_session['session_ref']}",
+        headers=_headers(current_token),
+    )
+    assert repeated.status_code == 404
+    assert repeated.json()["error"]["code"] == "SESSION_NOT_FOUND"
+
+
+def test_session_inventory_and_revocation_are_owner_scoped(client: TestClient):
+    owner_token, owner_email = _register_and_login(client, "inventory-owner")
+    owner_second = client.post(
+        "/api/v1/auth/login",
+        json={"email": owner_email, "password": "safe-password-123"},
+    )
+    assert owner_second.status_code == 200
+    owner_inventory = client.get(
+        "/api/v1/auth/sessions", headers=_headers(owner_token)
+    )
+    target = next(
+        session for session in owner_inventory.json()
+        if not session["is_current"]
+    )
+
+    other_token, _ = _register_and_login(client, "inventory-other")
+    other_inventory = client.get(
+        "/api/v1/auth/sessions", headers=_headers(other_token)
+    )
+    assert other_inventory.status_code == 200
+    assert all(
+        session["session_ref"] != target["session_ref"]
+        for session in other_inventory.json()
+    )
+
+    cross_owner_revoke = client.delete(
+        f"/api/v1/auth/sessions/{target['session_ref']}",
+        headers=_headers(other_token),
+    )
+    assert cross_owner_revoke.status_code == 404
+    assert cross_owner_revoke.json()["error"]["code"] == "SESSION_NOT_FOUND"
+    assert client.get("/api/v1/auth/me", headers=_headers(owner_second.json()["access_token"])).status_code == 200
+
+
+def test_session_inventory_prevents_revoking_the_current_session(client: TestClient):
+    token, _ = _register_and_login(client, "inventory-current")
+    inventory = client.get("/api/v1/auth/sessions", headers=_headers(token))
+    assert inventory.status_code == 200
+    assert len(inventory.json()) == 1
+    current_ref = inventory.json()[0]["session_ref"]
+
+    response = client.delete(
+        f"/api/v1/auth/sessions/{current_ref}",
+        headers=_headers(token),
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CURRENT_SESSION_CANNOT_BE_REVOKED"
+    assert client.get("/api/v1/auth/me", headers=_headers(token)).status_code == 200
