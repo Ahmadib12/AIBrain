@@ -15,7 +15,7 @@ def test_integration_dispatch_ledger_migration_is_applied_after_bindings():
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
     ]
-    assert versions == list(range(1, 41))
+    assert versions == list(range(1, 42))
 
     tables = {
         row["name"]
