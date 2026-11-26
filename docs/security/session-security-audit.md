@@ -132,3 +132,22 @@ required before the system can claim that an owner was actually notified.
 
 Remote device attestation and a distributed rate-limit service also remain
 unimplemented.
+
+
+### SMTP delivery for recovery notifications
+
+The recovery notification outbox has an optional supervised SMTP delivery path. Delivery is disabled unless both `AIBRAIN_SECURITY_NOTIFICATION_SMTP_HOST` and `AIBRAIN_SECURITY_NOTIFICATION_SENDER` are explicitly configured. When enabled, the worker uses SMTP STARTTLS with the platform's default certificate-verifying SSL context; it never falls back to plaintext. SMTP credentials are optional for relays that do not require authentication, but username and password must be configured together. Passwords use secret-valued settings and must be supplied through the deployment secret manager, not source control.
+
+The worker claims bounded batches, sends plain-text messages, and marks successful sends delivered. Failures are returned to pending with exponential backoff capped at one hour. A crashed process leaves a processing lease that the outbox reclaims after expiry. This is at-least-once delivery: a process crash after the SMTP server accepts a message but before the database records delivery can result in a duplicate email. No credentials, recovery codes, private keys, or full audit payloads are included in messages or logs. Without SMTP configuration, the worker does not start and notifications remain durably pending.
+
+Configuration:
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_HOST`
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_PORT` (default `587`)
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_USERNAME` (optional)
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_PASSWORD` (optional secret; paired with username)
+- `AIBRAIN_SECURITY_NOTIFICATION_SENDER`
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_TIMEOUT_SECONDS` (default `10`)
+- `AIBRAIN_SECURITY_NOTIFICATION_WORKER_INTERVAL_SECONDS` (default `30`)
+- `AIBRAIN_SECURITY_NOTIFICATION_BATCH_SIZE` (default `10`)
+
+The transport and worker are covered by mocked SMTP and lifecycle tests. A real SMTP provider has not been configured or integration-tested in this repository, so production delivery is not yet verified.
