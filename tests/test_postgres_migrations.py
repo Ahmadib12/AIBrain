@@ -77,7 +77,19 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert MIGRATIONS[21].version == 22
     assert "CREATE TABLE agent_run_integration_dispatches" in MIGRATIONS[21].sql
     assert "invalid integration dispatch lifecycle transition" in MIGRATIONS[21].sql
-    for migration in MIGRATIONS[1:22]:
+    assert MIGRATIONS[22].version == 23
+    assert "'text_generation'" in MIGRATIONS[22].sql
+    assert MIGRATIONS[23].version == 24
+    assert "CREATE TABLE devices" in MIGRATIONS[23].sql
+    assert "prevent_device_for_inactive_user" in MIGRATIONS[23].sql
+    assert MIGRATIONS[24].version == 25
+    assert "CREATE TABLE device_auth_challenges" in MIGRATIONS[24].sql
+    assert "validate_device_challenge_insert" in MIGRATIONS[24].sql
+    assert MIGRATIONS[25].version == 26
+    assert "ADD COLUMN device_id" in MIGRATIONS[25].sql
+    assert "ADD COLUMN auth_method" in MIGRATIONS[25].sql
+    assert "ADD COLUMN purpose" in MIGRATIONS[25].sql
+    for migration in MIGRATIONS[1:26]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
