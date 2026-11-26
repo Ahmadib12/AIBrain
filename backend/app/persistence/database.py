@@ -3040,94 +3040,6 @@ created_at TEXT NOT NULL,
                 """
             ),
             (
-                41,
-                """
-                -- A key can change only through a dual-possession, one-time rotation.
-                CREATE TABLE device_key_rotation_challenges (
-                    id TEXT PRIMARY KEY,
-                    device_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    nonce_hash TEXT NOT NULL CHECK(length(nonce_hash)=64),
-                    proposed_public_key_b64 TEXT NOT NULL,
-                    proposed_fingerprint TEXT NOT NULL CHECK(length(proposed_fingerprint)=64),
-                    expires_at TEXT NOT NULL,
-                    used_at TEXT,
-                    applied_at TEXT,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE,
-                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-                );
-                CREATE INDEX idx_device_key_rotation_expiry
-                    ON device_key_rotation_challenges(expires_at, used_at);
-
-                DROP TRIGGER IF EXISTS prevent_device_security_event_update;
-                DROP TRIGGER IF EXISTS prevent_device_security_event_delete;
-                DROP INDEX IF EXISTS idx_device_security_events_owner_time;
-                ALTER TABLE device_security_events RENAME TO device_security_events_v40;
-                CREATE TABLE device_security_events (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    device_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL CHECK (event_type IN (
-                        'device.enrolled',
-                        'device.key_registered',
-                        'device.activated',
-                        'device.revoked',
-                        'device.session_authenticated',
-                        'device.login_authenticated',
-                        'device.key_rotated'
-                    )),
-                    occurred_at TEXT NOT NULL,
-                    details_json TEXT NOT NULL DEFAULT '{}',
-                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-                );
-                INSERT INTO device_security_events
-                    (id,user_id,device_id,event_type,occurred_at,details_json)
-                SELECT id,user_id,device_id,event_type,occurred_at,details_json
-                FROM device_security_events_v40;
-                DROP TABLE device_security_events_v40;
-                CREATE INDEX idx_device_security_events_owner_time
-                    ON device_security_events(user_id, occurred_at DESC, id DESC);
-                CREATE TRIGGER prevent_device_security_event_update
-                BEFORE UPDATE ON device_security_events
-                BEGIN
-                    SELECT RAISE(ABORT, 'device security events are immutable');
-                END;
-                CREATE TRIGGER prevent_device_security_event_delete
-                BEFORE DELETE ON device_security_events
-                WHEN NOT EXISTS (
-                    SELECT 1 FROM users
-                    WHERE id=OLD.user_id AND deleted_at IS NOT NULL
-                )
-                BEGIN
-                    SELECT RAISE(ABORT, 'device security events may only be erased with the account');
-                END;
-
-                DROP TRIGGER IF EXISTS prevent_device_identity_mutation;
-                DROP TRIGGER IF EXISTS prevent_device_public_key_replacement;
-                CREATE TRIGGER prevent_device_identity_mutation
-                BEFORE UPDATE OF id, user_id ON devices
-                WHEN NEW.id IS NOT OLD.id OR NEW.user_id IS NOT OLD.user_id
-                BEGIN
-                    SELECT RAISE(ABORT, 'device identity fields are immutable');
-                END;
-                CREATE TRIGGER prevent_device_key_rotation_without_proof
-                BEFORE UPDATE OF public_key_b64, public_key_fingerprint ON devices
-                WHEN (NEW.public_key_b64 IS NOT OLD.public_key_b64
-                   OR NEW.public_key_fingerprint IS NOT OLD.public_key_fingerprint)
-                 AND NOT EXISTS (
-                    SELECT 1 FROM device_key_rotation_challenges c
-                    WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
-                      AND c.used_at IS NOT NULL AND c.applied_at IS NULL
-                      AND c.proposed_public_key_b64=NEW.public_key_b64
-                      AND c.proposed_fingerprint=NEW.public_key_fingerprint
-                 )
-                BEGIN
-                    SELECT RAISE(ABORT, 'device key replacement requires verified rotation');
-                END;
-                """
-            ),
-            (
                 40,
                 """
                 -- Session security history is independent of live session rows:
@@ -3247,6 +3159,94 @@ created_at TEXT NOT NULL,
                         OLD.user_id,OLD.audit_ref,OLD.device_id,OLD.auth_method,
                         'session.expired',OLD.expires_at
                     );
+                END;
+                """
+            ),
+            (
+                41,
+                """
+                -- A key can change only through a dual-possession, one-time rotation.
+                CREATE TABLE device_key_rotation_challenges (
+                    id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    nonce_hash TEXT NOT NULL CHECK(length(nonce_hash)=64),
+                    proposed_public_key_b64 TEXT NOT NULL,
+                    proposed_fingerprint TEXT NOT NULL CHECK(length(proposed_fingerprint)=64),
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    applied_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_device_key_rotation_expiry
+                    ON device_key_rotation_challenges(expires_at, used_at);
+
+                DROP TRIGGER IF EXISTS prevent_device_security_event_update;
+                DROP TRIGGER IF EXISTS prevent_device_security_event_delete;
+                DROP INDEX IF EXISTS idx_device_security_events_owner_time;
+                ALTER TABLE device_security_events RENAME TO device_security_events_v40;
+                CREATE TABLE device_security_events (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK (event_type IN (
+                        'device.enrolled',
+                        'device.key_registered',
+                        'device.activated',
+                        'device.revoked',
+                        'device.session_authenticated',
+                        'device.login_authenticated',
+                        'device.key_rotated'
+                    )),
+                    occurred_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                INSERT INTO device_security_events
+                    (id,user_id,device_id,event_type,occurred_at,details_json)
+                SELECT id,user_id,device_id,event_type,occurred_at,details_json
+                FROM device_security_events_v40;
+                DROP TABLE device_security_events_v40;
+                CREATE INDEX idx_device_security_events_owner_time
+                    ON device_security_events(user_id, occurred_at DESC, id DESC);
+                CREATE TRIGGER prevent_device_security_event_update
+                BEFORE UPDATE ON device_security_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'device security events are immutable');
+                END;
+                CREATE TRIGGER prevent_device_security_event_delete
+                BEFORE DELETE ON device_security_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device security events may only be erased with the account');
+                END;
+
+                DROP TRIGGER IF EXISTS prevent_device_identity_mutation;
+                DROP TRIGGER IF EXISTS prevent_device_public_key_replacement;
+                CREATE TRIGGER prevent_device_identity_mutation
+                BEFORE UPDATE OF id, user_id ON devices
+                WHEN NEW.id IS NOT OLD.id OR NEW.user_id IS NOT OLD.user_id
+                BEGIN
+                    SELECT RAISE(ABORT, 'device identity fields are immutable');
+                END;
+                CREATE TRIGGER prevent_device_key_rotation_without_proof
+                BEFORE UPDATE OF public_key_b64, public_key_fingerprint ON devices
+                WHEN (NEW.public_key_b64 IS NOT OLD.public_key_b64
+                   OR NEW.public_key_fingerprint IS NOT OLD.public_key_fingerprint)
+                 AND NOT EXISTS (
+                    SELECT 1 FROM device_key_rotation_challenges c
+                    WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
+                      AND c.used_at IS NOT NULL AND c.applied_at IS NULL
+                      AND c.proposed_public_key_b64=NEW.public_key_b64
+                      AND c.proposed_fingerprint=NEW.public_key_fingerprint
+                 )
+                BEGIN
+                    SELECT RAISE(ABORT, 'device key replacement requires verified rotation');
                 END;
                 """
             ),
