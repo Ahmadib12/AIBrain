@@ -194,6 +194,41 @@ def test_lost_device_recovery_consumes_code_and_requires_new_key_proof(client):
     assert delivered["status"] == "delivered"
     assert delivered["delivered_at"] is not None
 
+    # A second recovery audit event exercises the bounded retry terminal state.
+    from datetime import datetime, timezone
+    terminal_event_id = str(uuid4())
+    with state.database.transaction():
+        state.database.connect().execute(
+            """
+            INSERT INTO device_security_events (
+                id, user_id, device_id, event_type, occurred_at, details_json
+            ) VALUES (?, ?, ?, 'device.key_rotated', ?, ?)
+            """,
+            (
+                terminal_event_id, owner["id"], device_id,
+                datetime.now(timezone.utc).isoformat(), '{"recovery":true}',
+            ),
+        )
+        state.database.connect().execute(
+            "UPDATE security_notification_outbox SET attempts=7 WHERE event_id=?",
+            (terminal_event_id,),
+        )
+    terminal_claim = state.security_notifications.claim_batch(limit=5)
+    assert len(terminal_claim) == 1
+    assert terminal_claim[0]["attempts"] == 8
+    assert state.security_notifications.release_for_retry(
+        terminal_claim[0]["id"], delay_seconds=30
+    ) is True
+    terminal = state.database.connect().execute(
+        "SELECT status, failed_at, failure_code FROM security_notification_outbox WHERE event_id=?",
+        (terminal_event_id,),
+    ).fetchone()
+    assert terminal["status"] == "failed"
+    assert terminal["failed_at"] is not None
+    assert terminal["failure_code"] == "delivery_attempts_exhausted"
+    assert state.security_notifications.pending_count() == 0
+    assert state.security_notifications.delivery_counts()["failed"] == 1
+
     replay = client.post(
         f"/api/v1/devices/{device_id}/recovery/verify",
         params={"challenge_id": data["challenge_id"]},
