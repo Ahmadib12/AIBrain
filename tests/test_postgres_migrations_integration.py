@@ -133,6 +133,31 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             with connection.transaction():
                 connection.execute(
                     """
+                    INSERT INTO webauthn_credentials (
+                        id, user_id, credential_id, public_key, backed_up, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    ("bad-backup-" + user_id, user_id, "bad-backup-external-" + user_id,
+                     bytes(range(32)), 2, timestamp),
+                )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO tool_requests (
+                        id, user_id, tool_id, arguments_json, status,
+                        created_at, updated_at, authorization_policy
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("bad-policy-" + user_id, user_id, "echo", "{}", "pending",
+                     timestamp, timestamp, "bypass"),
+                )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
                     INSERT INTO memory_items (
                         id, user_id, memory_type, key, value_json, source,
                         confidence, status, created_at, updated_at
