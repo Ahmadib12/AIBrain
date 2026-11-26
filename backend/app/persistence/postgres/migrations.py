@@ -169,7 +169,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE FUNCTION aibrain_require_active_owner()
         RETURNS trigger
         LANGUAGE plpgsql
-        AS $$$
+        AS $
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users
@@ -210,7 +210,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             BEFORE INSERT ON tool_authorizations
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
         """,
-    ),,
+    ),
 
     PostgresMigration(
         version=3,
