@@ -72,7 +72,7 @@ def test_postgres_migration_stream_starts_with_identity_schema():
             assert len(openings) == len(closings), (
                 f"migration {migration.version} has unbalanced function delimiters"
             )
-            assert "\n        $;\n" not in migration.sql
+            assert not re.search(r"(?m)^\s*\$(?!\$)\s*;\s*$", migration.sql), (\n                f"migration {migration.version} contains a single-dollar function terminator"\n            )
     assert "CREATE TABLE tool_execution_attempts" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_execution_bindings" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_dispatch_audit_events" in MIGRATIONS[2].sql
