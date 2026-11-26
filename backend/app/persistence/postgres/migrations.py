@@ -2102,13 +2102,15 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE FUNCTION aibrain_validate_integration_secret_delete()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
-            ) AND NOT EXISTS (
-                SELECT 1 FROM integration_connections c
-                WHERE c.id=OLD.connection_id AND c.user_id=OLD.user_id
-                  AND c.status IN ('revoked','disconnected','expired')
-            ) THEN
+            IF current_setting('aibrain.account_erasure_user_id', true)
+                    IS DISTINCT FROM OLD.user_id
+               AND NOT EXISTS (
+                    SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+               ) AND NOT EXISTS (
+                    SELECT 1 FROM integration_connections c
+                    WHERE c.id=OLD.connection_id AND c.user_id=OLD.user_id
+                      AND c.status IN ('revoked','disconnected','expired')
+               ) THEN
                 RAISE EXCEPTION 'vault secrets may only be deleted during revocation or account erasure'
                     USING ERRCODE='23514';
             END IF;
