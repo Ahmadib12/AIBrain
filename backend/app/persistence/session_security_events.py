@@ -45,7 +45,7 @@ class SessionSecurityEventRepository:
         else:
             rows = self.database.connect().execute(
                 """
-                SELECT id, device_id, auth_method, event_type, occurred_at
+                SELECT id, session_ref, device_id, auth_method, event_type, occurred_at
                 FROM session_security_events
                 WHERE user_id=?
                   AND (occurred_at < ? OR (occurred_at = ? AND id < ?))
