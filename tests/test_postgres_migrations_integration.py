@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 18
-    assert runner.migrate() == 18
+    assert runner.migrate() == 22
+    assert runner.migrate() == 22
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -285,7 +285,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 18
+    assert runner.migrate() == 22
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -429,7 +429,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 18
+    assert runner.migrate() == 22
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
@@ -629,7 +629,7 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 18
+    assert runner.migrate() == 22
 
     suffix = str(uuid.uuid4())
     user_id = "memory-learning-owner-" + suffix
@@ -839,7 +839,7 @@ def test_real_postgres_agent_lifecycle_capability_and_run_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 18
+    assert PostgresMigrationRunner(database_url).migrate() == 22
     suffix = str(uuid.uuid4())
     owner = "agent-owner-" + suffix
     other = "agent-other-" + suffix
@@ -1038,6 +1038,293 @@ def test_real_postgres_agent_lifecycle_capability_and_run_guards():
                             """,
                             ("foreign-grant-" + suffix, other, agent, "notes.read", timestamp),
                         )
+                raise RollbackFixture()
+        except RollbackFixture:
+            pass
+
+
+
+def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+
+    psycopg = pytest.importorskip("psycopg")
+    assert PostgresMigrationRunner(database_url).migrate() == 22
+    suffix = str(uuid.uuid4())
+    owner = "integration-owner-" + suffix
+    other = "integration-other-" + suffix
+    agent = "integration-agent-" + suffix
+    task = "integration-task-" + suffix
+    run = "integration-run-" + suffix
+    step = "integration-step-" + suffix
+    connection_id = "integration-connection-" + suffix
+    secret_ref = "integration-secret-" + suffix
+    grant_id = "integration-grant-" + suffix
+    timestamp = "2026-01-01T00:00:00+00:00"
+    future = "2027-01-01T00:00:00+00:00"
+
+    class RollbackFixture(Exception):
+        pass
+
+    with psycopg.connect(database_url) as connection:
+        try:
+            with connection.transaction():
+                for user_id in (owner, other):
+                    connection.execute(
+                        """
+                        INSERT INTO users (id,email,password_salt,password_hash,created_at)
+                        VALUES (%s,%s,%s,%s,%s)
+                        """,
+                        (user_id, user_id + "@example.invalid", "salt", "hash", timestamp),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO agents (
+                        id,user_id,name,metadata_json,status,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (agent, owner, "Integration agent", "{}", "active", timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_events (
+                        id,user_id,agent_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("registered-" + suffix, owner, agent, owner, "registered",
+                     '{"initial_status":"active"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_tasks (
+                        id,user_id,agent_id,title,goal,context_json,capability_ceiling_json,
+                        status,expires_at,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (task, owner, agent, "Use calendar", "Read calendar", "{}",
+                     '["calendar.read"]', "assigned", future, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_task_events (
+                        id,user_id,task_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("task-assigned-" + suffix, owner, task, owner, "assigned",
+                     '{"to_status":"assigned"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_runs (
+                        id,user_id,agent_id,task_id,actions_json,plan_digest,status,
+                        expires_at,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (run, owner, agent, task, '[{"tool_id":"calendar.read"}]',
+                     "a" * 64, "proposed", future, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_steps (
+                        id,user_id,run_id,ordinal,tool_id,arguments_json,
+                        contract_fingerprint,required_capability,status,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (step, owner, run, 0, "calendar.read", "{}", "b" * 64,
+                     "calendar.read", "pending", timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO integration_connections (
+                        id,user_id,integration_id,status,consent_version,consented_at,
+                        secret_ref,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (connection_id, owner, "calendar", "pending_verification",
+                     "v1", timestamp, secret_ref, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO integration_connection_grants (
+                        id,user_id,connection_id,scope,status,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    (grant_id, owner, connection_id, "calendar.read", "pending", timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO integration_secrets (
+                        secret_ref,user_id,connection_id,integration_id,nonce,
+                        ciphertext,key_version,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (secret_ref, owner, connection_id, "calendar", b"n" * 12,
+                     b"c" * 32, 1, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    UPDATE integration_connections
+                    SET status='active',verified_at=%s,updated_at=%s
+                    WHERE id=%s
+                    """,
+                    (timestamp, timestamp, connection_id),
+                )
+                connection.execute(
+                    "UPDATE integration_connection_grants SET status='active' WHERE id=%s",
+                    (grant_id,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO integration_connection_events (
+                        id,user_id,connection_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("connection-event-" + suffix, owner, connection_id,
+                     "verified", '{"verification":"passed"}', timestamp),
+                )
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO integration_connection_grants (
+                                id,user_id,connection_id,scope,status,created_at
+                            ) VALUES (%s,%s,%s,%s,%s,%s)
+                            """,
+                            ("foreign-grant-" + suffix, other, connection_id,
+                             "calendar.write", "pending", timestamp),
+                        )
+
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_integration_bindings (
+                        step_id,user_id,run_id,connection_id,integration_id,
+                        manifest_version,tool_id,contract_fingerprint,
+                        required_scopes_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (step, owner, run, connection_id, "calendar", "1",
+                     "calendar.read", "b" * 64, '["calendar.read"]', timestamp),
+                )
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            UPDATE agent_run_integration_bindings
+                            SET tool_id='calendar.write' WHERE step_id=%s
+                            """,
+                            (step,),
+                        )
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO agent_run_integration_bindings (
+                                step_id,user_id,run_id,connection_id,integration_id,
+                                manifest_version,tool_id,contract_fingerprint,
+                                required_scopes_json,created_at
+                            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            """,
+                            ("wrong-scope-step-" + suffix, owner, run, connection_id,
+                             "calendar", "1", "calendar.read", "b" * 64,
+                             '["calendar.write"]', timestamp),
+                        )
+
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_events (
+                        id,user_id,run_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("run-start-" + suffix, owner, run, owner, "started",
+                     '{"from_status":"proposed","to_status":"running"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agent_runs SET status='running',started_at=%s WHERE id=%s",
+                    (timestamp, run),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_events (
+                        id,user_id,run_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("step-start-" + suffix, owner, run, owner, "step_started",
+                     '{"step_id":"' + step + '"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agent_run_steps SET status='running' WHERE id=%s", (step,)
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_events (
+                        id,user_id,run_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("dispatch-start-" + suffix, owner, run, owner,
+                     "integration_dispatch_started", '{"step_id":"' + step + '"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_integration_dispatches (
+                        step_id,user_id,run_id,connection_id,integration_id,tool_id,
+                        contract_fingerprint,status,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (step, owner, run, connection_id, "calendar", "calendar.read",
+                     "b" * 64, "prepared", timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    UPDATE agent_run_integration_dispatches
+                    SET status='dispatch_started',dispatch_started_at=%s,updated_at=%s
+                    WHERE step_id=%s
+                    """,
+                    (timestamp, timestamp, step),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_events (
+                        id,user_id,run_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("dispatch-done-" + suffix, owner, run, owner,
+                     "integration_dispatch_succeeded", '{"step_id":"' + step + '"}', future),
+                )
+                connection.execute(
+                    """
+                    UPDATE agent_run_integration_dispatches
+                    SET status='succeeded',finished_at=%s,outcome_json=%s,updated_at=%s
+                    WHERE step_id=%s
+                    """,
+                    (future, '{"events":2}', future, step),
+                )
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            UPDATE agent_run_integration_dispatches
+                            SET outcome_json=%s WHERE step_id=%s
+                            """,
+                            ('{"tampered":true}', step),
+                        )
+
+                # Terminal connection revocation atomically destroys its vault secret.
+                connection.execute(
+                    "UPDATE integration_connections SET status='revoked',updated_at=%s WHERE id=%s",
+                    (future, connection_id),
+                )
+                assert connection.execute(
+                    "SELECT count(*) FROM integration_secrets WHERE connection_id=%s",
+                    (connection_id,),
+                ).fetchone()[0] == 0
+
+                connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (future, owner))
+                connection.execute("DELETE FROM users WHERE id=%s", (owner,))
+                connection.execute("DELETE FROM users WHERE id=%s", (other,))
                 raise RollbackFixture()
         except RollbackFixture:
             pass
