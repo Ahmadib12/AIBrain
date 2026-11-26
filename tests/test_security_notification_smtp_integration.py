@@ -18,7 +18,7 @@ from backend.app.persistence.security_notification_transport import SmtpSecurity
 )
 def test_real_smtp_provider_accepts_controlled_security_notice():
     recipient = os.getenv("AIBRAIN_SECURITY_NOTIFICATION_SMTP_TEST_RECIPIENT")
-    if not recipient or len(recipient) > 320 or "\\r" in recipient or "\\n" in recipient:
+    if not recipient or len(recipient) > 320 or chr(13) in recipient or chr(10) in recipient:
         pytest.fail("A dedicated SMTP test recipient must be configured")
     settings = Settings()
     transport = SmtpSecurityNotificationTransport(settings)
