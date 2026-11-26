@@ -228,6 +228,73 @@ class IdentityRepository:
             user["device_id"] = row["device_id"]
         return user
 
+    def list_owned_sessions(self, owner_id: str, current_token: str) -> tuple[dict, ...]:
+        """List valid sessions for one owner without exposing authentication material."""
+        token_hash = hashlib.sha256(current_token.encode("utf-8")).hexdigest()
+        now = _utc_now()
+        rows = self.database.connect().execute(
+            """
+            SELECT s.audit_ref, s.device_id, s.auth_method, s.created_at, s.expires_at,
+                   s.token_hash
+            FROM sessions s
+            LEFT JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
+            WHERE s.user_id = ?
+              AND s.revoked_at IS NULL
+              AND s.expires_at > ?
+              AND (s.device_id IS NULL OR d.status = 'active')
+            ORDER BY s.created_at DESC, s.audit_ref DESC
+            """,
+            (owner_id, now),
+        ).fetchall()
+        return tuple(
+            {
+                "session_ref": row["audit_ref"],
+                "device_id": row["device_id"],
+                "auth_method": row["auth_method"],
+                "created_at": row["created_at"],
+                "expires_at": row["expires_at"],
+                "is_current": secrets.compare_digest(row["token_hash"], token_hash),
+            }
+            for row in rows
+        )
+
+    def revoke_owned_session(
+        self,
+        owner_id: str,
+        session_ref: str,
+        current_token: str,
+    ) -> bool:
+        """Revoke one active owned session; return False for any unavailable target."""
+        current_hash = hashlib.sha256(current_token.encode("utf-8")).hexdigest()
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT s.token_hash
+                FROM sessions s
+                LEFT JOIN devices d ON d.id = s.device_id AND d.user_id = s.user_id
+                WHERE s.user_id = ?
+                  AND s.audit_ref = ?
+                  AND s.revoked_at IS NULL
+                  AND s.expires_at > ?
+                  AND (s.device_id IS NULL OR d.status = 'active')
+                """,
+                (owner_id, session_ref, now),
+            ).fetchone()
+            if row is None:
+                return False
+            if secrets.compare_digest(row["token_hash"], current_hash):
+                raise ValueError("The current session must be ended through logout")
+            cursor = connection.execute(
+                """
+                UPDATE sessions SET revoked_at = ?
+                WHERE user_id = ? AND audit_ref = ? AND revoked_at IS NULL
+                """,
+                (now, owner_id, session_ref),
+            )
+            return cursor.rowcount == 1
+
     def revoke_token(self, token: str) -> bool:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self.database.transaction():
