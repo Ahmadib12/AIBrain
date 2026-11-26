@@ -1889,7 +1889,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_integration_connection_events_owner
             ON integration_connection_events(user_id,connection_id,created_at,id);
         CREATE FUNCTION aibrain_validate_integration_connection_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users u WHERE u.id=NEW.user_id AND u.deleted_at IS NULL
@@ -1899,12 +1899,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_integration_connection_insert
             BEFORE INSERT ON integration_connections
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_connection_insert();
         CREATE FUNCTION aibrain_require_verified_integration_activation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status='active' AND
                (NEW.verified_at IS NULL OR NEW.secret_ref IS NULL
@@ -1914,12 +1914,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER require_verified_integration_activation
             BEFORE UPDATE OF status ON integration_connections
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_verified_integration_activation();
         CREATE FUNCTION aibrain_validate_integration_grant_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM integration_connections c
@@ -1931,12 +1931,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_integration_grant_insert
             BEFORE INSERT ON integration_connection_grants
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_grant_insert();
         CREATE FUNCTION aibrain_require_active_connection_for_active_grant()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status='active' AND NOT EXISTS (
                 SELECT 1 FROM integration_connections c
@@ -1948,12 +1948,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER require_active_connection_for_active_grant
             BEFORE UPDATE OF status ON integration_connection_grants
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_connection_for_active_grant();
         CREATE FUNCTION aibrain_reject_integration_grant_scope_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.user_id IS DISTINCT FROM OLD.user_id
                OR NEW.connection_id IS DISTINCT FROM OLD.connection_id
@@ -1964,12 +1964,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_integration_grant_scope_update
             BEFORE UPDATE ON integration_connection_grants
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_integration_grant_scope_update();
         CREATE FUNCTION aibrain_validate_integration_connection_event_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM integration_connections c
@@ -1982,7 +1982,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_integration_connection_event_insert
             BEFORE INSERT ON integration_connection_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_connection_event_insert();
@@ -2015,7 +2015,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_integration_secrets_owner
             ON integration_secrets(user_id,connection_id);
         CREATE OR REPLACE FUNCTION aibrain_require_verified_integration_activation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status='active' AND (
                 NEW.verified_at IS NULL OR NEW.secret_ref IS NULL
@@ -2032,9 +2032,9 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE OR REPLACE FUNCTION aibrain_validate_integration_secret_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM integration_connections c
@@ -2048,12 +2048,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_integration_secret_insert
             BEFORE INSERT ON integration_secrets
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_secret_insert();
         CREATE FUNCTION aibrain_reject_integration_secret_identity_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.secret_ref IS DISTINCT FROM OLD.secret_ref
                OR NEW.user_id IS DISTINCT FROM OLD.user_id
@@ -2065,12 +2065,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_integration_secret_identity_update
             BEFORE UPDATE ON integration_secrets
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_integration_secret_identity_update();
         CREATE FUNCTION aibrain_validate_integration_secret_delete()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
@@ -2084,12 +2084,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_integration_secret_delete
             BEFORE DELETE ON integration_secrets
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_secret_delete();
         CREATE FUNCTION aibrain_erase_integration_secret_on_terminal_connection()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status IN ('revoked','disconnected','expired')
                AND OLD.status IS DISTINCT FROM NEW.status THEN
@@ -2098,7 +2098,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER erase_integration_secret_on_terminal_connection
             AFTER UPDATE OF status ON integration_connections
             FOR EACH ROW EXECUTE FUNCTION aibrain_erase_integration_secret_on_terminal_connection();
@@ -2126,7 +2126,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_agent_run_integration_bindings_owner
             ON agent_run_integration_bindings(user_id,run_id,step_id);
         CREATE FUNCTION aibrain_validate_agent_run_integration_binding()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE requested_scope TEXT;
         BEGIN
             IF NOT EXISTS (
@@ -2167,7 +2167,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END LOOP;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_integration_binding_insert
             BEFORE INSERT ON agent_run_integration_bindings
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_integration_binding();
@@ -2219,7 +2219,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_agent_run_integration_dispatches_owner
             ON agent_run_integration_dispatches(user_id,run_id,status);
         CREATE FUNCTION aibrain_validate_agent_run_integration_dispatch_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.status <> 'prepared' OR NOT EXISTS (
                 SELECT 1 FROM agent_run_integration_bindings b
@@ -2250,12 +2250,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_integration_dispatch_insert
             BEFORE INSERT ON agent_run_integration_dispatches
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_integration_dispatch_insert();
         CREATE FUNCTION aibrain_validate_agent_run_integration_dispatch_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE expected_event TEXT;
         BEGIN
             IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
@@ -2314,12 +2314,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_agent_run_integration_dispatch_transition
             BEFORE UPDATE OF status ON agent_run_integration_dispatches
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_integration_dispatch_transition();
         CREATE FUNCTION aibrain_reject_agent_run_integration_dispatch_identity_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.step_id IS DISTINCT FROM OLD.step_id OR NEW.user_id IS DISTINCT FROM OLD.user_id
                OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.connection_id IS DISTINCT FROM OLD.connection_id
@@ -2333,7 +2333,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_run_integration_dispatch_identity_update
             BEFORE UPDATE ON agent_run_integration_dispatches
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_run_integration_dispatch_identity_update();
