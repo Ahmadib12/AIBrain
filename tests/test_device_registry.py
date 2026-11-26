@@ -740,4 +740,175 @@ def test_session_revocation_cannot_be_reversed(client: TestClient) -> None:
             state.database.connect().execute(
                 "UPDATE sessions SET revoked_at=NULL WHERE token_hash=?",
                 (token_hash,),
+            )\n
+
+def test_device_key_rotation_requires_both_keys_and_revokes_old_sessions(
+    client: TestClient,
+) -> None:
+    from backend.app.app_state import get_app_state
+
+    owner_headers = _authenticated_headers(client)
+    device, old_private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, old_private_key)
+    assert activated.status_code == 204
+
+    old_session = _create_device_session(
+        client, owner_headers, device, old_private_key
+    )
+    assert old_session.status_code == 200
+    old_token = old_session.json()["access_token"]
+    old_headers = {"Authorization": f"Bearer {old_token}"}
+
+    new_private_key = Ed25519PrivateKey.generate()
+    new_public_key = new_private_key.public_key().public_bytes(
+        Encoding.Raw, PublicFormat.Raw
+    )
+    new_public_key_b64 = base64.b64encode(new_public_key).decode("ascii")
+    challenge_response = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/challenge",
+        headers=owner_headers,
+        json={"new_public_key_b64": new_public_key_b64},
+    )
+    assert challenge_response.status_code == 200
+    challenge = challenge_response.json()
+    message = base64.b64decode(challenge["message_b64"], validate=True)
+
+    # Possession of only the replacement key is insufficient.
+    attacker = Ed25519PrivateKey.generate()
+    rejected = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=owner_headers,
+        json={
+            "nonce": challenge["nonce"],
+            "old_signature_b64": base64.b64encode(attacker.sign(message)).decode("ascii"),
+            "new_signature_b64": base64.b64encode(new_private_key.sign(message)).decode("ascii"),
+        },
+    )
+    assert rejected.status_code == 401
+    assert rejected.json()["error"]["code"] == "DEVICE_KEY_ROTATION_PROOF_REJECTED"
+    assert client.get("/api/v1/auth/me", headers=old_headers).status_code == 200
+
+    rotated = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=owner_headers,
+        json={
+            "nonce": challenge["nonce"],
+            "old_signature_b64": base64.b64encode(old_private_key.sign(message)).decode("ascii"),
+            "new_signature_b64": base64.b64encode(new_private_key.sign(message)).decode("ascii"),
+        },
+    )
+    assert rotated.status_code == 200
+    assert rotated.json()["status"] == "rotated"
+    assert rotated.json()["public_key_fingerprint"] == challenge["new_public_key_fingerprint"]
+
+    # Rotation invalidates every old device-bound session.
+    assert client.get("/api/v1/auth/me", headers=old_headers).status_code == 401
+    state = get_app_state()
+    stored = state.devices.get_owned(
+        state.identity.resolve_token(
+            owner_headers["Authorization"].removeprefix("Bearer ")
+        )["id"],
+        device["device_id"],
+    )
+    assert stored.public_key_fingerprint == challenge["new_public_key_fingerprint"]
+
+    events = client.get("/api/v1/devices/security-events", headers=owner_headers)
+    assert events.status_code == 200
+    rotations = [
+        event for event in events.json()
+        if event["device_id"] == device["device_id"]
+        and event["event_type"] == "device.key_rotated"
+    ]
+    assert len(rotations) == 1
+    assert rotations[0]["details"]["previous_fingerprint"] == device["public_key_fingerprint"]
+    assert rotations[0]["details"]["new_fingerprint"] == challenge["new_public_key_fingerprint"]
+
+    # The new key can authenticate; the old key cannot.
+    new_challenge = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/challenge"
+    )
+    assert new_challenge.status_code == 200
+    login_data = new_challenge.json()
+    login_message = base64.b64decode(login_data["message_b64"], validate=True)
+    old_login = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": login_data["challenge_id"]},
+        json={
+            "nonce": login_data["nonce"],
+            "signature_b64": base64.b64encode(old_private_key.sign(login_message)).decode("ascii"),
+        },
+    )
+    assert old_login.status_code == 401
+    new_login = client.post(
+        f"/api/v1/devices/{device['device_id']}/login/verify",
+        params={"challenge_id": login_data["challenge_id"]},
+        json={
+            "nonce": login_data["nonce"],
+            "signature_b64": base64.b64encode(new_private_key.sign(login_message)).decode("ascii"),
+        },
+    )
+    assert new_login.status_code == 200
+
+    replay = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=owner_headers,
+        json={
+            "nonce": challenge["nonce"],
+            "old_signature_b64": base64.b64encode(old_private_key.sign(message)).decode("ascii"),
+            "new_signature_b64": base64.b64encode(new_private_key.sign(message)).decode("ascii"),
+        },
+    )
+    assert replay.status_code == 409
+
+
+def test_device_key_rotation_is_owner_scoped_and_requires_an_active_device(
+    client: TestClient,
+) -> None:
+    owner_headers = _authenticated_headers(client)
+    other_headers = _authenticated_headers(client)
+    device, old_private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, old_private_key)
+    assert activated.status_code == 204
+    replacement = Ed25519PrivateKey.generate().public_key().public_bytes(
+        Encoding.Raw, PublicFormat.Raw
+    )
+    body = {"new_public_key_b64": base64.b64encode(replacement).decode("ascii")}
+
+    cross_owner = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/challenge",
+        headers=other_headers,
+        json=body,
+    )
+    assert cross_owner.status_code == 404
+
+    revoked = client.delete(
+        f"/api/v1/devices/{device['device_id']}", headers=owner_headers
+    )
+    assert revoked.status_code == 200
+    inactive = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/challenge",
+        headers=owner_headers,
+        json=body,
+    )
+    assert inactive.status_code == 404
+
+
+def test_device_key_rotation_rejects_direct_key_mutation(client: TestClient) -> None:
+    import pytest
+    from backend.app.app_state import get_app_state
+
+    owner_headers = _authenticated_headers(client)
+    device, old_private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, old_private_key)
+    assert activated.status_code == 204
+
+    state = get_app_state()
+    with pytest.raises(Exception, match="device key replacement requires verified rotation"):
+        with state.database.transaction(immediate=True):
+            state.database.connect().execute(
+                "UPDATE devices SET public_key_fingerprint=? WHERE id=?",
+                ("b" * 64, device["device_id"]),
             )
