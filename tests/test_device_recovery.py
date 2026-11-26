@@ -87,6 +87,27 @@ def _issue_codes(client: TestClient, token: str, password: str):
 def test_lost_device_recovery_consumes_code_and_requires_new_key_proof(client):
     email, password, token = _account(client)
     device_id, old_key = _enroll_active_device(client, token)
+    old_login_challenge = client.post(
+        f"/api/v1/devices/{device_id}/login/challenge"
+    )
+    assert old_login_challenge.status_code == 200
+    old_login_data = old_login_challenge.json()
+    old_login_message = base64.b64decode(
+        old_login_data["message_b64"], validate=True
+    )
+    old_device_login = client.post(
+        f"/api/v1/devices/{device_id}/login/verify",
+        params={"challenge_id": old_login_data["challenge_id"]},
+        json={
+            "nonce": old_login_data["nonce"],
+            "signature_b64": base64.b64encode(
+                old_key.sign(old_login_message)
+            ).decode("ascii"),
+        },
+    )
+    assert old_device_login.status_code == 200
+    old_device_token = old_device_login.json()["access_token"]
+
     state = get_app_state()
     owner = state.identity.resolve_token(token)
     codes = _issue_codes(client, token, password)
@@ -122,6 +143,12 @@ def test_lost_device_recovery_consumes_code_and_requires_new_key_proof(client):
     ).hexdigest()
 
     assert state.webauthn.count_active_recovery_codes(owner["id"]) == 9
+    old_session = client.get(
+        "/api/v1/auth/me",
+        headers=_headers(old_device_token),
+    )
+    assert old_session.status_code == 401
+
     event = state.database.connect().execute(
         """
         SELECT details_json FROM device_security_events
