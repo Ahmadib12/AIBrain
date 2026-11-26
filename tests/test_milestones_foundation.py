@@ -816,6 +816,35 @@ def test_database_migrations_are_versioned_and_persisted(client: TestClient) -> 
     assert [row["version"] for row in rows] == list(range(1, 42))
 
 
+def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
+    client: TestClient,
+) -> None:
+    database = get_app_state().database
+    connection = database.connect()
+    columns = {
+        row["name"] for row in connection.execute(
+            "PRAGMA table_info(device_key_rotation_challenges)"
+        ).fetchall()
+    }
+    assert {
+        "id", "device_id", "user_id", "nonce_hash",
+        "proposed_public_key_b64", "proposed_fingerprint",
+        "expires_at", "used_at", "applied_at", "created_at",
+    } <= columns
+    event_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='device_security_events'"
+    ).fetchone()["sql"]
+    assert "device.key_rotated" in event_sql
+    trigger_names = {
+        row["name"] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    assert "prevent_device_key_rotation_without_proof" in trigger_names
+    assert "prevent_device_security_event_update" in trigger_names
+    assert "prevent_device_security_event_delete" in trigger_names
+
+
 def test_streaming_intelligence_endpoint_is_available(client: TestClient) -> None:
     response = client.post(
         "/api/v1/intelligence/process/stream",
