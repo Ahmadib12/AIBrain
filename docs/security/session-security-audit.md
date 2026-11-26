@@ -127,9 +127,9 @@ writes a recovery key-rotation audit event enqueues one
 payload contains only the device ID and event timestamp; it excludes recovery
 codes, signatures, nonces, and key fingerprints. Claims use an immediate
 transaction, bounded batches, attempt counts, and expiring processing leases so
-crashed workers do not permanently strand notifications. Delivery is not yet
-enabled: a configured email transport and supervised delivery worker are still
-required before the system can claim that an owner was actually notified.
+crashed workers do not permanently strand notifications. SMTP delivery is
+optional and starts only when explicitly configured; successful delivery is
+recorded by the supervised worker.
 
 Remote device attestation and a distributed rate-limit service also remain
 unimplemented.
