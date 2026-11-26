@@ -1,0 +1,40 @@
+name: AIBrain SMTP integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smtp-smoke:
+    name: Controlled SMTP provider smoke test
+    runs-on: ubuntu-latest
+    environment: smtp-integration
+    timeout-minutes: 5
+    env:
+      AIBRAIN_SMTP_INTEGRATION: "1"
+      AIBRAIN_SECURITY_NOTIFICATION_SMTP_HOST: ${{ secrets.AIBRAIN_SECURITY_NOTIFICATION_SMTP_HOST }}
+      AIBRAIN_SECURITY_NOTIFICATION_SMTP_USERNAME: ${{ secrets.AIBRAIN_SECURITY_NOTIFICATION_SMTP_USERNAME }}
+      AIBRAIN_SECURITY_NOTIFICATION_SMTP_PASSWORD: ${{ secrets.AIBRAIN_SECURITY_NOTIFICATION_SMTP_PASSWORD }}
+      AIBRAIN_SECURITY_NOTIFICATION_SENDER: ${{ secrets.AIBRAIN_SECURITY_NOTIFICATION_SENDER }}
+      AIBRAIN_SECURITY_NOTIFICATION_SMTP_TEST_RECIPIENT: ${{ secrets.AIBRAIN_SECURITY_NOTIFICATION_SMTP_TEST_RECIPIENT }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Run controlled real SMTP smoke test
+        run: |
+          pytest -q tests/test_security_notification_smtp_integration.py
