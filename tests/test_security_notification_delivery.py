@@ -82,13 +82,13 @@ class FakeRepository:
         assert limit == 10
         assert lease_seconds >= 300
         return tuple(self.batch)
-    def renew_claim(self, notification_id, *, lease_seconds=600):
+    def renew_claim(self, notification_id, *, lease_seconds=600, claim_token=None):
         assert lease_seconds == 600
         return True
-    def mark_delivered(self, notification_id):
+    def mark_delivered(self, notification_id, *, claim_token=None):
         self.delivered.append(notification_id)
         return True
-    def release_for_retry(self, notification_id, *, delay_seconds):
+    def release_for_retry(self, notification_id, *, delay_seconds, claim_token=None):
         self.retries.append((notification_id, delay_seconds))
         return True
 
