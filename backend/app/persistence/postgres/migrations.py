@@ -2375,6 +2375,129 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         """,
     ),
 
+
+    PostgresMigration(
+        version=23,
+        name="agent_capability_text_generation",
+        sql="""
+        ALTER TABLE agent_capability_grants
+            DROP CONSTRAINT IF EXISTS agent_capability_grants_capability_check;
+        ALTER TABLE agent_capability_grants
+            ADD CONSTRAINT agent_capability_grants_capability_check
+            CHECK (capability IN (
+                'text_generation','research.read','notes.read','notes.write',
+                'calendar.read','calendar.write','web.search','files.read'
+            ));
+        """,
+    ),
+    PostgresMigration(
+        version=24,
+        name="device_registry",
+        sql="""
+        CREATE TABLE devices (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            platform TEXT NOT NULL CHECK (platform IN ('android','windows','macos','linux')),
+            app_version TEXT NOT NULL CHECK (length(app_version) BETWEEN 1 AND 50),
+            display_name TEXT,
+            public_key_fingerprint TEXT NOT NULL CHECK (length(public_key_fingerprint)=64),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','revoked')),
+            enrolled_at TEXT NOT NULL,
+            last_seen_at TEXT,
+            revoked_at TEXT,
+            capability_report_json TEXT NOT NULL DEFAULT '[]',
+            capability_reported_at TEXT,
+            UNIQUE(user_id,public_key_fingerprint)
+        );
+        CREATE INDEX idx_devices_owner_status
+            ON devices(user_id,status,enrolled_at);
+        CREATE FUNCTION aibrain_validate_device_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users WHERE id=NEW.user_id AND deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'device requires an active owner' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_device_for_inactive_user
+            BEFORE INSERT ON devices
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_device_insert();
+        """,
+    ),
+    PostgresMigration(
+        version=25,
+        name="device_public_keys_and_auth_challenges",
+        sql="""
+        ALTER TABLE devices ADD COLUMN public_key_b64 TEXT;
+        CREATE TABLE device_auth_challenges (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            nonce_hash TEXT NOT NULL CHECK (length(nonce_hash)=64),
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_device_auth_challenges_expiry
+            ON device_auth_challenges(expires_at,used_at);
+        CREATE FUNCTION aibrain_validate_device_challenge_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM devices d JOIN users u ON u.id=d.user_id
+                WHERE d.id=NEW.device_id AND d.user_id=NEW.user_id
+                  AND d.status='pending' AND d.public_key_b64 IS NOT NULL
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'device challenge requires pending keyed device'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_device_challenge_insert
+            BEFORE INSERT ON device_auth_challenges
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_device_challenge_insert();
+        """,
+    ),
+    PostgresMigration(
+        version=26,
+        name="device_session_binding_schema",
+        sql="""
+        ALTER TABLE sessions
+            ADD COLUMN device_id TEXT REFERENCES devices(id) ON DELETE CASCADE;
+        CREATE INDEX idx_sessions_device_active
+            ON sessions(device_id,revoked_at,expires_at);
+        ALTER TABLE sessions
+            ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'account'
+            CHECK (auth_method IN ('account','device_proof','device_login'));
+        ALTER TABLE device_auth_challenges
+            ADD COLUMN purpose TEXT NOT NULL DEFAULT 'enrollment'
+            CHECK (purpose IN ('enrollment','session'));
+        CREATE OR REPLACE FUNCTION aibrain_validate_device_challenge_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM devices d JOIN users u ON u.id=d.user_id
+                WHERE d.id=NEW.device_id AND d.user_id=NEW.user_id
+                  AND d.public_key_b64 IS NOT NULL AND u.deleted_at IS NULL
+                  AND (
+                    (NEW.purpose='enrollment' AND d.status='pending')
+                    OR (NEW.purpose='session' AND d.status='active')
+                  )
+            ) THEN
+                RAISE EXCEPTION 'device challenge purpose does not match device state'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        """,
+    ),
+
 )
 
 
