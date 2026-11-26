@@ -14,7 +14,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
     assert runner.migrate() == 3
-    assert runner.migrate() == 2
+    assert runner.migrate() == 3
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
