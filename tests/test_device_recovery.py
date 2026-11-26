@@ -484,8 +484,35 @@ def test_dead_letter_redrive_is_operator_audited_and_abuse_limits_are_shared(cli
     monitor = state.security_recovery_abuse
     with ThreadPoolExecutor(max_workers=10) as pool:
         allowed = list(pool.map(
-            lambda _n: monitor.check_and_record(email, device_id, limit=5, window_seconds=300),
+            lambda _n: monitor.check_and_record(email, limit=5, window_seconds=300),
             range(20),
         ))
     assert sum(allowed) == 5
     assert monitor.metrics()["blocked_attempts"] == 15
+
+
+def test_security_notification_operator_api_requires_allowlisted_account(client, monkeypatch):
+    from backend.app.auth import operator as operator_module
+    from backend.app.config import Settings
+
+    email, _password, token = _account(client)
+    monkeypatch.setattr(
+        operator_module, "get_settings",
+        lambda: Settings(security_operator_emails=email),
+    )
+    response = client.get(
+        "/api/v1/security-notifications/metrics",
+        headers=_headers(token),
+    )
+    assert response.status_code == 200
+    assert set(response.json()) == {"notifications", "recovery_abuse"}
+
+    monkeypatch.setattr(
+        operator_module, "get_settings",
+        lambda: Settings(security_operator_emails=""),
+    )
+    forbidden = client.get(
+        "/api/v1/security-notifications/metrics",
+        headers=_headers(token),
+    )
+    assert forbidden.status_code == 403
