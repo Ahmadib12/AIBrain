@@ -184,8 +184,12 @@ def test_pinned_connection_dials_ip_but_uses_hostname_for_tls(monkeypatch):
         host="api.example.com", port=443, addresses=("93.184.216.34",)
     )
     connection = _PinnedHTTPSConnection(
-        target, "93.184.216.34", timeout_seconds=3, context=Context()
+        target, "93.184.216.34", timeout_seconds=3,
+        context=ssl.create_default_context(),
     )
+    # http.client validates the real SSLContext during construction on Python
+    # 3.11; replace its wrapping context afterwards to observe SNI without I/O.
+    connection._context = Context()
     connection.connect()
     assert calls["address"] == ("93.184.216.34", 443)
     assert calls["server_hostname"] == "api.example.com"
@@ -213,7 +217,8 @@ def test_pinned_connection_closes_socket_if_peer_does_not_match(monkeypatch):
         host="api.example.com", port=443, addresses=("93.184.216.34",)
     )
     connection = _PinnedHTTPSConnection(
-        target, "93.184.216.34", timeout_seconds=3, context=object()
+        target, "93.184.216.34", timeout_seconds=3,
+        context=ssl.create_default_context(),
     )
     with pytest.raises(ProviderTransportRejected, match="pinned provider IP"):
         connection.connect()
