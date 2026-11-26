@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.auth.operator import require_security_operator
 from backend.app.app_state import get_app_state
+from backend.app.persistence.security_recovery_abuse import RecoveryAbuseUnavailable
 
 
 router = APIRouter(prefix="/security-notifications", tags=["security-notifications"])
@@ -21,9 +22,19 @@ async def notification_metrics(
     _operator: dict = Depends(require_security_operator),
 ) -> dict:
     state = get_app_state()
+    try:
+        recovery_abuse_metrics = state.security_recovery_abuse.metrics()
+    except RecoveryAbuseUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "RECOVERY_ABUSE_METRICS_UNAVAILABLE",
+                "message": "Recovery abuse monitoring is temporarily unavailable",
+            },
+        ) from None
     return {
         "notifications": state.security_notification_operations.metrics(),
-        "recovery_abuse": state.security_recovery_abuse.metrics(),
+        "recovery_abuse": recovery_abuse_metrics,
     }
 
 
