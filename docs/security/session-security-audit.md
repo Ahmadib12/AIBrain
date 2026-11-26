@@ -50,7 +50,8 @@ this endpoint; it must be ended through `POST /api/v1/auth/logout` so the
 caller does not invalidate its own request context mid-operation.
 
 This is an application-level session inventory and revocation control. It does
-not provide remote device attestation.\n
+not provide remote device attestation.
+
 
 ## Device key rotation
 
@@ -151,4 +152,8 @@ Configuration:
 - `AIBRAIN_SECURITY_NOTIFICATION_BATCH_SIZE` (default `10`)
 
 The transport and worker are covered by mocked SMTP and lifecycle tests. A real SMTP provider has not been configured or integration-tested in this repository, so production delivery is not yet verified.
-\n\n### Terminal failure handling (Migration 44)\n\nMigration 44 adds a terminal `failed` status, `failed_at`, and a non-sensitive `failure_code`. The worker permits at most eight delivery attempts. The final failed attempt is recorded rather than endlessly retried, and failed notifications are excluded from pending counts and future claims. This is an operational dead-letter state, not a guaranteed operator alert or automatic redrive mechanism; a secure owner/operator review and controlled requeue workflow remain future work.\n
+
+
+### Terminal failure handling (Migration 44)
+
+Migration 44 adds a terminal `failed` status, `failed_at`, and a non-sensitive `failure_code`. The worker permits at most eight delivery attempts. The final failed attempt is recorded rather than endlessly retried, and failed notifications are excluded from pending counts and future claims. This is an operational dead-letter state, not a guaranteed operator alert or automatic redrive mechanism; a secure owner/operator review and controlled requeue workflow remain future work.
