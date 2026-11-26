@@ -42,7 +42,7 @@ class SecurityNotificationDeliveryWorker:
                 exponent = min(max(int(notification["attempts"]) - 1, 0), 7)
                 delay = min(3_600, 30 * (2 ** exponent))
                 try:
-                    await asyncio.to_thread(
+                    released = await asyncio.to_thread(
                         self.repository.release_for_retry,
                         notification_id,
                         delay_seconds=delay,
@@ -51,7 +51,10 @@ class SecurityNotificationDeliveryWorker:
                 except Exception:
                     logger.error("Security notification retry scheduling failed")
                 else:
-                    logger.warning("Security notification delivery attempt failed; queue state updated")
+                    if released:
+                        logger.warning("Security notification delivery attempt failed; queue state updated")
+                    else:
+                        logger.warning("Security notification delivery failed after claim ownership changed")
                 continue
             marked = await asyncio.to_thread(
                 self.repository.mark_delivered,
