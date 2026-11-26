@@ -169,7 +169,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE FUNCTION aibrain_require_active_owner()
         RETURNS trigger
         LANGUAGE plpgsql
-        AS $$
+        AS $$$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users
@@ -241,7 +241,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON tool_execution_attempts(user_id);
 
         CREATE FUNCTION aibrain_validate_execution_attempt()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM tool_requests r
@@ -255,7 +255,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_tool_execution_attempt
             BEFORE INSERT ON tool_execution_attempts
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_execution_attempt();
@@ -280,7 +280,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON tool_execution_bindings(user_id);
 
         CREATE FUNCTION aibrain_validate_execution_binding()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM tool_requests r
@@ -300,18 +300,18 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_tool_execution_binding
             BEFORE INSERT ON tool_execution_bindings
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_execution_binding();
 
         CREATE FUNCTION aibrain_reject_immutable_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION '% rows are immutable', TG_TABLE_NAME
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_tool_execution_binding_update
             BEFORE UPDATE ON tool_execution_bindings
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
@@ -332,7 +332,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON tool_dispatch_audit_events(user_id, created_at);
 
         CREATE FUNCTION aibrain_validate_dispatch_audit_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -402,7 +402,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_tool_dispatch_audit_event
             BEFORE INSERT ON tool_dispatch_audit_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_dispatch_audit_event();
