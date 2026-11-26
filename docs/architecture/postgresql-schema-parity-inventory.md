@@ -31,7 +31,7 @@ and immutable run history (SQLite migrations 23–27). PostgreSQL migrations
 19–22 now port integration connections, owner-scoped grants and event history,
 credential-vault lifecycle and terminal secret erasure, agent-run integration
 bindings, and event-gated dispatch transitions (SQLite migrations 28–31).
-PostgreSQL still lacks SQLite migrations 36–45, complete repository
+PostgreSQL migrations 27–30 now port SQLite migrations 36–39: append-only device-security history, atomic device/session audit, immutable device identity and keys, monotonic device lifecycle, and immutable session/device authentication binding. PostgreSQL still lacks SQLite migrations 40–45, complete repository
 compatibility, and shared multi-instance acceptance. The
 stream must not be described as schema-complete or application-ready until
 every required invariant below is ported and tested.
@@ -47,7 +47,7 @@ every required invariant below is ported and tested.
 | 23–27 | Agent identity/events, capability grants and revocations, tasks/messages/control events, runs/steps/events |
 | 28–31 | Integration connections/grants/events/secrets, agent-run integration bindings and dispatches (PostgreSQL migrations 19–22) |
 | 32–35 | Capability-table transition and device/session schema evolution (PostgreSQL migrations 23–26) |
-| 36–42 | Device security audit, device lifecycle guards, session/device binding and audit, key rotation and lost-device recovery |
+| 36–39 | Device security audit, device lifecycle guards, session/device binding (PostgreSQL migrations 27–30) |\n| 40–42 | Session audit, key rotation and lost-device recovery |
 | 43–45 | Recovery notification outbox, terminal failure/dead-letter state, operator redrive audit, claim fencing, recovery-abuse windows |
 
 The exact SQL in each numbered SQLite migration remains authoritative; the
