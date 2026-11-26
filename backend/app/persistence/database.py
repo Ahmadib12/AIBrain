@@ -3377,6 +3377,64 @@ created_at TEXT NOT NULL,
                 END;
                 """
             ),
+            (
+                43,
+                """
+                -- Queue a minimal owner notification in the same transaction as
+                -- a successful lost-device recovery audit event.
+                CREATE TABLE security_notification_outbox (
+                    id TEXT PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE,
+                    user_id TEXT NOT NULL,
+                    recipient_email TEXT NOT NULL,
+                    notification_type TEXT NOT NULL CHECK (
+                        notification_type IN ('device.recovery.completed')
+                    ),
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+                        status IN ('pending', 'processing', 'delivered')
+                    ),
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    available_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    delivered_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(event_id) REFERENCES device_security_events(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_security_notification_outbox_ready
+                    ON security_notification_outbox(status, available_at, created_at);
+
+                CREATE TRIGGER enqueue_device_recovery_notification
+                AFTER INSERT ON device_security_events
+                WHEN NEW.event_type = 'device.key_rotated'
+                  AND json_valid(NEW.details_json)
+                  AND json_extract(NEW.details_json, '$.recovery') = 1
+                BEGIN
+                    INSERT INTO security_notification_outbox (
+                        id, event_id, user_id, recipient_email,
+                        notification_type, payload_json, status,
+                        attempts, available_at, created_at
+                    )
+                    SELECT
+                        lower(hex(randomblob(4))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.id, NEW.user_id, u.email,
+                        'device.recovery.completed',
+                        json_object(
+                            'device_id', NEW.device_id,
+                            'occurred_at', NEW.occurred_at
+                        ),
+                        'pending', 0, NEW.occurred_at, NEW.occurred_at
+                    FROM users u
+                    WHERE u.id = NEW.user_id AND u.deleted_at IS NULL;
+                END;
+                """
+            ),
         )
 
         with self._lock:
