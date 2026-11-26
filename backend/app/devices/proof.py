@@ -400,7 +400,8 @@ class DeviceProofRepository:
                 WHERE id=? AND user_id=? AND status='active'
                 """,
                 (now.isoformat(), device_id, owner_id),
-            )\n
+            )
+
     def create_key_rotation_challenge(
         self, owner_id: str, device_id: str, new_public_key_b64: str
     ) -> dict:
