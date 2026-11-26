@@ -306,6 +306,60 @@ class WebAuthnRepository:
 
         return self._credential_from_row(updated_row)
 
+    def replace_recovery_codes(self, user_id, code_hashes):
+        """Atomically rotate an owner's one-time recovery-code set.
+
+        Only SHA-256 digests are persisted. Existing unused codes are
+        invalidated in the same transaction as insertion of the new set.
+        """
+        self._validate_user_id(user_id)
+        if not isinstance(code_hashes, (list, tuple)) or not code_hashes:
+            raise ValueError("At least one recovery-code digest is required")
+        if len(code_hashes) > 20 or len(set(code_hashes)) != len(code_hashes):
+            raise ValueError("Recovery-code digests must be unique and bounded")
+        for digest in code_hashes:
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+            ):
+                raise ValueError("Recovery-code digest must be lowercase SHA-256 hex")
+
+        now = _utc_now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            self._require_active_user(connection, user_id)
+            connection.execute(
+                """
+                UPDATE webauthn_recovery_codes
+                SET used_at = ?
+                WHERE user_id = ? AND used_at IS NULL
+                """,
+                (now, user_id),
+            )
+            for digest in code_hashes:
+                connection.execute(
+                    """
+                    INSERT INTO webauthn_recovery_codes
+                        (id, user_id, code_hash, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (str(uuid.uuid4()), user_id, digest, now),
+                )
+        return len(code_hashes)
+
+    def count_active_recovery_codes(self, user_id):
+        self._validate_user_id(user_id)
+        row = self.database.connect().execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM webauthn_recovery_codes
+            WHERE user_id = ? AND used_at IS NULL
+            """,
+            (user_id,),
+        ).fetchone()
+        return int(row["total"])
+
     _ALLOWED_CHALLENGE_PURPOSES = {
         "registration",
         "authentication",
