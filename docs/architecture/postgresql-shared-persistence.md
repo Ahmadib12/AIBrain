@@ -29,11 +29,14 @@ are a coverage checklist, not a claim that PostgreSQL currently has parity.
    backend/app/persistence/contracts.py. The existing SQLite database
    structurally implements the connection, transaction, and shutdown contract.
    This is an architectural seam, not a PostgreSQL adapter.
-2. **PostgreSQL-native migrations** — still required. Create a separate,
-   ordered PostgreSQL migration stream. Port every current table, check,
-   unique/index constraint, foreign key, append-only rule, account-active
-   guard, lifecycle transition, notification outbox trigger, and account
-   erasure behavior. Do not translate SQLite trigger SQL mechanically.
+2. **PostgreSQL-native migrations** — partially implemented in the isolated
+   ordered migration stream. Versions 1–11 currently cover SQLite migration
+   domains 1–20, including dispatch recovery, lookup authorization, and
+   execution reconciliation. SQLite migrations 21–45 and full invariant
+   parity remain outstanding. Port every remaining table, check, unique/index
+   constraint, foreign key, append-only rule, account-active guard, lifecycle
+   transition, notification outbox trigger, and account-erasure behavior.
+   Do not translate SQLite trigger SQL mechanically.
 3. **Repository compatibility** — still required. Audit every repository for
    SQLite-only SQL/API assumptions. Use explicit dialect-aware implementations
    where portability would obscure correctness. Preserve row shapes and
