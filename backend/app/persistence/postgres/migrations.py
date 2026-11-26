@@ -2811,7 +2811,8 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
                         OLD.auth_method,'session.expired',OLD.expires_at);
                 RETURN OLD;
             END IF;
-            RETURN COALESCE(NEW,OLD);
+            IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+            RETURN NEW;
         END;
         $;
         CREATE TRIGGER audit_session_created
