@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import sqlite3
 from uuid import UUID
 
@@ -59,6 +61,12 @@ class PasskeyAuthenticationVerifyRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     challenge_record_id: str = Field(min_length=1, max_length=128)
     assertion: dict
+
+
+class RecoveryCodesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=1, max_length=128)
 
 
 class PasskeyRegistrationOptionsRequest(BaseModel):
@@ -470,6 +478,61 @@ async def verify_passkey_authentication(
 
     _login_rate_limiter.reset(key)
     return AuthResponse(access_token=token, user=authenticated_user)
+
+
+@router.post("/passkeys/recovery-codes", response_model=dict)
+async def create_passkey_recovery_codes(
+    request: RecoveryCodesRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Rotate one-time recovery codes after password reauthentication.
+
+    Plaintext codes are returned only in this response; the database stores
+    only SHA-256 digests. Reissuing invalidates every previously unused code.
+    """
+    key = user["email"].strip().lower()
+    if not _reauth_rate_limiter.check_and_record(key):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "REAUTHENTICATION_RATE_LIMITED",
+                "message": "Too many recovery-code generation attempts",
+            },
+        )
+
+    state = get_app_state()
+    if not state.identity.verify_password(
+        user_id=user["id"],
+        password=request.password,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "REAUTHENTICATION_REQUIRED",
+                "message": "Password confirmation failed",
+            },
+        )
+
+    codes = [secrets.token_urlsafe(24) for _ in range(10)]
+    digests = [
+        hashlib.sha256(code.encode("ascii")).hexdigest()
+        for code in codes
+    ]
+    state.webauthn.replace_recovery_codes(user["id"], digests)
+    _reauth_rate_limiter.reset(key)
+    return {"recovery_codes": codes, "remaining": len(codes)}
+
+
+@router.get("/passkeys/recovery-codes/status", response_model=dict)
+async def get_passkey_recovery_code_status(
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Return only the number of unused recovery codes, never their digests."""
+    return {
+        "remaining": get_app_state().webauthn.count_active_recovery_codes(
+            user["id"]
+        )
+    }
 
 
 @router.post("/logout")
