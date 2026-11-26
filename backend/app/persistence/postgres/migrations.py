@@ -2739,7 +2739,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON session_security_events(user_id,session_ref,occurred_at);
 
         CREATE FUNCTION aibrain_guard_session_security_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF TG_OP='UPDATE' THEN
                 RAISE EXCEPTION 'session security events are immutable' USING ERRCODE='23514';
@@ -2750,7 +2750,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_session_security_event_update
             BEFORE UPDATE ON session_security_events FOR EACH ROW
             EXECUTE FUNCTION aibrain_guard_session_security_event();
@@ -2759,7 +2759,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             EXECUTE FUNCTION aibrain_guard_session_security_event();
 
         CREATE FUNCTION aibrain_protect_session_audit_ref()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF TG_OP='INSERT' AND NEW.audit_ref IS NOT NULL THEN
                 RAISE EXCEPTION 'session audit reference is server generated' USING ERRCODE='23514';
@@ -2770,7 +2770,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_client_session_audit_ref
             BEFORE INSERT ON sessions FOR EACH ROW
             EXECUTE FUNCTION aibrain_protect_session_audit_ref();
@@ -2779,7 +2779,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             EXECUTE FUNCTION aibrain_protect_session_audit_ref();
 
         CREATE FUNCTION aibrain_audit_session_lifecycle()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE
             session_reference TEXT;
             event_time TEXT;
@@ -2814,7 +2814,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             IF TG_OP='DELETE' THEN RETURN OLD; END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER audit_session_created
             AFTER INSERT ON sessions FOR EACH ROW
             EXECUTE FUNCTION aibrain_audit_session_lifecycle();
@@ -2857,7 +2857,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
 
         DROP TRIGGER prevent_device_identity_mutation;
         CREATE FUNCTION aibrain_validate_device_rotation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id
                OR NEW.user_id IS DISTINCT FROM OLD.user_id THEN
@@ -2885,7 +2885,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_device_identity_mutation
             BEFORE UPDATE ON devices FOR EACH ROW
             EXECUTE FUNCTION aibrain_validate_device_rotation();
@@ -2900,7 +2900,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_device_key_rotation_recovery_code
             ON device_key_rotation_challenges(recovery_code_id);
         CREATE OR REPLACE FUNCTION aibrain_validate_device_rotation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id
                OR NEW.user_id IS DISTINCT FROM OLD.user_id THEN
@@ -2932,7 +2932,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         """,
     ),
     PostgresMigration(
@@ -2956,7 +2956,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_security_notification_outbox_ready
             ON security_notification_outbox(status,available_at,created_at);
         CREATE FUNCTION aibrain_enqueue_device_recovery_notification()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE details JSONB;
         BEGIN
             IF NEW.event_type <> 'device.key_rotated' OR NOT pg_input_is_valid(NEW.details_json,'jsonb') THEN
@@ -2976,7 +2976,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER enqueue_device_recovery_notification
             AFTER INSERT ON device_security_events FOR EACH ROW
             EXECUTE FUNCTION aibrain_enqueue_device_recovery_notification();
