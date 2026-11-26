@@ -86,7 +86,7 @@ def test_session_security_history_rejects_invalid_pagination(client: TestClient)
         "/api/v1/auth/security-events?limit=101", headers=_headers(token)
     )
     assert oversized.status_code == 422
-    assert oversized.json()["detail"]["code"] == "INVALID_SESSION_EVENT_CURSOR"
+    assert oversized.json()["error"]["code"] == "INVALID_SESSION_EVENT_CURSOR"
 
     incomplete_cursor = client.get(
         "/api/v1/auth/security-events?before_occurred_at=2026-01-01T00:00:00%2B00:00",
