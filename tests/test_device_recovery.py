@@ -234,3 +234,62 @@ def test_recovery_requires_replacement_private_key_and_preserves_code_on_bad_pro
     )
     assert accepted.status_code == 200
     assert state.webauthn.count_active_recovery_codes(owner["id"]) == 9
+
+
+def test_one_recovery_code_cannot_authorize_two_device_rotations(client):
+    email, password, token = _account(client)
+    first_device, _ = _enroll_active_device(client, token)
+    second_device, _ = _enroll_active_device(client, token)
+    code = _issue_codes(client, token, password)[0]
+
+    def start(device_id):
+        key = Ed25519PrivateKey.generate()
+        public_key = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        response = client.post(
+            f"/api/v1/devices/{device_id}/recovery/challenge",
+            json={
+                "email": email,
+                "recovery_code": code,
+                "new_public_key_b64": base64.b64encode(public_key).decode("ascii"),
+            },
+        )
+        assert response.status_code == 200
+        return key, response.json()
+
+    first_key, first_challenge = start(first_device)
+    second_key, second_challenge = start(second_device)
+
+    def verify(device_id, key, challenge):
+        message = base64.b64decode(challenge["message_b64"], validate=True)
+        return client.post(
+            f"/api/v1/devices/{device_id}/recovery/verify",
+            params={"challenge_id": challenge["challenge_id"]},
+            json={
+                "nonce": challenge["nonce"],
+                "new_signature_b64": base64.b64encode(key.sign(message)).decode("ascii"),
+            },
+        )
+
+    assert verify(first_device, first_key, first_challenge).status_code == 200
+    assert verify(second_device, second_key, second_challenge).status_code == 401
+
+
+def test_recovery_code_cannot_be_used_for_another_owners_device(client):
+    owner_email, owner_password, owner_token = _account(client)
+    other_email, _other_password, other_token = _account(client)
+    owner_device, _ = _enroll_active_device(client, owner_token)
+    other_device, _ = _enroll_active_device(client, other_token)
+    code = _issue_codes(client, owner_token, owner_password)[0]
+    replacement = Ed25519PrivateKey.generate()
+    public_key = replacement.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    response = client.post(
+        f"/api/v1/devices/{other_device}/recovery/challenge",
+        json={
+            "email": owner_email,
+            "recovery_code": code,
+            "new_public_key_b64": base64.b64encode(public_key).decode("ascii"),
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "DEVICE_RECOVERY_REJECTED"
