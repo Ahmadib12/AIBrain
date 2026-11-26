@@ -2518,12 +2518,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_device_security_events_owner_time
             ON device_security_events(user_id,occurred_at DESC,id DESC);
         CREATE FUNCTION aibrain_reject_device_security_event_update()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'device security events are immutable'
                 USING ERRCODE='23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_device_security_event_update
             BEFORE UPDATE ON device_security_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_device_security_event_update();
@@ -2540,7 +2540,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         ALTER TABLE device_security_events
             DROP CONSTRAINT device_security_events_device_id_fkey;
         CREATE FUNCTION aibrain_require_deleted_owner_for_device_event_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF current_setting('aibrain.account_erasure_user_id', true)
                     IS DISTINCT FROM OLD.user_id
@@ -2553,7 +2553,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_device_security_event_update
             BEFORE UPDATE ON device_security_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_device_security_event_update();
@@ -2564,7 +2564,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON device_security_events(user_id,occurred_at DESC,id DESC);
 
         CREATE FUNCTION aibrain_audit_device_security_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE event_kind TEXT;
         DECLARE event_time TEXT;
         BEGIN
@@ -2607,7 +2607,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER audit_device_enrollment
             AFTER INSERT ON devices FOR EACH ROW
             EXECUTE FUNCTION aibrain_audit_device_security_event();
@@ -2634,7 +2634,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="device_identity_and_lifecycle_guards",
         sql="""
         CREATE FUNCTION aibrain_validate_device_identity_and_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.id IS DISTINCT FROM OLD.id
                OR NEW.user_id IS DISTINCT FROM OLD.user_id
@@ -2656,7 +2656,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_device_identity_mutation
             BEFORE UPDATE ON devices FOR EACH ROW
             EXECUTE FUNCTION aibrain_validate_device_identity_and_transition();
@@ -2667,7 +2667,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="session_device_binding_and_revocation_guards",
         sql="""
         CREATE FUNCTION aibrain_validate_session_device_binding()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF (NEW.device_id IS NULL AND NEW.auth_method <> 'account')
                OR (NEW.device_id IS NOT NULL AND (
@@ -2683,13 +2683,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_session_device_binding
             BEFORE INSERT ON sessions FOR EACH ROW
             EXECUTE FUNCTION aibrain_validate_session_device_binding();
 
         CREATE FUNCTION aibrain_protect_session_identity_and_revocation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NEW.token_hash IS DISTINCT FROM OLD.token_hash
                OR NEW.user_id IS DISTINCT FROM OLD.user_id
@@ -2707,7 +2707,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_session_identity_mutation
             BEFORE UPDATE ON sessions FOR EACH ROW
             EXECUTE FUNCTION aibrain_protect_session_identity_and_revocation();
