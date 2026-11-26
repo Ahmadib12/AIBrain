@@ -1172,6 +1172,640 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_learning_evaluation();
         """,
     ),
+,
+
+    PostgresMigration(
+        version=14,
+        name="agent_identity_and_registration_events",
+        sql="""
+        CREATE TABLE agents (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 100),
+            description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 1000),
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+                CHECK (metadata_json::jsonb IS NOT NULL),
+            status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft', 'active', 'suspended', 'terminated')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agents_owner_created ON agents(user_id, created_at, id);
+        CREATE TABLE agent_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            actor_user_id TEXT NOT NULL REFERENCES users(id),
+            event_type TEXT NOT NULL CHECK (event_type IN ('registered')),
+            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb) = 'object'),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_events_owner_agent
+            ON agent_events(user_id, agent_id, created_at, id);
+        CREATE FUNCTION aibrain_validate_agent_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users WHERE id = NEW.user_id AND deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'agent owner account is not active'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_insert BEFORE INSERT ON agents
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_insert();
+        CREATE FUNCTION aibrain_reject_agent_identity_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'agent identity is immutable' USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_identity_update BEFORE UPDATE ON agents
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_identity_update();
+        CREATE FUNCTION aibrain_validate_agent_event_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.actor_user_id <> NEW.user_id OR NOT EXISTS (
+                SELECT 1 FROM agents a JOIN users u ON u.id = a.user_id
+                WHERE a.id = NEW.agent_id AND a.user_id = NEW.user_id
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'agent event owner mismatch' USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_event_insert BEFORE INSERT ON agent_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_event_insert();
+        CREATE FUNCTION aibrain_reject_agent_event_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION 'agent events are immutable' USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_event_update BEFORE UPDATE ON agent_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_event_mutation();
+        CREATE TRIGGER prevent_agent_event_delete BEFORE DELETE ON agent_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_event_mutation();
+        """,
+    ),
+    PostgresMigration(
+        version=15,
+        name="agent_lifecycle_event_guards",
+        sql="""
+        CREATE OR REPLACE FUNCTION aibrain_validate_agent_event_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE
+            current_status TEXT;
+            initial_status TEXT;
+            from_status TEXT;
+            to_status TEXT;
+            event_valid BOOLEAN := FALSE;
+        BEGIN
+            SELECT status INTO current_status FROM agents
+            WHERE id = NEW.agent_id AND user_id = NEW.user_id;
+            IF NEW.actor_user_id <> NEW.user_id OR current_status IS NULL
+               OR NOT EXISTS (SELECT 1 FROM users
+                              WHERE id = NEW.user_id AND deleted_at IS NULL) THEN
+                RAISE EXCEPTION 'agent event owner mismatch'
+                    USING ERRCODE = '23514';
+            END IF;
+            initial_status := NEW.details_json::jsonb ->> 'initial_status';
+            from_status := NEW.details_json::jsonb ->> 'from_status';
+            to_status := NEW.details_json::jsonb ->> 'to_status';
+            event_valid := CASE NEW.event_type
+                WHEN 'registered' THEN current_status = 'draft'
+                    AND initial_status = 'draft'
+                    AND NOT EXISTS (SELECT 1 FROM agent_events WHERE agent_id = NEW.agent_id)
+                WHEN 'activated' THEN current_status = 'draft'
+                    AND from_status = 'draft' AND to_status = 'active'
+                WHEN 'suspended' THEN current_status = 'active'
+                    AND from_status = 'active' AND to_status = 'suspended'
+                WHEN 'resumed' THEN current_status = 'suspended'
+                    AND from_status = 'suspended' AND to_status = 'active'
+                WHEN 'terminated' THEN current_status IN ('draft','active','suspended')
+                    AND from_status = current_status AND to_status = 'terminated'
+                ELSE FALSE
+            END;
+            IF NOT event_valid THEN
+                RAISE EXCEPTION 'agent event owner or transition mismatch'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        ALTER TABLE agent_events DROP CONSTRAINT IF EXISTS agent_events_event_type_check;
+        ALTER TABLE agent_events ADD CONSTRAINT agent_events_event_type_check
+            CHECK (event_type IN ('registered','activated','suspended','resumed','terminated'));
+        CREATE FUNCTION aibrain_validate_agent_status_transition()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status IS DISTINCT FROM OLD.status THEN
+                IF OLD.status = 'terminated' OR NOT EXISTS (
+                    SELECT 1 FROM agent_events e
+                    WHERE e.agent_id = OLD.id AND e.user_id = OLD.user_id
+                      AND e.details_json::jsonb ->> 'from_status' = OLD.status
+                      AND e.details_json::jsonb ->> 'to_status' = NEW.status
+                      AND ( (e.event_type='activated' AND OLD.status='draft' AND NEW.status='active')
+                         OR (e.event_type='suspended' AND OLD.status='active' AND NEW.status='suspended')
+                         OR (e.event_type='resumed' AND OLD.status='suspended' AND NEW.status='active')
+                         OR (e.event_type='terminated' AND OLD.status IN ('draft','active','suspended')
+                             AND NEW.status='terminated') )
+                ) THEN
+                    RAISE EXCEPTION 'agent status change requires a matching lifecycle event'
+                        USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_status_transition BEFORE UPDATE OF status ON agents
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_status_transition();
+        """,
+    ),
+    PostgresMigration(
+        version=16,
+        name="agent_capability_grants_tasks_messages_and_controls",
+        sql="""
+        CREATE TABLE agent_capability_grants (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            capability TEXT NOT NULL CHECK (capability IN (
+                'research.read','notes.read','notes.write','calendar.read',
+                'calendar.write','web.search','files.read'
+            )),
+            expires_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_grants_owner_agent
+            ON agent_capability_grants(user_id, agent_id, created_at);
+        CREATE TABLE agent_capability_revocations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            grant_id TEXT NOT NULL UNIQUE
+                REFERENCES agent_capability_grants(id) ON DELETE CASCADE,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE agent_tasks (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            title TEXT NOT NULL CHECK (length(btrim(title)) BETWEEN 1 AND 160),
+            goal TEXT NOT NULL CHECK (length(goal) <= 4000),
+            context_json TEXT NOT NULL CHECK (jsonb_typeof(context_json::jsonb) = 'object'),
+            capability_ceiling_json TEXT NOT NULL
+                CHECK (jsonb_typeof(capability_ceiling_json::jsonb) = 'array'),
+            status TEXT NOT NULL CHECK (status IN
+                ('assigned','in_progress','completed','failed','cancelled','expired')),
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_tasks_owner_agent
+            ON agent_tasks(user_id, agent_id, status, expires_at);
+        CREATE TABLE agent_task_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+            actor_user_id TEXT NOT NULL REFERENCES users(id),
+            event_type TEXT NOT NULL,
+            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb) = 'object'),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_task_events_owner_task
+            ON agent_task_events(user_id, task_id, created_at, id);
+        CREATE TABLE agent_messages (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            sender_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            recipient_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            task_id TEXT REFERENCES agent_tasks(id) ON DELETE CASCADE,
+            payload_json TEXT NOT NULL CHECK (jsonb_typeof(payload_json::jsonb) = 'object'),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_messages_owner_recipient
+            ON agent_messages(user_id, recipient_agent_id, created_at, id);
+        CREATE TABLE agent_control_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb) = 'object'),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_control_events_owner_agent
+            ON agent_control_events(user_id, agent_id, created_at, id);
+
+        CREATE FUNCTION aibrain_validate_agent_grant()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                  AND a.status='active' AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'grant requires active owned agent' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_grant_insert BEFORE INSERT ON agent_capability_grants
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_grant();
+        CREATE TRIGGER prevent_agent_grant_update BEFORE UPDATE ON agent_capability_grants
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE FUNCTION aibrain_validate_agent_revocation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agent_capability_grants g
+                JOIN users u ON u.id=g.user_id
+                WHERE g.id=NEW.grant_id AND g.user_id=NEW.user_id
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'grant revocation owner mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_revocation_insert BEFORE INSERT ON agent_capability_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_revocation();
+        CREATE TRIGGER prevent_agent_revocation_update BEFORE UPDATE ON agent_capability_revocations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+
+        CREATE FUNCTION aibrain_validate_agent_task_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE item JSONB;
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                  AND a.status='active' AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'task requires active owned agent'
+                    USING ERRCODE='23514';
+            END IF;
+            FOR item IN SELECT value FROM jsonb_array_elements(NEW.capability_ceiling_json::jsonb)
+            LOOP
+                IF jsonb_typeof(item) <> 'string' OR NOT EXISTS (
+                    SELECT 1 FROM agent_capability_grants g
+                    WHERE g.user_id=NEW.user_id AND g.agent_id=NEW.agent_id
+                      AND g.capability=item #>> '{}'
+                      AND (g.expires_at IS NULL OR g.expires_at > NEW.created_at)
+                      AND NOT EXISTS (SELECT 1 FROM agent_capability_revocations r
+                                      WHERE r.grant_id=g.id)
+                ) THEN
+                    RAISE EXCEPTION 'task capability ceiling exceeds active grants'
+                        USING ERRCODE='23514';
+                END IF;
+            END LOOP;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_task_insert BEFORE INSERT ON agent_tasks
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_task_insert();
+        CREATE FUNCTION aibrain_reject_agent_task_identity_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.agent_id IS DISTINCT FROM OLD.agent_id
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'task identity is immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_task_identity_update BEFORE UPDATE ON agent_tasks
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_task_identity_update();
+        CREATE TRIGGER prevent_agent_task_update BEFORE UPDATE ON agent_tasks
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE FUNCTION aibrain_validate_agent_task_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.actor_user_id <> NEW.user_id OR NOT EXISTS (
+                SELECT 1 FROM agent_tasks t JOIN users u ON u.id=t.user_id
+                WHERE t.id=NEW.task_id AND t.user_id=NEW.user_id
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'task event owner mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_task_event_insert BEFORE INSERT ON agent_task_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_task_event();
+        CREATE TRIGGER prevent_agent_task_event_update BEFORE UPDATE ON agent_task_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_task_event_delete BEFORE DELETE ON agent_task_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE FUNCTION aibrain_validate_agent_task_transition()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status IS DISTINCT FROM OLD.status AND NOT EXISTS (
+                SELECT 1 FROM agent_task_events e
+                WHERE e.task_id=OLD.id AND e.user_id=OLD.user_id
+                  AND e.details_json::jsonb ->> 'from_status'=OLD.status
+                  AND e.details_json::jsonb ->> 'to_status'=NEW.status
+            ) THEN
+                RAISE EXCEPTION 'task status change requires matching event'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_task_transition BEFORE UPDATE OF status ON agent_tasks
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_task_transition();
+
+        CREATE FUNCTION aibrain_validate_agent_message()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agents s JOIN agents r ON r.id=NEW.recipient_agent_id
+                JOIN users u ON u.id=s.user_id
+                WHERE s.id=NEW.sender_agent_id AND s.user_id=NEW.user_id
+                  AND r.user_id=NEW.user_id AND s.status='active'
+                  AND r.status='active' AND u.deleted_at IS NULL
+            ) OR (NEW.task_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM agent_tasks t WHERE t.id=NEW.task_id
+                  AND t.user_id=NEW.user_id AND t.agent_id=NEW.recipient_agent_id
+            )) THEN
+                RAISE EXCEPTION 'message requires same-owner active agents and matching task'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_message_insert BEFORE INSERT ON agent_messages
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_message();
+        CREATE TRIGGER prevent_agent_message_update BEFORE UPDATE ON agent_messages
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_message_delete BEFORE DELETE ON agent_messages
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+
+        CREATE FUNCTION aibrain_validate_agent_control_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agents a JOIN users u ON u.id=a.user_id
+                WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'agent control event owner mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_control_event_insert BEFORE INSERT ON agent_control_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_control_event();
+        CREATE TRIGGER prevent_agent_control_event_update BEFORE UPDATE ON agent_control_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_control_event_delete BEFORE DELETE ON agent_control_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        """,
+    ),
+    PostgresMigration(
+        version=17,
+        name="agent_task_transition_and_definition_guards",
+        sql="""
+        CREATE OR REPLACE FUNCTION aibrain_validate_agent_task_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE current_status TEXT;
+            from_status TEXT;
+            to_status TEXT;
+        BEGIN
+            SELECT status INTO current_status FROM agent_tasks
+            WHERE id=NEW.task_id AND user_id=NEW.user_id;
+            from_status := NEW.details_json::jsonb ->> 'from_status';
+            to_status := NEW.details_json::jsonb ->> 'to_status';
+            IF NEW.actor_user_id <> NEW.user_id OR current_status IS NULL
+               OR NOT EXISTS (SELECT 1 FROM users WHERE id=NEW.user_id AND deleted_at IS NULL)
+               OR NOT (
+                    (NEW.event_type='assigned' AND current_status='assigned'
+                     AND from_status IS NULL AND to_status='assigned')
+                    OR (from_status=current_status AND to_status=NEW.event_type
+                        AND ((current_status='assigned' AND NEW.event_type IN
+                              ('in_progress','completed','failed','cancelled','expired'))
+                          OR (current_status='in_progress' AND NEW.event_type IN
+                              ('completed','failed','cancelled','expired'))))
+               ) THEN
+                RAISE EXCEPTION 'task event transition mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE FUNCTION aibrain_reject_agent_task_definition_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.title IS DISTINCT FROM OLD.title OR NEW.goal IS DISTINCT FROM OLD.goal
+               OR NEW.context_json IS DISTINCT FROM OLD.context_json
+               OR NEW.capability_ceiling_json IS DISTINCT FROM OLD.capability_ceiling_json
+               OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+               OR NEW.agent_id IS DISTINCT FROM OLD.agent_id
+               OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'task definition is immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        DROP TRIGGER prevent_agent_task_update ON agent_tasks;
+        CREATE TRIGGER prevent_agent_task_content_update BEFORE UPDATE ON agent_tasks
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_task_definition_update();
+        """,
+    ),
+    PostgresMigration(
+        version=18,
+        name="agent_runs_steps_and_event_history",
+        sql="""
+        CREATE TABLE agent_runs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+            actions_json TEXT NOT NULL CHECK (jsonb_typeof(actions_json::jsonb) = 'array'),
+            plan_digest TEXT NOT NULL CHECK (length(plan_digest)=64),
+            status TEXT NOT NULL CHECK (status IN
+                ('proposed','authorized','running','completed','failed','cancelled','expired')),
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            authorized_at TEXT,
+            started_at TEXT,
+            finished_at TEXT
+        );
+        CREATE INDEX idx_agent_runs_owner_task ON agent_runs(user_id,task_id,created_at,id);
+        CREATE INDEX idx_agent_runs_status_expiry ON agent_runs(status,expires_at);
+        CREATE TABLE agent_run_steps (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 9),
+            tool_id TEXT NOT NULL,
+            arguments_json TEXT NOT NULL CHECK (jsonb_typeof(arguments_json::jsonb)='object'),
+            contract_fingerprint TEXT NOT NULL CHECK (length(contract_fingerprint)=64),
+            required_capability TEXT,
+            status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed','skipped')),
+            tool_request_id TEXT,
+            result_json TEXT CHECK (result_json IS NULL OR jsonb_typeof(result_json::jsonb) IS NOT NULL),
+            error_code TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(run_id,ordinal)
+        );
+        CREATE INDEX idx_agent_run_steps_owner_run ON agent_run_steps(user_id,run_id,ordinal);
+        CREATE TABLE agent_run_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            actor_user_id TEXT NOT NULL REFERENCES users(id),
+            event_type TEXT NOT NULL,
+            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb)='object'),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_agent_run_events_owner_run
+            ON agent_run_events(user_id,run_id,created_at,id);
+        CREATE FUNCTION aibrain_validate_agent_run_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agents a
+                JOIN agent_tasks t ON t.agent_id=a.id AND t.user_id=a.user_id
+                JOIN users u ON u.id=a.user_id
+                WHERE a.id=NEW.agent_id AND a.user_id=NEW.user_id
+                  AND a.status='active' AND u.deleted_at IS NULL
+                  AND t.id=NEW.task_id AND t.user_id=NEW.user_id
+                  AND t.status IN ('assigned','in_progress')
+                  AND t.expires_at > NEW.created_at
+            ) THEN
+                RAISE EXCEPTION 'agent run requires active owned agent and live task'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_insert BEFORE INSERT ON agent_runs
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_insert();
+        CREATE FUNCTION aibrain_reject_agent_run_definition_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.agent_id IS DISTINCT FROM OLD.agent_id OR NEW.task_id IS DISTINCT FROM OLD.task_id
+               OR NEW.actions_json IS DISTINCT FROM OLD.actions_json
+               OR NEW.plan_digest IS DISTINCT FROM OLD.plan_digest
+               OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'agent run definition is immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_run_definition_update BEFORE UPDATE ON agent_runs
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_run_definition_update();
+        CREATE TRIGGER prevent_agent_run_delete BEFORE DELETE ON agent_runs
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE FUNCTION aibrain_validate_agent_run_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.actor_user_id <> NEW.user_id OR NOT EXISTS (
+                SELECT 1 FROM agent_runs r JOIN users u ON u.id=r.user_id
+                WHERE r.id=NEW.run_id AND r.user_id=NEW.user_id AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'agent run event owner mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_event_insert BEFORE INSERT ON agent_run_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_event();
+        CREATE TRIGGER prevent_agent_run_event_update BEFORE UPDATE ON agent_run_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_run_event_delete BEFORE DELETE ON agent_run_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE FUNCTION aibrain_validate_agent_run_status_transition()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status IS DISTINCT FROM OLD.status AND NOT EXISTS (
+                SELECT 1 FROM agent_run_events e
+                WHERE e.run_id=OLD.id AND e.user_id=OLD.user_id
+                  AND e.details_json::jsonb ->> 'from_status'=OLD.status
+                  AND e.details_json::jsonb ->> 'to_status'=NEW.status
+            ) THEN
+                RAISE EXCEPTION 'agent run status change requires matching event'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_status_transition BEFORE UPDATE OF status ON agent_runs
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_status_transition();
+        CREATE FUNCTION aibrain_validate_agent_run_step_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agent_runs r JOIN users u ON u.id=r.user_id
+                WHERE r.id=NEW.run_id AND r.user_id=NEW.user_id AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'agent run step owner mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_step_insert BEFORE INSERT ON agent_run_steps
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_step_insert();
+        CREATE FUNCTION aibrain_reject_agent_run_step_definition_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.ordinal IS DISTINCT FROM OLD.ordinal
+               OR NEW.tool_id IS DISTINCT FROM OLD.tool_id
+               OR NEW.arguments_json IS DISTINCT FROM OLD.arguments_json
+               OR NEW.contract_fingerprint IS DISTINCT FROM OLD.contract_fingerprint
+               OR NEW.required_capability IS DISTINCT FROM OLD.required_capability
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'agent run step definition is immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_run_step_definition_update BEFORE UPDATE ON agent_run_steps
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_run_step_definition_update();
+        CREATE TRIGGER prevent_agent_run_step_delete BEFORE DELETE ON agent_run_steps
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE FUNCTION aibrain_validate_agent_run_step_transition()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status IS DISTINCT FROM OLD.status AND NOT EXISTS (
+                SELECT 1 FROM agent_run_events e
+                WHERE e.run_id=OLD.run_id AND e.user_id=OLD.user_id
+                  AND e.details_json::jsonb ->> 'step_id'=OLD.id
+                  AND ((OLD.status='pending' AND
+                       ((NEW.status='running' AND e.event_type='step_started')
+                        OR (NEW.status='failed' AND e.event_type='step_failed')
+                        OR (NEW.status='skipped' AND e.event_type='step_skipped')))
+                    OR (OLD.status='running' AND
+                       ((NEW.status='completed' AND e.event_type='step_completed')
+                        OR (NEW.status='failed' AND e.event_type='step_failed')))
+                  )
+            ) THEN
+                RAISE EXCEPTION 'agent run step status change requires matching event'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_step_status_transition
+            BEFORE UPDATE OF status ON agent_run_steps
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_step_transition();
+        """,
+    ),
 
 )
 
