@@ -924,4 +924,56 @@ def test_device_key_rotation_rejects_direct_key_mutation(client: TestClient) -> 
             state.database.connect().execute(
                 "UPDATE devices SET public_key_fingerprint=? WHERE id=?",
                 ("b" * 64, device["device_id"]),
-            )
+            )\n
+
+def test_device_key_rotation_rejects_challenge_bound_to_previous_key_version(
+    client: TestClient,
+) -> None:
+    owner_headers = _authenticated_headers(client)
+    device, old_private_key = _enroll_with_key(client, owner_headers)
+    activated, _ = _activate_with_proof(client, owner_headers, device, old_private_key)
+    assert activated.status_code == 204
+
+    replacement_a = Ed25519PrivateKey.generate()
+    replacement_b = Ed25519PrivateKey.generate()
+    public_a = replacement_a.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    public_b = replacement_b.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    def issue(public_key: bytes) -> dict:
+        response = client.post(
+            f"/api/v1/devices/{device['device_id']}/key-rotation/challenge",
+            headers=owner_headers,
+            json={"new_public_key_b64": base64.b64encode(public_key).decode("ascii")},
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    first = issue(public_a)
+    stale = issue(public_b)
+
+    first_message = base64.b64decode(first["message_b64"], validate=True)
+    first_rotation = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
+        params={"challenge_id": first["challenge_id"]},
+        headers=owner_headers,
+        json={
+            "nonce": first["nonce"],
+            "old_signature_b64": base64.b64encode(old_private_key.sign(first_message)).decode("ascii"),
+            "new_signature_b64": base64.b64encode(replacement_a.sign(first_message)).decode("ascii"),
+        },
+    )
+    assert first_rotation.status_code == 200
+
+    stale_message = base64.b64decode(stale["message_b64"], validate=True)
+    stale_rotation = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
+        params={"challenge_id": stale["challenge_id"]},
+        headers=owner_headers,
+        json={
+            "nonce": stale["nonce"],
+            "old_signature_b64": base64.b64encode(replacement_a.sign(stale_message)).decode("ascii"),
+            "new_signature_b64": base64.b64encode(replacement_b.sign(stale_message)).decode("ascii"),
+        },
+    )
+    assert stale_rotation.status_code == 409
+    assert stale_rotation.json()["error"]["code"] == "DEVICE_KEY_ROTATION_CHALLENGE_INVALID"
