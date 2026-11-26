@@ -115,7 +115,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             sign_count BIGINT NOT NULL DEFAULT 0 CHECK (sign_count >= 0),
             transports_json TEXT NOT NULL DEFAULT '[]',
             device_type TEXT,
-            backed_up BOOLEAN NOT NULL DEFAULT FALSE,
+            backed_up SMALLINT NOT NULL DEFAULT 0 CHECK (backed_up IN (0, 1)),
             name TEXT,
             created_at TEXT NOT NULL,
             last_used_at TEXT,
