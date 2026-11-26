@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 7
-    assert runner.migrate() == 7
+    assert runner.migrate() == 11
+    assert runner.migrate() == 11
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -222,6 +222,10 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
                 )
 
         with connection.transaction():
+            connection.execute(
+                "UPDATE users SET deleted_at=%s WHERE id=%s",
+                (timestamp, user_id),
+            )
             connection.execute("DELETE FROM tool_dispatch_audit_events WHERE request_id=%s", (request_id,))
             connection.execute("DELETE FROM tool_execution_bindings WHERE id=%s", ("binding-" + user_id,))
             connection.execute("DELETE FROM tool_execution_attempts WHERE id=%s", ("execution-" + user_id,))
@@ -248,6 +252,10 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (5, "external_adapter_evidence_packages_and_artifacts"),
             (6, "trusted_runner_keys_and_evidence_attestations"),
             (7, "security_operator_audit_events"),
+            (8, "tool_dispatch_recovery_events"),
+            (9, "tool_dispatch_lookup_authorizations"),
+            (10, "dispatch_audit_recovery_and_lookup_erasure_guards"),
+            (11, "tool_execution_reconciliation_events"),
         ]
 
 
@@ -259,7 +267,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 7
+    assert runner.migrate() == 11
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
