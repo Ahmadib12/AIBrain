@@ -1197,7 +1197,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             actor_user_id TEXT NOT NULL REFERENCES users(id),
             event_type TEXT NOT NULL CHECK (event_type IN ('registered')),
-            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb) = 'object'),
+            details_json TEXT NOT NULL CHECK (details_json::jsonb IS NOT NULL),
             created_at TEXT NOT NULL
         );
         CREATE INDEX idx_agent_events_owner_agent
@@ -1361,7 +1361,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             title TEXT NOT NULL CHECK (length(btrim(title)) BETWEEN 1 AND 160),
             goal TEXT NOT NULL CHECK (length(goal) <= 4000),
-            context_json TEXT NOT NULL CHECK (jsonb_typeof(context_json::jsonb) = 'object'),
+            context_json TEXT NOT NULL CHECK (context_json::jsonb IS NOT NULL),
             capability_ceiling_json TEXT NOT NULL
                 CHECK (jsonb_typeof(capability_ceiling_json::jsonb) = 'array'),
             status TEXT NOT NULL CHECK (status IN
@@ -1378,7 +1378,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
             actor_user_id TEXT NOT NULL REFERENCES users(id),
             event_type TEXT NOT NULL,
-            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb) = 'object'),
+            details_json TEXT NOT NULL CHECK (details_json::jsonb IS NOT NULL),
             created_at TEXT NOT NULL
         );
         CREATE INDEX idx_agent_task_events_owner_task
@@ -1389,7 +1389,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             sender_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             recipient_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             task_id TEXT REFERENCES agent_tasks(id) ON DELETE CASCADE,
-            payload_json TEXT NOT NULL CHECK (jsonb_typeof(payload_json::jsonb) = 'object'),
+            payload_json TEXT NOT NULL CHECK (payload_json::jsonb IS NOT NULL),
             created_at TEXT NOT NULL
         );
         CREATE INDEX idx_agent_messages_owner_recipient
@@ -1400,7 +1400,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             event_type TEXT NOT NULL,
             subject_id TEXT NOT NULL,
-            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb) = 'object'),
+            details_json TEXT NOT NULL CHECK (details_json::jsonb IS NOT NULL),
             created_at TEXT NOT NULL
         );
         CREATE INDEX idx_agent_control_events_owner_agent
@@ -1651,7 +1651,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
-            actions_json TEXT NOT NULL CHECK (jsonb_typeof(actions_json::jsonb) = 'array'),
+            actions_json TEXT NOT NULL CHECK (actions_json::jsonb IS NOT NULL),
             plan_digest TEXT NOT NULL CHECK (length(plan_digest)=64),
             status TEXT NOT NULL CHECK (status IN
                 ('proposed','authorized','running','completed','failed','cancelled','expired')),
@@ -1670,7 +1670,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
             ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 9),
             tool_id TEXT NOT NULL,
-            arguments_json TEXT NOT NULL CHECK (jsonb_typeof(arguments_json::jsonb)='object'),
+            arguments_json TEXT NOT NULL CHECK (arguments_json::jsonb IS NOT NULL),
             contract_fingerprint TEXT NOT NULL CHECK (length(contract_fingerprint)=64),
             required_capability TEXT,
             status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed','skipped')),
