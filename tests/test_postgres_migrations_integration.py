@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 22
-    assert runner.migrate() == 22
+    assert runner.migrate() == 26
+    assert runner.migrate() == 26
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -290,7 +290,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 22
+    assert runner.migrate() == 26
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -434,7 +434,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 22
+    assert runner.migrate() == 26
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
@@ -634,7 +634,7 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 22
+    assert runner.migrate() == 26
 
     suffix = str(uuid.uuid4())
     user_id = "memory-learning-owner-" + suffix
@@ -1373,3 +1373,144 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                 raise RollbackFixture()
         except RollbackFixture:
             pass
+
+
+def test_real_postgres_device_foundation_migrations_preserve_owner_and_challenge_rules():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+
+    psycopg = pytest.importorskip("psycopg")
+    runner = PostgresMigrationRunner(database_url)
+    assert runner.migrate() == 26
+    assert runner.migrate() == 26
+
+    owner = str(uuid.uuid4())
+    email = f"postgres-device-{owner}@example.invalid"
+    timestamp = "2026-01-01T00:00:00+00:00"
+    future = "2027-01-01T00:00:00+00:00"
+    device_id = "device-" + owner
+
+    class RollbackFixture(Exception):
+        pass
+
+    try:
+        with psycopg.connect(database_url) as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO users (id,email,password_salt,password_hash,created_at)
+                    VALUES (%s,%s,%s,%s,%s)
+                    """,
+                    (owner,email,"salt","hash",timestamp),
+                )
+                agent = "agent-" + owner
+                connection.execute(
+                    """
+                    INSERT INTO agents (id,user_id,name,status,created_at,updated_at)
+                    VALUES (%s,%s,%s,'draft',%s,%s)
+                    """,
+                    (agent,owner,"Device test agent",timestamp,timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_events
+                        (id,user_id,agent_id,actor_user_id,event_type,details_json,created_at)
+                    VALUES (%s,%s,%s,%s,'registered',%s,%s)
+                    """,
+                    ("agent-registered-"+owner,owner,agent,owner,
+                     '{"initial_status":"draft"}',timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_events
+                        (id,user_id,agent_id,actor_user_id,event_type,details_json,created_at)
+                    VALUES (%s,%s,%s,%s,'activated',%s,%s)
+                    """,
+                    ("agent-activated-"+owner,owner,agent,owner,
+                     '{"from_status":"draft","to_status":"active"}',timestamp),
+                )
+                connection.execute(
+                    "UPDATE agents SET status='active',updated_at=%s WHERE id=%s",
+                    (timestamp,agent),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_capability_grants
+                        (id,user_id,agent_id,capability,created_at)
+                    VALUES (%s,%s,%s,'text_generation',%s)
+                    """,
+                    ("grant-"+owner,owner,agent,timestamp),
+                )
+
+                connection.execute(
+                    """
+                    INSERT INTO devices (
+                        id,user_id,platform,app_version,display_name,
+                        public_key_fingerprint,status,enrolled_at
+                    ) VALUES (%s,%s,'android','1.0','Test device',%s,'pending',%s)
+                    """,
+                    (device_id,owner,"a"*64,timestamp),
+                )
+                connection.execute(
+                    "UPDATE devices SET public_key_b64=%s WHERE id=%s",
+                    ("cHVibGljLWtleQ==",device_id),
+                )
+                enrollment_challenge = "enrollment-" + owner
+                connection.execute(
+                    """
+                    INSERT INTO device_auth_challenges
+                        (id,device_id,user_id,nonce_hash,expires_at,created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    (enrollment_challenge,device_id,owner,"b"*64,future,timestamp),
+                )
+                connection.execute(
+                    "UPDATE devices SET status='active' WHERE id=%s", (device_id,)
+                )
+                session_challenge = "session-" + owner
+                connection.execute(
+                    """
+                    INSERT INTO device_auth_challenges
+                        (id,device_id,user_id,nonce_hash,expires_at,created_at,purpose)
+                    VALUES (%s,%s,%s,%s,%s,%s,'session')
+                    """,
+                    (session_challenge,device_id,owner,"d"*64,future,timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO sessions
+                        (token_hash,user_id,expires_at,created_at,device_id,auth_method)
+                    VALUES (%s,%s,%s,%s,%s,'device_proof')
+                    """,
+                    ("device-session-"+owner,owner,future,timestamp,device_id),
+                )
+                row = connection.execute(
+                    "SELECT device_id,auth_method FROM sessions WHERE token_hash=%s",
+                    ("device-session-"+owner,),
+                ).fetchone()
+                assert tuple(row) == (device_id,"device_proof")
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO device_auth_challenges
+                                (id,device_id,user_id,nonce_hash,expires_at,created_at,purpose)
+                            VALUES (%s,%s,%s,%s,%s,%s,'invalid')
+                            """,
+                            ("bad-purpose-"+owner,device_id,owner,"e"*64,future,timestamp),
+                        )
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO agent_capability_grants
+                                (id,user_id,agent_id,capability,created_at)
+                            VALUES (%s,%s,%s,'invalid.capability',%s)
+                            """,
+                            ("bad-capability-"+owner,owner,agent,timestamp),
+                        )
+                raise RollbackFixture()
+    except RollbackFixture:
+        pass
