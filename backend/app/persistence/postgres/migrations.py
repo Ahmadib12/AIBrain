@@ -108,6 +108,9 @@ class PostgresMigrationRunner:
                     "SELECT version FROM schema_migrations ORDER BY version"
                 ).fetchall()
             }
+            # End the read transaction before applying migrations so each
+            # migration's transaction context is a top-level commit boundary.
+            connection.commit()
             known = {migration.version for migration in migrations}
             unknown = applied - known
             if unknown:
