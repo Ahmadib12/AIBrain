@@ -279,6 +279,10 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (20, "integration_secret_vault_and_terminal_erasure"),
             (21, "agent_run_integration_bindings"),
             (22, "agent_run_integration_dispatch_lifecycle"),
+            (23, "agent_capability_text_generation"),
+            (24, "device_registry"),
+            (25, "device_public_keys_and_auth_challenges"),
+            (26, "device_session_binding_schema"),
         ]
 
 
