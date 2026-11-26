@@ -1340,8 +1340,34 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                     (connection_id,),
                 ).fetchone()[0] == 0
 
+                erasure_connection = "erasure-connection-" + suffix
+                erasure_secret = "erasure-secret-" + suffix
+                connection.execute(
+                    """
+                    INSERT INTO integration_connections (
+                        id,user_id,integration_id,status,consent_version,consented_at,
+                        secret_ref,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (erasure_connection, owner, "calendar", "pending_verification",
+                     "v1", timestamp, erasure_secret, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO integration_secrets (
+                        secret_ref,user_id,connection_id,integration_id,nonce,
+                        ciphertext,key_version,created_at,updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (erasure_secret, owner, erasure_connection, "calendar",
+                     b"z" * 12, b"v" * 32, 1, timestamp, timestamp),
+                )
                 connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (future, owner))
                 connection.execute("DELETE FROM users WHERE id=%s", (owner,))
+                assert connection.execute(
+                    "SELECT count(*) FROM integration_secrets WHERE secret_ref=%s",
+                    (erasure_secret,),
+                ).fetchone()[0] == 0
                 connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (future, other))
                 connection.execute("DELETE FROM users WHERE id=%s", (other,))
                 raise RollbackFixture()
