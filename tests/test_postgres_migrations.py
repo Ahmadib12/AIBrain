@@ -1,3 +1,5 @@
+import re
+
 from backend.app.persistence.postgres.migrations import (
     MIGRATIONS,
     PostgresMigration,
@@ -39,9 +41,13 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE tool_execution_reconciliation_events" in MIGRATIONS[10].sql
     for migration in MIGRATIONS[1:11]:
         if "LANGUAGE plpgsql" in migration.sql:
-            assert "LANGUAGE plpgsql AS $" in migration.sql
+            openings = re.findall(r"\bAS\s+\$\$", migration.sql)
+            closings = re.findall(r"\$\$;", migration.sql)
+            assert openings, f"migration {migration.version} has no dollar-quoted function body"
+            assert len(openings) == len(closings), (
+                f"migration {migration.version} has unbalanced function delimiters"
+            )
             assert "\n        $;\n" not in migration.sql
-            assert migration.sql.count("AS $") == migration.sql.count("$;")
     assert "CREATE TABLE tool_execution_attempts" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_execution_bindings" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_dispatch_audit_events" in MIGRATIONS[2].sql
