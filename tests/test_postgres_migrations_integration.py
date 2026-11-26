@@ -1145,7 +1145,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (step, owner, run, 0, "calendar.read", "{}", "b" * 64,
-                     "calendar.read", "pending", timestamp, timestamp),
+                     None, "pending", timestamp, timestamp),
                 )
                 connection.execute(
                     """
