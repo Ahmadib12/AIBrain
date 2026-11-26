@@ -47,12 +47,41 @@ class Settings(BaseSettings):
     integration_expiry_interval_seconds: int = Field(default=60, gt=0)
     integration_dispatch_recovery_interval_seconds: int = Field(default=60, gt=0)
     integration_dispatch_stale_after_seconds: int = Field(default=300, gt=0)
+    security_notification_smtp_host: str | None = None
+    security_notification_smtp_port: int = Field(default=587, ge=1, le=65535)
+    security_notification_smtp_username: str | None = None
+    security_notification_smtp_password: SecretStr | None = Field(default=None, repr=False)
+    security_notification_sender: str | None = None
+    security_notification_smtp_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    security_notification_worker_interval_seconds: int = Field(default=30, gt=0)
+    security_notification_batch_size: int = Field(default=10, ge=1, le=100)
 
     webauthn_enabled: bool = False
     webauthn_rp_id: str | None = None
     webauthn_rp_name: str = "AIBrain"
     webauthn_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ()
     webauthn_challenge_ttl_seconds: int = Field(default=300, gt=0)
+
+    @model_validator(mode="after")
+    def validate_security_notification_smtp(self):
+        host = self.security_notification_smtp_host
+        sender = self.security_notification_sender
+        username = self.security_notification_smtp_username
+        password = self.security_notification_smtp_password
+        if bool(host) != bool(sender):
+            raise ValueError("Security notification SMTP host and sender must be configured together")
+        if bool(username) != bool(password):
+            raise ValueError("Security notification SMTP username and password must be configured together")
+        if username and not host:
+            raise ValueError("SMTP credentials require security notification SMTP host and sender")
+        for value in (host, sender, username):
+            if value is not None and (not value.strip() or len(value) > 320 or chr(13) in value or chr(10) in value):
+                raise ValueError("Security notification SMTP values must be valid single-line values")
+        return self
+
+    @property
+    def security_notification_delivery_enabled(self) -> bool:
+        return bool(self.security_notification_smtp_host and self.security_notification_sender)
 
     @model_validator(mode="after")
     def validate_integration_vault_key(self):
