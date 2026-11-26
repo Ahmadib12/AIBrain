@@ -39,8 +39,9 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE tool_execution_reconciliation_events" in MIGRATIONS[10].sql
     for migration in MIGRATIONS[1:11]:
         if "LANGUAGE plpgsql" in migration.sql:
-            assert "AS $" in migration.sql
-            assert "$;" in migration.sql
+            assert "LANGUAGE plpgsql AS $" in migration.sql
+            assert "\n        $;\n" not in migration.sql
+            assert migration.sql.count("AS $") == migration.sql.count("$;")
     assert "CREATE TABLE tool_execution_attempts" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_execution_bindings" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_dispatch_audit_events" in MIGRATIONS[2].sql
