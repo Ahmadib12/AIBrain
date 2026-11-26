@@ -416,7 +416,7 @@ class DeviceProofRepository:
             connection = self.database.connect()
             device = connection.execute(
                 """
-                SELECT public_key_fingerprint FROM devices
+                SELECT public_key_b64, public_key_fingerprint FROM devices
                 WHERE id=? AND user_id=? AND status='active'
                   AND public_key_b64 IS NOT NULL
                 """,
@@ -446,13 +446,14 @@ class DeviceProofRepository:
             connection.execute(
                 """
                 INSERT INTO device_key_rotation_challenges
-                    (id,device_id,user_id,nonce_hash,proposed_public_key_b64,
+                    (id,device_id,user_id,nonce_hash,previous_fingerprint,proposed_public_key_b64,
                      proposed_fingerprint,expires_at,created_at)
-                VALUES (?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?)
                 """,
                 (challenge_id, device_id, owner_id,
                  hashlib.sha256(nonce.encode("ascii")).hexdigest(),
-                 canonical_key, new_fingerprint, expires_text, now.isoformat()),
+                 device["public_key_fingerprint"], canonical_key, new_fingerprint,
+                 expires_text, now.isoformat()),
             )
         message = (
             f"AIBRAIN_DEVICE_KEY_ROTATION_V1\n{challenge_id}\n{device_id}\n"
@@ -480,7 +481,7 @@ class DeviceProofRepository:
             row = connection.execute(
                 """
                 SELECT c.nonce_hash,c.expires_at,c.used_at,c.applied_at,
-                       c.proposed_public_key_b64,c.proposed_fingerprint,
+                       c.previous_fingerprint,c.proposed_public_key_b64,c.proposed_fingerprint,
                        d.public_key_b64,d.public_key_fingerprint
                 FROM device_key_rotation_challenges c
                 JOIN devices d ON d.id=c.device_id AND d.user_id=c.user_id
@@ -494,6 +495,10 @@ class DeviceProofRepository:
                 raise LookupError("Device key rotation challenge not found")
             if row["used_at"] is not None or row["applied_at"] is not None:
                 raise ValueError("Device key rotation challenge already used")
+            if not secrets.compare_digest(
+                row["previous_fingerprint"], row["public_key_fingerprint"]
+            ):
+                raise ValueError("Device key changed after this challenge was issued")
             if datetime.fromisoformat(row["expires_at"]) <= now:
                 raise ValueError("Device key rotation challenge expired")
             nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
