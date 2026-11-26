@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 26
-    assert runner.migrate() == 26
+    assert runner.migrate() == 30
+    assert runner.migrate() == 30
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -294,7 +294,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 26
+    assert runner.migrate() == 30
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -438,7 +438,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 26
+    assert runner.migrate() == 30
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
@@ -638,7 +638,7 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 26
+    assert runner.migrate() == 30
 
     suffix = str(uuid.uuid4())
     user_id = "memory-learning-owner-" + suffix
@@ -848,7 +848,7 @@ def test_real_postgres_agent_lifecycle_capability_and_run_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 26
+    assert PostgresMigrationRunner(database_url).migrate() == 30
     suffix = str(uuid.uuid4())
     owner = "agent-owner-" + suffix
     other = "agent-other-" + suffix
@@ -1059,7 +1059,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 26
+    assert PostgresMigrationRunner(database_url).migrate() == 30
     suffix = str(uuid.uuid4())
     owner = "integration-owner-" + suffix
     other = "integration-other-" + suffix
@@ -1386,8 +1386,8 @@ def test_real_postgres_device_foundation_migrations_preserve_owner_and_challenge
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 26
-    assert runner.migrate() == 26
+    assert runner.migrate() == 30
+    assert runner.migrate() == 30
 
     owner = str(uuid.uuid4())
     email = f"postgres-device-{owner}@example.invalid"
@@ -1515,6 +1515,107 @@ def test_real_postgres_device_foundation_migrations_preserve_owner_and_challenge
                             """,
                             ("bad-capability-"+owner,owner,agent,timestamp),
                         )
+                raise RollbackFixture()
+    except RollbackFixture:
+        pass
+
+
+def test_real_postgres_device_security_audit_lifecycle_and_session_guards():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+    psycopg = pytest.importorskip("psycopg")
+    runner = PostgresMigrationRunner(database_url)
+    assert runner.migrate() == 30
+    assert runner.migrate() == 30
+    owner = str(uuid.uuid4())
+    timestamp = "2026-01-01T00:00:00+00:00"
+    future = "2027-01-01T00:00:00+00:00"
+    device_id = "device-audit-" + owner
+
+    class RollbackFixture(Exception):
+        pass
+
+    try:
+        with psycopg.connect(database_url) as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO users (id,email,password_salt,password_hash,created_at)
+                    VALUES (%s,%s,%s,%s,%s)
+                    """,
+                    (owner,f"postgres-device-audit-{owner}@example.invalid","salt","hash",timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO devices (
+                        id,user_id,platform,app_version,public_key_fingerprint,status,enrolled_at
+                    ) VALUES (%s,%s,'android','1.0',%s,'pending',%s)
+                    """,
+                    (device_id,owner,"a"*64,timestamp),
+                )
+                connection.execute("UPDATE devices SET public_key_b64=%s WHERE id=%s",("cHVibGljLWtleQ==",device_id))
+                connection.execute("UPDATE devices SET status='active' WHERE id=%s",(device_id,))
+                connection.execute(
+                    """
+                    INSERT INTO sessions (token_hash,user_id,expires_at,created_at,device_id,auth_method)
+                    VALUES (%s,%s,%s,%s,%s,'device_login')
+                    """,
+                    ("audit-session-"+owner,owner,future,timestamp,device_id),
+                )
+                event_types = [r[0] for r in connection.execute(
+                    "SELECT event_type FROM device_security_events WHERE user_id=%s ORDER BY occurred_at,id",
+                    (owner,),
+                ).fetchall()]
+                assert event_types == [
+                    "device.enrolled","device.key_registered","device.activated",
+                    "device.login_authenticated",
+                ]
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("UPDATE device_security_events SET details_json='{}' WHERE user_id=%s",(owner,))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("DELETE FROM device_security_events WHERE user_id=%s",(owner,))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("UPDATE devices SET id=%s WHERE id=%s",("renamed-"+owner,device_id))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("UPDATE devices SET public_key_b64=%s WHERE id=%s",("bmV3LWtleQ==",device_id))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("UPDATE devices SET status='pending' WHERE id=%s",(device_id,))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO sessions (token_hash,user_id,expires_at,created_at,device_id,auth_method)
+                            VALUES (%s,%s,%s,%s,%s,'account')
+                            """,
+                            ("bad-binding-"+owner,owner,future,timestamp,device_id),
+                        )
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("UPDATE sessions SET expires_at=%s WHERE token_hash=%s",(future+" ","audit-session-"+owner))
+                connection.execute("UPDATE sessions SET revoked_at=%s WHERE token_hash=%s",(future,"audit-session-"+owner))
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("UPDATE sessions SET revoked_at=NULL WHERE token_hash=%s",("audit-session-"+owner,))
+
+                connection.execute("UPDATE devices SET status='revoked' WHERE id=%s",(device_id,))
+                assert connection.execute(
+                    "SELECT count(*) FROM device_security_events WHERE user_id=%s AND event_type='device.revoked'",
+                    (owner,),
+                ).fetchone()[0] == 1
+                count_before = connection.execute("SELECT count(*) FROM device_security_events WHERE user_id=%s",(owner,)).fetchone()[0]
+                connection.execute("DELETE FROM devices WHERE id=%s",(device_id,))
+                assert connection.execute("SELECT count(*) FROM device_security_events WHERE user_id=%s",(owner,)).fetchone()[0] == count_before
+
+                connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s",(future,owner))
+                connection.execute("DELETE FROM users WHERE id=%s",(owner,))
+                assert connection.execute("SELECT count(*) FROM device_security_events WHERE user_id=%s",(owner,)).fetchone()[0] == 0
                 raise RollbackFixture()
     except RollbackFixture:
         pass
