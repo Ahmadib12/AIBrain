@@ -6,18 +6,27 @@ import pytest
 from backend.app.persistence.postgres.migrations import PostgresMigrationRunner
 
 
-def test_real_postgres_identity_migration_and_idempotent_upgrade():
+def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
     database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
     if not database_url:
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 1
-    assert runner.migrate() == 1
+    assert runner.migrate() == 2
+    assert runner.migrate() == 2
 
     user_id = str(uuid.uuid4())
+    deleted_user_id = str(uuid.uuid4())
     email = f"postgres-migration-{user_id}@example.invalid"
+    deleted_email = f"postgres-deleted-{deleted_user_id}@example.invalid"
+    request_id = "request-" + user_id
+    credential_id = "credential-" + user_id
+    challenge_id = "challenge-" + user_id
+    recovery_id = "recovery-" + user_id
+    authorization_id = "authorization-" + user_id
+    timestamp = "2026-01-01T00:00:00+00:00"
+
     with psycopg.connect(database_url) as connection:
         with connection.transaction():
             connection.execute(
@@ -26,7 +35,15 @@ def test_real_postgres_identity_migration_and_idempotent_upgrade():
                     id, email, password_salt, password_hash, created_at
                 ) VALUES (%s, %s, %s, %s, %s)
                 """,
-                (user_id, email, "salt", "hash", "2026-01-01T00:00:00+00:00"),
+                (user_id, email, "salt", "hash", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO users (
+                    id, email, password_salt, password_hash, created_at, deleted_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (deleted_user_id, deleted_email, "salt", "hash", timestamp, timestamp),
             )
             connection.execute(
                 """
@@ -34,15 +51,114 @@ def test_real_postgres_identity_migration_and_idempotent_upgrade():
                     token_hash, user_id, expires_at, created_at
                 ) VALUES (%s, %s, %s, %s)
                 """,
-                ("token-" + user_id, user_id, "2027-01-01T00:00:00+00:00",
-                 "2026-01-01T00:00:00+00:00"),
+                ("token-" + user_id, user_id, "2027-01-01T00:00:00+00:00", timestamp),
             )
-        with connection.transaction():
             connection.execute(
-                "DELETE FROM sessions WHERE token_hash=%s", ("token-" + user_id,)
+                """
+                INSERT INTO memory_items (
+                    id, user_id, memory_type, key, value_json, source,
+                    confidence, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                ("memory-" + user_id, user_id, "preference", "theme", '"dark"',
+                 "user", 1.0, "active", timestamp, timestamp),
             )
+            connection.execute(
+                """
+                INSERT INTO observations (
+                    id, user_id, source, observation_json, status, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                ("observation-" + user_id, user_id, "test", '{"ok":true}',
+                 "pending", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO adaptations (
+                    id, user_id, proposal_json, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                ("adaptation-" + user_id, user_id, '{"change":"test"}',
+                 "proposed", timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_requests (
+                    id, user_id, tool_id, arguments_json, status,
+                    created_at, updated_at, authorization_policy
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (request_id, user_id, "echo", '{"text":"safe"}', "pending",
+                 timestamp, timestamp, "passkey"),
+            )
+            connection.execute(
+                """
+                INSERT INTO webauthn_credentials (
+                    id, user_id, credential_id, public_key, created_at
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (credential_id, user_id, "external-" + credential_id,
+                 bytes(range(32)), timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO webauthn_challenges (
+                    id, user_id, challenge_hash, purpose, request_id,
+                    expires_at, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (challenge_id, user_id, "hash-" + challenge_id, "tool_approval",
+                 request_id, "2027-01-01T00:00:00+00:00", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO webauthn_recovery_codes (
+                    id, user_id, code_hash, created_at
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (recovery_id, user_id, "hash-" + recovery_id, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_authorizations (
+                    id, user_id, request_id, challenge_id, credential_id,
+                    proposal_digest, contract_fingerprint, authorized_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (authorization_id, user_id, request_id, challenge_id,
+                 credential_id, "a" * 64, "b" * 64, timestamp),
+            )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO memory_items (
+                        id, user_id, memory_type, key, value_json, source,
+                        confidence, status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("blocked-" + deleted_user_id, deleted_user_id, "preference",
+                     "theme", '"dark"', "user", 1.0, "active", timestamp, timestamp),
+                )
+
+        with connection.transaction():
+            connection.execute("DELETE FROM tool_authorizations WHERE id=%s", (authorization_id,))
+            connection.execute("DELETE FROM webauthn_challenges WHERE id=%s", (challenge_id,))
+            connection.execute("DELETE FROM webauthn_recovery_codes WHERE id=%s", (recovery_id,))
+            connection.execute("DELETE FROM webauthn_credentials WHERE id=%s", (credential_id,))
+            connection.execute("DELETE FROM tool_requests WHERE id=%s", (request_id,))
+            connection.execute("DELETE FROM adaptations WHERE id=%s", ("adaptation-" + user_id,))
+            connection.execute("DELETE FROM observations WHERE id=%s", ("observation-" + user_id,))
+            connection.execute("DELETE FROM memory_items WHERE id=%s", ("memory-" + user_id,))
+            connection.execute("DELETE FROM sessions WHERE token_hash=%s", ("token-" + user_id,))
             connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
+            connection.execute("DELETE FROM users WHERE id=%s", (deleted_user_id,))
+
         applied = connection.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
-        assert applied == [(1, "core_identity")]
+        assert applied == [
+            (1, "core_identity"),
+            (2, "memory_tool_requests_and_passkey_authorization"),
+        ]
