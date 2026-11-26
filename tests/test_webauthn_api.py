@@ -486,3 +486,100 @@ def test_passkey_authentication_options_rate_limit_successful_requests(
     assert third.json()["error"]["code"] == "LOGIN_RATE_LIMITED"
     assert len(calls) == 2
 
+
+
+def test_recovery_codes_require_password_and_return_plaintext_once(client):
+    token = register_and_login(client)
+    state = get_app_state()
+    user = state.identity.resolve_token(token)
+
+    rejected = client.post(
+        "/api/v1/auth/passkeys/recovery-codes",
+        headers=headers(token),
+        json={"password": "incorrect-password"},
+    )
+    assert rejected.status_code == 401
+    assert rejected.json()["error"]["code"] == "REAUTHENTICATION_REQUIRED"
+    assert state.webauthn.count_active_recovery_codes(user["id"]) == 0
+
+    issued = client.post(
+        "/api/v1/auth/passkeys/recovery-codes",
+        headers=headers(token),
+        json={"password": "safe-password-123"},
+    )
+    assert issued.status_code == 200
+    body = issued.json()
+    assert len(body["recovery_codes"]) == 10
+    assert len(set(body["recovery_codes"])) == 10
+    assert body["remaining"] == 10
+
+    rows = state.database.connect().execute(
+        """
+        SELECT code_hash FROM webauthn_recovery_codes
+        WHERE user_id = ? AND used_at IS NULL
+        """,
+        (user["id"],),
+    ).fetchall()
+    assert len(rows) == 10
+    stored_hashes = {row["code_hash"] for row in rows}
+    assert stored_hashes.isdisjoint(set(body["recovery_codes"]))
+
+    status = client.get(
+        "/api/v1/auth/passkeys/recovery-codes/status",
+        headers=headers(token),
+    )
+    assert status.status_code == 200
+    assert status.json() == {"remaining": 10}
+    assert "recovery_codes" not in status.json()
+
+
+def test_reissuing_recovery_codes_invalidates_previous_set(client):
+    token = register_and_login(client)
+    state = get_app_state()
+    user = state.identity.resolve_token(token)
+
+    first = client.post(
+        "/api/v1/auth/passkeys/recovery-codes",
+        headers=headers(token),
+        json={"password": "safe-password-123"},
+    )
+    second = client.post(
+        "/api/v1/auth/passkeys/recovery-codes",
+        headers=headers(token),
+        json={"password": "safe-password-123"},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert set(first.json()["recovery_codes"]).isdisjoint(
+        set(second.json()["recovery_codes"])
+    )
+    assert state.webauthn.count_active_recovery_codes(user["id"]) == 10
+
+    rows = state.database.connect().execute(
+        """
+        SELECT used_at FROM webauthn_recovery_codes
+        WHERE user_id = ?
+        """,
+        (user["id"],),
+    ).fetchall()
+    assert len(rows) == 20
+    assert sum(row["used_at"] is not None for row in rows) == 10
+
+
+def test_recovery_code_endpoints_require_authentication_and_reject_extra_fields(client):
+    unauthenticated = client.post(
+        "/api/v1/auth/passkeys/recovery-codes",
+        json={"password": "safe-password-123"},
+    )
+    assert unauthenticated.status_code == 401
+
+    token = register_and_login(client)
+    extra = client.post(
+        "/api/v1/auth/passkeys/recovery-codes",
+        headers=headers(token),
+        json={
+            "password": "safe-password-123",
+            "user_id": "attacker-selected-user",
+        },
+    )
+    assert extra.status_code == 422
