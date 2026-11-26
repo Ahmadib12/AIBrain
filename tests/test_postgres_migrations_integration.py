@@ -831,3 +831,213 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
                 (user_id,),
             )
             connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
+
+
+def test_real_postgres_agent_lifecycle_capability_and_run_guards():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+
+    psycopg = pytest.importorskip("psycopg")
+    assert PostgresMigrationRunner(database_url).migrate() == 18
+    suffix = str(uuid.uuid4())
+    owner = "agent-owner-" + suffix
+    other = "agent-other-" + suffix
+    agent = "agent-" + suffix
+    grant = "grant-" + suffix
+    task = "task-" + suffix
+    run = "run-" + suffix
+    step = "step-" + suffix
+    timestamp = "2026-01-01T00:00:00+00:00"
+    future = "2027-01-01T00:00:00+00:00"
+
+    class RollbackFixture(Exception):
+        pass
+
+    with psycopg.connect(database_url) as connection:
+        try:
+            with connection.transaction():
+                for user_id, email in (
+                    (owner, owner + "@example.invalid"),
+                    (other, other + "@example.invalid"),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO users (
+                            id, email, password_salt, password_hash, created_at
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (user_id, email, "salt", "hash", timestamp),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO agents (
+                        id, user_id, name, metadata_json, status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (agent, owner, "Research agent", "{}", "draft", timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_events (
+                        id, user_id, agent_id, actor_user_id, event_type,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("registered-" + suffix, owner, agent, owner, "registered",
+                     '{"initial_status":"draft"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_events (
+                        id, user_id, agent_id, actor_user_id, event_type,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("activated-" + suffix, owner, agent, owner, "activated",
+                     '{"from_status":"draft","to_status":"active"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agents SET status='active', updated_at=%s WHERE id=%s",
+                    (timestamp, agent),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_capability_grants (
+                        id, user_id, agent_id, capability, expires_at, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (grant, owner, agent, "notes.read", future, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_tasks (
+                        id, user_id, agent_id, title, goal, context_json,
+                        capability_ceiling_json, status, expires_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (task, owner, agent, "Prepare notes", "Research a topic", "{}",
+                     '["notes.read"]', "assigned", future, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_task_events (
+                        id, user_id, task_id, actor_user_id, event_type,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("assigned-" + suffix, owner, task, owner, "assigned",
+                     '{"to_status":"assigned"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_task_events (
+                        id, user_id, task_id, actor_user_id, event_type,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("in-progress-" + suffix, owner, task, owner, "in_progress",
+                     '{"from_status":"assigned","to_status":"in_progress"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agent_tasks SET status='in_progress', updated_at=%s WHERE id=%s",
+                    (timestamp, task),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_messages (
+                        id, user_id, sender_agent_id, recipient_agent_id,
+                        task_id, payload_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("message-" + suffix, owner, agent, agent, task,
+                     '{"kind":"status"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_runs (
+                        id, user_id, agent_id, task_id, actions_json, plan_digest,
+                        status, expires_at, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (run, owner, agent, task, '[{"tool_id":"notes.read"}]',
+                     "a" * 64, "proposed", future, timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_events (
+                        id, user_id, run_id, actor_user_id, event_type,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("authorize-" + suffix, owner, run, owner, "authorized",
+                     '{"from_status":"proposed","to_status":"authorized"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agent_runs SET status='authorized', authorized_at=%s WHERE id=%s",
+                    (timestamp, run),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_steps (
+                        id, user_id, run_id, ordinal, tool_id, arguments_json,
+                        contract_fingerprint, required_capability, status,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (step, owner, run, 0, "notes.read", "{}", "b" * 64,
+                     "notes.read", "pending", timestamp, timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_run_events (
+                        id, user_id, run_id, actor_user_id, event_type,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    ("step-start-" + suffix, owner, run, owner, "step_started",
+                     '{"step_id":"' + step + '"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agent_run_steps SET status='running', updated_at=%s WHERE id=%s",
+                    (timestamp, step),
+                )
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO agent_tasks (
+                                id, user_id, agent_id, title, goal, context_json,
+                                capability_ceiling_json, status, expires_at, created_at, updated_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            ("bad-task-" + suffix, owner, agent, "Escalated",
+                             "Use ungranted capability", "{}", '["calendar.write"]',
+                             "assigned", future, timestamp, timestamp),
+                        )
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            "UPDATE agent_run_steps SET tool_id='tampered' WHERE id=%s",
+                            (step,),
+                        )
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute("DELETE FROM agents WHERE id=%s", (agent,))
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO agent_capability_grants (
+                                id, user_id, agent_id, capability, created_at
+                            ) VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            ("foreign-grant-" + suffix, other, agent, "notes.read", timestamp),
+                        )
+                raise RollbackFixture()
+        except RollbackFixture:
+            pass
