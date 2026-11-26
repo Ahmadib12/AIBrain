@@ -136,4 +136,5 @@ def test_recovery_api_returns_503_instead_of_bypassing_shared_limits():
             },
         )
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "DEVICE_RECOVERY_PROTECTION_UNAVAILABLE"
+    assert response.json()["error"]["code"] == "DEVICE_RECOVERY_PROTECTION_UNAVAILABLE"
+    assert response.json()["error"]["message"] == "Device recovery is temporarily unavailable"
