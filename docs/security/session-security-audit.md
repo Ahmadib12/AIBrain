@@ -171,3 +171,20 @@ Redrive is atomic, resets the delivery attempt counter, clears terminal failure 
 Recovery challenge rate limiting now uses an atomic fixed-window counter in the application database rather than a process-local memory limiter. The monitor atomically enforces both account-level and source-IP fixed-window limits using SHA-256 digests; changing device IDs does not bypass the account-level limit, and raw emails/IP addresses are not stored. The source IP is the direct peer address, not an untrusted forwarded header. Processes sharing the same SQLite database file coordinate their counters. This is cross-process protection on a shared database file, not cross-host distributed protection. The current persistence layer supports SQLite only; a production multi-host deployment still needs a shared network database or dedicated Redis/PostgreSQL rate-limit backend and separate network-edge controls.
 
 The SMTP integration smoke test is opt-in and must be pointed at a dedicated test mailbox or SMTP sandbox using `AIBRAIN_SMTP_INTEGRATION=1` and `AIBRAIN_SECURITY_NOTIFICATION_SMTP_TEST_RECIPIENT`. It is intentionally skipped in ordinary test runs. No real provider credentials or recipient are committed.
+
+
+#### Distributed recovery-abuse backend
+
+SQLite remains the default for local development and single-host deployments. Multi-host deployments can select the shared Redis backend with:
+
+- `AIBRAIN_SECURITY_RECOVERY_ABUSE_BACKEND=redis`
+- `AIBRAIN_SECURITY_RECOVERY_ABUSE_REDIS_URL` using `redis://` or `rediss://`
+- `AIBRAIN_SECURITY_RECOVERY_ABUSE_HMAC_KEY` (stable secret of at least 32 UTF-8 bytes shared by every application instance)
+- `AIBRAIN_SECURITY_RECOVERY_ABUSE_REDIS_KEY_PREFIX` (optional namespace; default `aibrain:recovery-abuse:v1`)
+- `AIBRAIN_SECURITY_RECOVERY_ABUSE_REDIS_TIMEOUT_SECONDS` (default 2 seconds)
+
+The Redis implementation uses one Lua script to increment the account and direct-peer-IP fixed-window counters atomically. It uses HMAC-SHA256 with a deployment secret and domain-separated account/IP inputs; Redis keys do not reveal raw email addresses or IP addresses. Aggregate counters are retained for a bounded three-window period. Redis TLS is supported through `rediss://`; production deployments should use TLS, ACL credentials, network restrictions, and a managed secret store.
+
+When Redis is selected, AIBrain does not fall back to SQLite or process-local counters if Redis is unavailable. Recovery challenge creation returns a generic 503 and does not proceed. This is deliberate: silently falling back would let individual application instances bypass the shared limit. The Redis client uses bounded connect/read timeouts and is closed with application state.
+
+The Redis monitor's atomic behavior, shared-client coordination, account and IP limits, identifier confidentiality, and fail-closed error path have unit tests using a shared in-memory Redis test server. These tests do not replace a deployment-level test against the actual managed Redis service, TLS configuration, ACLs, failover, or network topology. Production distributed protection is only active after the Redis backend and the same high-entropy HMAC secret are configured on every application instance. Network-edge rate limiting remains a separate defense-in-depth requirement.
