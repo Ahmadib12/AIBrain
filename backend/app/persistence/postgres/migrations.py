@@ -1845,7 +1845,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="integration_connections_grants_and_events",
         sql="""
         CREATE OR REPLACE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF current_setting('aibrain.account_erasure_user_id', true)
                     IS DISTINCT FROM OLD.user_id
@@ -1858,9 +1858,9 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE FUNCTION aibrain_mark_account_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF OLD.deleted_at IS NULL THEN
                 RAISE EXCEPTION 'account must be soft-deleted before erasure'
@@ -1869,7 +1869,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             PERFORM set_config('aibrain.account_erasure_user_id', OLD.id, true);
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER mark_account_erasure_before_user_delete
             BEFORE DELETE ON users
             FOR EACH ROW EXECUTE FUNCTION aibrain_mark_account_erasure();
