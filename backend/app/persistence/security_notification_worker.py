@@ -28,6 +28,7 @@ class SecurityNotificationDeliveryWorker:
                 self.repository.renew_claim,
                 notification_id,
                 lease_seconds=self.lease_seconds,
+                claim_token=notification.get("claim_token"),
             )
             if not renewed:
                 logger.warning("Security notification claim expired before delivery")
@@ -45,13 +46,18 @@ class SecurityNotificationDeliveryWorker:
                         self.repository.release_for_retry,
                         notification_id,
                         delay_seconds=delay,
+                        claim_token=notification.get("claim_token"),
                     )
                 except Exception:
                     logger.error("Security notification retry scheduling failed")
                 else:
                     logger.warning("Security notification delivery attempt failed; queue state updated")
                 continue
-            marked = await asyncio.to_thread(self.repository.mark_delivered, notification_id)
+            marked = await asyncio.to_thread(
+                self.repository.mark_delivered,
+                notification_id,
+                claim_token=notification.get("claim_token"),
+            )
             if marked:
                 delivered += 1
             else:
