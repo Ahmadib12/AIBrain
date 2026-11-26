@@ -211,3 +211,63 @@ These tests validate SQLite process coordination and lease recovery. They do
 not establish cross-host SQLite suitability, prevent duplicate SMTP delivery
 after an ambiguous provider acknowledgement, or replace a production
 multi-instance test against the selected database and SMTP provider.
+
+
+
+## Controlled SMTP provider integration workflow
+
+A real SMTP smoke test can be run manually through the GitHub Actions workflow
+`.github/workflows/smtp-integration.yml`. Configure a GitHub Environment named
+`smtp-integration` and add these environment secrets there:
+
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_HOST`
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_USERNAME` (omit only when the relay does not require authentication)
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_PASSWORD` (omit only when the relay does not require authentication)
+- `AIBRAIN_SECURITY_NOTIFICATION_SENDER`
+- `AIBRAIN_SECURITY_NOTIFICATION_SMTP_TEST_RECIPIENT` (a dedicated controlled mailbox or provider sandbox recipient)
+
+The workflow is manual-only and binds to the protected GitHub Environment so its
+approval rules can be used before sending. It performs the real STARTTLS SMTP
+smoke test and does not print configuration values. Do not use a personal or
+production customer mailbox. A successful run proves provider acceptance of a
+single controlled test message; it does not prove inbox placement, end-user
+delivery, bounce processing, or exactly-once semantics.
+
+## Production multi-instance deployment gate
+
+The current persistence implementation is SQLite-based. Redis shares the
+recovery-abuse counters across application processes, but it does not make the
+SQLite notification outbox, device/session state, or other application records
+safe for independent hosts with separate local database files. SQLite on a
+single shared filesystem is not a supported substitute for a network database
+under multi-host write load. Therefore AIBrain must not currently be described
+as production-validated for horizontally scaled, multi-host deployment.
+
+Before that deployment can be validated, the persistence layer must gain a
+supported shared network database backend (including migrations, transaction
+semantics, uniqueness/locking guarantees, and repository parity), and the
+notification outbox, claim leases, device recovery, session lifecycle, and
+security audit writes must all use that same shared transactional database.
+The Redis abuse backend must be configured identically across instances with a
+stable high-entropy HMAC secret, TLS, ACLs, network restrictions, and monitored
+availability. All instances must use the same SMTP relay policy and bounded
+timeouts. Redis Cluster remains unsupported by the current standard Redis
+client factory.
+
+The production acceptance exercise must then run at least two separately
+hosted application instances against the same supported database and Redis
+service. It must verify: one-time recovery-code consumption under concurrent
+requests; account and source-IP limits across instances; one notification claim
+per outbox event; lease reclamation after forcibly terminating a worker;
+operator redrive audit consistency; database failover/reconnect behavior;
+Redis outage fail-closed behavior; and SMTP acceptance/retry behavior after
+worker termination at each delivery boundary. Capture sanitized test evidence,
+metrics, and logs without credentials, raw account identifiers, recovery
+codes, tokens, or message bodies.
+
+Current status: local SQLite multi-process notification tests pass, and the
+Redis service integration is being added to CI. The real SMTP workflow is
+available for a controlled provider run. The shared network database backend
+and the above deployed multi-host acceptance exercise are not implemented or
+verified; this is an explicit production deployment blocker, not a test that
+can be made green by adding Redis alone.
