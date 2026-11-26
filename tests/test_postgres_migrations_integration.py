@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 11
-    assert runner.migrate() == 11
+    assert runner.migrate() == 13
+    assert runner.migrate() == 13
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -25,6 +25,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
     challenge_id = "challenge-" + user_id
     recovery_id = "recovery-" + user_id
     authorization_id = "authorization-" + user_id
+    consent_id = "consent-" + user_id
     timestamp = "2026-01-01T00:00:00+00:00"
 
     with psycopg.connect(database_url) as connection:
@@ -55,13 +56,22 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             )
             connection.execute(
                 """
+                INSERT INTO memory_consents (
+                    id, user_id, purpose, policy_version, retention_days,
+                    granted_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (consent_id, user_id, "personal_memory", 1, 365, timestamp),
+            )
+            connection.execute(
+                """
                 INSERT INTO memory_items (
                     id, user_id, memory_type, key, value_json, source,
-                    confidence, status, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    confidence, status, created_at, updated_at, consent_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 ("memory-" + user_id, user_id, "preference", "theme", '"dark"',
-                 "user", 1.0, "active", timestamp, timestamp),
+                 "user", 1.0, "active", timestamp, timestamp, consent_id),
             )
             connection.execute(
                 """
@@ -237,6 +247,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             connection.execute("DELETE FROM adaptations WHERE id=%s", ("adaptation-" + user_id,))
             connection.execute("DELETE FROM observations WHERE id=%s", ("observation-" + user_id,))
             connection.execute("DELETE FROM memory_items WHERE id=%s", ("memory-" + user_id,))
+            connection.execute("DELETE FROM memory_consents WHERE id=%s", (consent_id,))
             connection.execute("DELETE FROM sessions WHERE token_hash=%s", ("token-" + user_id,))
             connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
             connection.execute("DELETE FROM users WHERE id=%s", (deleted_user_id,))
@@ -256,6 +267,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (9, "tool_dispatch_lookup_authorizations"),
             (10, "dispatch_audit_recovery_and_lookup_erasure_guards"),
             (11, "tool_execution_reconciliation_events"),
+            (12, "memory_consent_lifecycle_and_memory_binding"),
+            (13, "learning_adaptation_events_and_evaluations"),
         ]
 
 
@@ -267,7 +280,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 11
+    assert runner.migrate() == 13
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -411,7 +424,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 11
+    assert runner.migrate() == 13
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
