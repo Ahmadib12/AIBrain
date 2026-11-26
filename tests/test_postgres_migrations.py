@@ -21,6 +21,14 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "aibrain_require_active_owner" in MIGRATIONS[1].sql
     assert "AS $" in MIGRATIONS[1].sql
     assert MIGRATIONS[2].version == 3
+    assert MIGRATIONS[3].version == 4
+    assert "CREATE TABLE external_adapter_certifications" in MIGRATIONS[3].sql
+    assert MIGRATIONS[4].version == 5
+    assert "CREATE TABLE external_adapter_evidence_packages" in MIGRATIONS[4].sql
+    assert MIGRATIONS[5].version == 6
+    assert "CREATE TABLE trusted_runner_keys" in MIGRATIONS[5].sql
+    assert MIGRATIONS[6].version == 7
+    assert "CREATE TABLE security_operator_audit_events" in MIGRATIONS[6].sql
     assert "CREATE TABLE tool_execution_attempts" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_execution_bindings" in MIGRATIONS[2].sql
     assert "CREATE TABLE tool_dispatch_audit_events" in MIGRATIONS[2].sql
