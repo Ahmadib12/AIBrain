@@ -3373,7 +3373,7 @@ created_at TEXT NOT NULL,
                       )
                  )
                 BEGIN
-                    SELECT RAISE(ABORT, 'device key replacement requires verified rotation or recovery');
+                    SELECT RAISE(ABORT, 'device key replacement requires verified rotation');
                 END;
                 """
             ),
