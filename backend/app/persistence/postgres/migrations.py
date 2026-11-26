@@ -2721,7 +2721,6 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         sql="""
         ALTER TABLE sessions ADD COLUMN audit_ref TEXT;
         UPDATE sessions SET audit_ref=gen_random_uuid()::text WHERE audit_ref IS NULL;
-        ALTER TABLE sessions ALTER COLUMN audit_ref SET NOT NULL;
         CREATE UNIQUE INDEX idx_sessions_audit_ref ON sessions(audit_ref);
 
         CREATE TABLE session_security_events (
