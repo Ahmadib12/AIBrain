@@ -31,8 +31,7 @@ and immutable run history (SQLite migrations 23–27). PostgreSQL migrations
 19–22 now port integration connections, owner-scoped grants and event history,
 credential-vault lifecycle and terminal secret erasure, agent-run integration
 bindings, and event-gated dispatch transitions (SQLite migrations 28–31).
-PostgreSQL migrations 27–30 now port SQLite migrations 36–39: append-only device-security history, atomic device/session audit, immutable device identity and keys, monotonic device lifecycle, and immutable session/device authentication binding. PostgreSQL migrations 31–35 now port SQLite migrations 40–44: session audit history, proof-bound device key rotation, recovery-code-authorized rotation, recovery notification outbox, and dead-letter state. PostgreSQL still lacks SQLite migration 45, complete repository
-compatibility, and shared multi-instance acceptance. The
+PostgreSQL migrations 27–30 now port SQLite migrations 36–39: append-only device-security history, atomic device/session audit, immutable device identity and keys, monotonic device lifecycle, and immutable session/device authentication binding. PostgreSQL migrations 31–36 now port SQLite migrations 40–45: session audit history, proof-bound device key rotation, recovery-code-authorized rotation, recovery notification outbox, dead-letter state, operator redrive audit, claim-token fencing, and recovery-abuse windows. Complete repository compatibility and shared multi-instance acceptance remain outstanding. The
 stream must not be described as schema-complete or application-ready until
 every required invariant below is ported and tested.
 
@@ -49,7 +48,7 @@ every required invariant below is ported and tested.
 | 32–35 | Capability-table transition and device/session schema evolution (PostgreSQL migrations 23–26) |
 | 36–39 | Device security audit, device lifecycle guards, session/device binding (PostgreSQL migrations 27–30) |\n| 40–42 | Session audit, key rotation and lost-device recovery (PostgreSQL migrations 31–33) |
 | 43–44 | Recovery notification outbox and dead-letter state (PostgreSQL migrations 34–35) |
-| 45 | Notification operator redrive and abuse-window persistence | Recovery notification outbox, terminal failure/dead-letter state, operator redrive audit, claim fencing, recovery-abuse windows |
+| 45 | Notification operator redrive and abuse-window persistence (PostgreSQL migration 36) | Recovery notification outbox, terminal failure/dead-letter state, operator redrive audit, claim fencing, recovery-abuse windows |
 
 The exact SQL in each numbered SQLite migration remains authoritative; the
 domain grouping above is a navigation aid, not a substitute for migration
