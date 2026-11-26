@@ -1844,6 +1844,36 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         version=19,
         name="integration_connections_grants_and_events",
         sql="""
+        CREATE OR REPLACE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF current_setting('aibrain.account_erasure_user_id', true)
+                    IS DISTINCT FROM OLD.user_id
+               AND NOT EXISTS (
+                    SELECT 1 FROM users
+                    WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+               ) THEN
+                RAISE EXCEPTION 'owned records may only be deleted during account erasure'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN OLD;
+        END;
+        $;
+        CREATE FUNCTION aibrain_mark_account_erasure()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF OLD.deleted_at IS NULL THEN
+                RAISE EXCEPTION 'account must be soft-deleted before erasure'
+                    USING ERRCODE='23514';
+            END IF;
+            PERFORM set_config('aibrain.account_erasure_user_id', OLD.id, true);
+            RETURN OLD;
+        END;
+        $;
+        CREATE TRIGGER mark_account_erasure_before_user_delete
+            BEFORE DELETE ON users
+            FOR EACH ROW EXECUTE FUNCTION aibrain_mark_account_erasure();
+
         CREATE TABLE integration_connections (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
