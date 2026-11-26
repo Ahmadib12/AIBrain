@@ -160,6 +160,40 @@ def test_lost_device_recovery_consumes_code_and_requires_new_key_proof(client):
     assert event is not None
     assert '"recovery":true' in event["details_json"]
 
+    # The database trigger enqueues a minimal notification atomically with
+    # the recovery audit event; no recovery factor or key material is copied.
+    queued = state.database.connect().execute(
+        """
+        SELECT id, event_id, recipient_email, notification_type,
+               payload_json, status, attempts
+        FROM security_notification_outbox WHERE event_id=(
+            SELECT id FROM device_security_events
+            WHERE user_id=? AND device_id=? AND event_type='device.key_rotated'
+            ORDER BY occurred_at DESC LIMIT 1
+        )
+        """,
+        (owner["id"], device_id),
+    ).fetchone()
+    assert queued is not None
+    assert queued["recipient_email"] == email
+    assert queued["notification_type"] == "device.recovery.completed"
+    assert queued["status"] == "pending"
+    assert queued["attempts"] == 0
+    assert codes[0] not in queued["payload_json"]
+    assert "fingerprint" not in queued["payload_json"]
+    claimed = state.security_notifications.claim_batch(limit=5)
+    assert len(claimed) == 1
+    assert claimed[0]["id"] == queued["id"]
+    assert claimed[0]["attempts"] == 1
+    assert state.security_notifications.mark_delivered(queued["id"]) is True
+    assert state.security_notifications.mark_delivered(queued["id"]) is False
+    delivered = state.database.connect().execute(
+        "SELECT status, delivered_at FROM security_notification_outbox WHERE id=?",
+        (queued["id"],),
+    ).fetchone()
+    assert delivered["status"] == "delivered"
+    assert delivered["delivered_at"] is not None
+
     replay = client.post(
         f"/api/v1/devices/{device_id}/recovery/verify",
         params={"challenge_id": data["challenge_id"]},
