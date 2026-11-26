@@ -846,8 +846,8 @@ def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
         "AND name='prevent_device_key_rotation_without_proof'"
     ).fetchone()["sql"]
     assert "recovery_code_id" in recovery_guard
-    assert "web_authn_recovery_codes" not in recovery_guard
     assert "webauthn_recovery_codes" in recovery_guard
+    assert "r.used_at IS NOT NULL" in recovery_guard
     assert "prevent_device_security_event_update" in trigger_names
     assert "prevent_device_security_event_delete" in trigger_names
     assert "audit_device_enrollment" in trigger_names
