@@ -1178,7 +1178,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         name="agent_identity_and_registration_events",
         sql="""
         CREATE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
@@ -1188,7 +1188,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
 
         CREATE TABLE agents (
             id TEXT PRIMARY KEY,
