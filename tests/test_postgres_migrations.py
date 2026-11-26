@@ -47,7 +47,24 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE learning_adaptation_events" in MIGRATIONS[12].sql
     assert "CREATE TABLE learning_evaluations" in MIGRATIONS[12].sql
     assert "validate_learning_adaptation_transition" in MIGRATIONS[12].sql
-    for migration in MIGRATIONS[1:13]:
+    assert MIGRATIONS[13].version == 14
+    assert "CREATE TABLE agents" in MIGRATIONS[13].sql
+    assert "agent_events" in MIGRATIONS[13].sql
+    assert MIGRATIONS[14].version == 15
+    assert "validate_agent_status_transition" in MIGRATIONS[14].sql
+    assert MIGRATIONS[15].version == 16
+    assert "CREATE TABLE agent_capability_grants" in MIGRATIONS[15].sql
+    assert "CREATE TABLE agent_tasks" in MIGRATIONS[15].sql
+    assert "CREATE TABLE agent_messages" in MIGRATIONS[15].sql
+    assert "capability ceiling exceeds active grants" in MIGRATIONS[15].sql
+    assert MIGRATIONS[16].version == 17
+    assert "task event transition mismatch" in MIGRATIONS[16].sql
+    assert "task definition is immutable" in MIGRATIONS[16].sql
+    assert MIGRATIONS[17].version == 18
+    assert "CREATE TABLE agent_runs" in MIGRATIONS[17].sql
+    assert "CREATE TABLE agent_run_steps" in MIGRATIONS[17].sql
+    assert "validate_agent_run_step_status_transition" in MIGRATIONS[17].sql
+    for migration in MIGRATIONS[1:18]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
