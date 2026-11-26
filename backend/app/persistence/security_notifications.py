@@ -70,6 +70,21 @@ class SecurityNotificationOutbox:
                 claimed.append(dict(item))
         return tuple(claimed)
 
+    def renew_claim(self, notification_id: str, *, lease_seconds: int = 600) -> bool:
+        if not 1 <= lease_seconds <= 3_600:
+            raise ValueError("Notification lease bounds are invalid")
+        now = _now().isoformat()
+        with self.database.transaction(immediate=True):
+            cursor = self.database.connect().execute(
+                """
+                UPDATE security_notification_outbox
+                SET claimed_at=?
+                WHERE id=? AND status='processing'
+                """,
+                (now, notification_id),
+            )
+            return cursor.rowcount == 1
+
     def mark_delivered(self, notification_id: str) -> bool:
         now = _now().isoformat()
         with self.database.transaction(immediate=True):
