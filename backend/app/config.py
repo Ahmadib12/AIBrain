@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     conformance_suite_expected_version: str | None = None
     login_rate_limit_attempts: int = Field(default=5, gt=0)
     login_rate_limit_window_seconds: int = Field(default=300, gt=0)
+    security_recovery_abuse_backend: str = "sqlite"
+    security_recovery_abuse_redis_url: SecretStr | None = Field(default=None, repr=False)
+    security_recovery_abuse_hmac_key: SecretStr | None = Field(default=None, repr=False)
+    security_recovery_abuse_redis_key_prefix: str = "aibrain:recovery-abuse:v1"
+    security_recovery_abuse_redis_timeout_seconds: float = Field(default=2.0, gt=0, le=10)
 
     tool_execution_recovery_interval_seconds: int = Field(default=60, gt=0)
     tool_execution_stale_after_seconds: int = Field(default=300, gt=0)
@@ -61,6 +66,29 @@ class Settings(BaseSettings):
     webauthn_rp_name: str = "AIBrain"
     webauthn_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ()
     webauthn_challenge_ttl_seconds: int = Field(default=300, gt=0)
+
+    @model_validator(mode="after")
+    def validate_security_recovery_abuse(self):
+        backend = self.security_recovery_abuse_backend
+        if backend not in {"sqlite", "redis"}:
+            raise ValueError("Security recovery abuse backend must be sqlite or redis")
+        redis_url = self.security_recovery_abuse_redis_url
+        hmac_key = self.security_recovery_abuse_hmac_key
+        if backend == "redis":
+            if redis_url is None or hmac_key is None:
+                raise ValueError("Redis recovery abuse protection requires a Redis URL and HMAC key")
+            parsed = urlsplit(redis_url.get_secret_value())
+            if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+                raise ValueError("Recovery abuse Redis URL must use redis:// or rediss://")
+            if len(hmac_key.get_secret_value().encode("utf-8")) < 32:
+                raise ValueError("Recovery abuse HMAC key must contain at least 32 bytes")
+        if (
+            not self.security_recovery_abuse_redis_key_prefix
+            or len(self.security_recovery_abuse_redis_key_prefix) > 128
+            or any(ch.isspace() for ch in self.security_recovery_abuse_redis_key_prefix)
+        ):
+            raise ValueError("Recovery abuse Redis key prefix is invalid")
+        return self
 
     @model_validator(mode="after")
     def validate_security_notification_smtp(self):
