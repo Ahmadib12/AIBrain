@@ -13,9 +13,9 @@ class SecurityNotificationDeliveryWorker:
         self.transport = transport
         self.interval_seconds = interval_seconds
         self.batch_size = batch_size
-        # The batch is sent sequentially; reserve enough lease time for every
-        # SMTP call at the configured 60-second transport timeout.
-        self.lease_seconds = max(300, batch_size * 65)
+        # Claims are renewed immediately before each send. The 10-minute
+        # per-message lease exceeds the bounded SMTP operation timeout. 
+        self.lease_seconds = 600
         self._task: asyncio.Task | None = None
         self._stop_event: asyncio.Event | None = None
 
@@ -24,6 +24,14 @@ class SecurityNotificationDeliveryWorker:
         delivered = 0
         for notification in batch:
             notification_id = notification["id"]
+            renewed = await asyncio.to_thread(
+                self.repository.renew_claim,
+                notification_id,
+                lease_seconds=self.lease_seconds,
+            )
+            if not renewed:
+                logger.warning("Security notification claim expired before delivery")
+                continue
             try:
                 await asyncio.to_thread(self.transport.send, notification)
             except asyncio.CancelledError:
