@@ -3517,6 +3517,11 @@ created_at TEXT NOT NULL,
                 ALTER TABLE security_notification_outbox
                     ADD COLUMN redrive_count INTEGER NOT NULL DEFAULT 0
                     CHECK (redrive_count >= 0);
+                ALTER TABLE security_notification_outbox
+                    ADD COLUMN claim_token TEXT;
+                CREATE UNIQUE INDEX idx_security_notification_claim_token
+                    ON security_notification_outbox(claim_token)
+                    WHERE claim_token IS NOT NULL;
 
                 CREATE TABLE security_notification_operator_events (
                     id TEXT PRIMARY KEY,
