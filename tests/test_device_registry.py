@@ -925,7 +925,8 @@ def test_device_key_rotation_rejects_direct_key_mutation(client: TestClient) -> 
             state.database.connect().execute(
                 "UPDATE devices SET public_key_fingerprint=? WHERE id=?",
                 ("b" * 64, device["device_id"]),
-            )\n
+            )
+
 
 def test_device_key_rotation_rejects_challenge_bound_to_previous_key_version(
     client: TestClient,
