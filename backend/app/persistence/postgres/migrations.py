@@ -1840,6 +1840,509 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         """,
     ),
 
+    PostgresMigration(
+        version=19,
+        name="integration_connections_grants_and_events",
+        sql="""
+        CREATE TABLE integration_connections (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            integration_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN
+                ('pending_verification','active','revoked','expired','disconnected')),
+            consent_version TEXT NOT NULL,
+            consented_at TEXT NOT NULL,
+            verified_at TEXT,
+            expires_at TEXT,
+            secret_ref TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(id,user_id)
+        );
+        CREATE INDEX idx_integration_connections_owner
+            ON integration_connections(user_id,status,created_at);
+        CREATE TABLE integration_connection_grants (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            connection_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending','active','revoked','expired')),
+            expires_at TEXT,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(connection_id,user_id)
+                REFERENCES integration_connections(id,user_id) ON DELETE CASCADE,
+            UNIQUE(connection_id,scope)
+        );
+        CREATE INDEX idx_integration_grants_owner
+            ON integration_connection_grants(user_id,connection_id,status,scope);
+        CREATE TABLE integration_connection_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            connection_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb)='object'),
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(connection_id,user_id)
+                REFERENCES integration_connections(id,user_id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_integration_connection_events_owner
+            ON integration_connection_events(user_id,connection_id,created_at,id);
+        CREATE FUNCTION aibrain_validate_integration_connection_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users u WHERE u.id=NEW.user_id AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'integration connection requires active owner'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_integration_connection_insert
+            BEFORE INSERT ON integration_connections
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_connection_insert();
+        CREATE FUNCTION aibrain_require_verified_integration_activation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status='active' AND
+               (NEW.verified_at IS NULL OR NEW.secret_ref IS NULL
+                OR length(btrim(NEW.secret_ref))=0) THEN
+                RAISE EXCEPTION 'integration activation requires trusted verification and secret reference'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER require_verified_integration_activation
+            BEFORE UPDATE OF status ON integration_connections
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_verified_integration_activation();
+        CREATE FUNCTION aibrain_validate_integration_grant_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM integration_connections c
+                JOIN users u ON u.id=c.user_id
+                WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'integration grant owner mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_integration_grant_insert
+            BEFORE INSERT ON integration_connection_grants
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_grant_insert();
+        CREATE FUNCTION aibrain_require_active_connection_for_active_grant()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status='active' AND NOT EXISTS (
+                SELECT 1 FROM integration_connections c
+                WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                  AND c.status='active'
+            ) THEN
+                RAISE EXCEPTION 'active integration grant requires active connection'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER require_active_connection_for_active_grant
+            BEFORE UPDATE OF status ON integration_connection_grants
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_connection_for_active_grant();
+        CREATE FUNCTION aibrain_reject_integration_grant_scope_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.connection_id IS DISTINCT FROM OLD.connection_id
+               OR NEW.scope IS DISTINCT FROM OLD.scope
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'integration grant definition is immutable'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_integration_grant_scope_update
+            BEFORE UPDATE ON integration_connection_grants
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_integration_grant_scope_update();
+        CREATE FUNCTION aibrain_validate_integration_connection_event_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM integration_connections c
+                JOIN users u ON u.id=c.user_id
+                WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                  AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'integration connection event owner mismatch'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_integration_connection_event_insert
+            BEFORE INSERT ON integration_connection_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_connection_event_insert();
+        CREATE TRIGGER prevent_integration_connection_event_update
+            BEFORE UPDATE ON integration_connection_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_integration_connection_event_delete
+            BEFORE DELETE ON integration_connection_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
+        """,
+    ),
+    PostgresMigration(
+        version=20,
+        name="integration_secret_vault_and_terminal_erasure",
+        sql="""
+        CREATE TABLE integration_secrets (
+            secret_ref TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            integration_id TEXT NOT NULL,
+            nonce BYTEA NOT NULL CHECK (octet_length(nonce)=12),
+            ciphertext BYTEA NOT NULL CHECK (octet_length(ciphertext)>=16),
+            key_version INTEGER NOT NULL CHECK (key_version>=1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(connection_id,user_id)
+                REFERENCES integration_connections(id,user_id) ON DELETE CASCADE,
+            UNIQUE(connection_id)
+        );
+        CREATE INDEX idx_integration_secrets_owner
+            ON integration_secrets(user_id,connection_id);
+        CREATE OR REPLACE FUNCTION aibrain_require_verified_integration_activation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status='active' AND (
+                NEW.verified_at IS NULL OR NEW.secret_ref IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM integration_secrets s
+                    WHERE s.secret_ref=NEW.secret_ref
+                      AND s.user_id=NEW.user_id
+                      AND s.connection_id=NEW.id
+                      AND s.integration_id=NEW.integration_id
+                )
+            ) THEN
+                RAISE EXCEPTION 'integration activation requires verified vault credentials'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE OR REPLACE FUNCTION aibrain_validate_integration_secret_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM integration_connections c
+                JOIN users u ON u.id=c.user_id
+                WHERE c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                  AND c.integration_id=NEW.integration_id
+                  AND c.status='pending_verification' AND u.deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'vault secret requires matching pending owner connection'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_integration_secret_insert
+            BEFORE INSERT ON integration_secrets
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_secret_insert();
+        CREATE FUNCTION aibrain_reject_integration_secret_identity_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.secret_ref IS DISTINCT FROM OLD.secret_ref
+               OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.connection_id IS DISTINCT FROM OLD.connection_id
+               OR NEW.integration_id IS DISTINCT FROM OLD.integration_id
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'vault secret identity is immutable'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_integration_secret_identity_update
+            BEFORE UPDATE ON integration_secrets
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_integration_secret_identity_update();
+        CREATE FUNCTION aibrain_validate_integration_secret_delete()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+            ) AND NOT EXISTS (
+                SELECT 1 FROM integration_connections c
+                WHERE c.id=OLD.connection_id AND c.user_id=OLD.user_id
+                  AND c.status IN ('revoked','disconnected','expired')
+            ) THEN
+                RAISE EXCEPTION 'vault secrets may only be deleted during revocation or account erasure'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN OLD;
+        END;
+        $;
+        CREATE TRIGGER prevent_integration_secret_delete
+            BEFORE DELETE ON integration_secrets
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_integration_secret_delete();
+        CREATE FUNCTION aibrain_erase_integration_secret_on_terminal_connection()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status IN ('revoked','disconnected','expired')
+               AND OLD.status IS DISTINCT FROM NEW.status THEN
+                DELETE FROM integration_secrets
+                WHERE connection_id=NEW.id AND user_id=NEW.user_id;
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER erase_integration_secret_on_terminal_connection
+            AFTER UPDATE OF status ON integration_connections
+            FOR EACH ROW EXECUTE FUNCTION aibrain_erase_integration_secret_on_terminal_connection();
+        """,
+    ),
+    PostgresMigration(
+        version=21,
+        name="agent_run_integration_bindings",
+        sql="""
+        CREATE TABLE agent_run_integration_bindings (
+            step_id TEXT PRIMARY KEY REFERENCES agent_run_steps(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            integration_id TEXT NOT NULL,
+            manifest_version TEXT NOT NULL,
+            tool_id TEXT NOT NULL,
+            contract_fingerprint TEXT NOT NULL CHECK (length(contract_fingerprint)=64),
+            required_scopes_json TEXT NOT NULL
+                CHECK (jsonb_typeof(required_scopes_json::jsonb)='array'),
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(connection_id,user_id)
+                REFERENCES integration_connections(id,user_id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_agent_run_integration_bindings_owner
+            ON agent_run_integration_bindings(user_id,run_id,step_id);
+        CREATE FUNCTION aibrain_validate_agent_run_integration_binding()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE requested_scope TEXT;
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM agent_run_steps s
+                JOIN agent_runs r ON r.id=s.run_id AND r.user_id=s.user_id
+                JOIN integration_connections c
+                  ON c.id=NEW.connection_id AND c.user_id=NEW.user_id
+                JOIN users u ON u.id=NEW.user_id
+                WHERE s.id=NEW.step_id AND s.user_id=NEW.user_id
+                  AND s.run_id=NEW.run_id AND r.status='proposed'
+                  AND s.status='pending' AND u.deleted_at IS NULL
+                  AND c.integration_id=NEW.integration_id AND c.status='active'
+                  AND (c.expires_at IS NULL OR c.expires_at>NEW.created_at)
+                  AND s.tool_id=NEW.tool_id
+                  AND s.contract_fingerprint=NEW.contract_fingerprint
+            ) THEN
+                RAISE EXCEPTION 'integration binding requires matching proposed run, step, and active owner connection'
+                    USING ERRCODE='23514';
+            END IF;
+            IF jsonb_typeof(NEW.required_scopes_json::jsonb) <> 'array'
+               OR jsonb_array_length(NEW.required_scopes_json::jsonb)=0 THEN
+                RAISE EXCEPTION 'integration binding requires exact active owner-granted scopes'
+                    USING ERRCODE='23514';
+            END IF;
+            FOR requested_scope IN
+                SELECT jsonb_array_elements_text(NEW.required_scopes_json::jsonb)
+            LOOP
+                IF NOT EXISTS (
+                    SELECT 1 FROM integration_connection_grants g
+                    WHERE g.user_id=NEW.user_id AND g.connection_id=NEW.connection_id
+                      AND g.scope=requested_scope AND g.status='active'
+                      AND g.revoked_at IS NULL
+                      AND (g.expires_at IS NULL OR g.expires_at>NEW.created_at)
+                ) THEN
+                    RAISE EXCEPTION 'integration binding requires exact active owner-granted scopes'
+                        USING ERRCODE='23514';
+                END IF;
+            END LOOP;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_integration_binding_insert
+            BEFORE INSERT ON agent_run_integration_bindings
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_integration_binding();
+        CREATE TRIGGER prevent_agent_run_integration_binding_update
+            BEFORE UPDATE ON agent_run_integration_bindings
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
+        CREATE TRIGGER prevent_agent_run_integration_binding_delete
+            BEFORE DELETE ON agent_run_integration_bindings
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
+        """,
+    ),
+    PostgresMigration(
+        version=22,
+        name="agent_run_integration_dispatch_lifecycle",
+        sql="""
+        CREATE TABLE agent_run_integration_dispatches (
+            step_id TEXT PRIMARY KEY REFERENCES agent_run_steps(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            integration_id TEXT NOT NULL,
+            tool_id TEXT NOT NULL,
+            contract_fingerprint TEXT NOT NULL CHECK (length(contract_fingerprint)=64),
+            status TEXT NOT NULL CHECK (status IN
+                ('prepared','dispatch_started','succeeded','failed','outcome_unknown')),
+            dispatch_started_at TEXT,
+            finished_at TEXT,
+            outcome_json TEXT CHECK (outcome_json IS NULL OR jsonb_typeof(outcome_json::jsonb) IS NOT NULL),
+            error_code TEXT CHECK (error_code IS NULL OR
+                (length(error_code) BETWEEN 1 AND 64 AND error_code !~ '[^A-Z0-9_]')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(connection_id,user_id)
+                REFERENCES integration_connections(id,user_id) ON DELETE CASCADE,
+            CHECK (
+                (status='prepared' AND dispatch_started_at IS NULL
+                    AND finished_at IS NULL AND outcome_json IS NULL AND error_code IS NULL)
+                OR
+                (status='dispatch_started' AND dispatch_started_at IS NOT NULL
+                    AND finished_at IS NULL AND outcome_json IS NULL AND error_code IS NULL)
+                OR
+                (status='succeeded' AND dispatch_started_at IS NOT NULL
+                    AND finished_at IS NOT NULL AND outcome_json IS NOT NULL AND error_code IS NULL)
+                OR
+                (status IN ('failed','outcome_unknown') AND dispatch_started_at IS NOT NULL
+                    AND finished_at IS NOT NULL AND outcome_json IS NULL AND error_code IS NOT NULL)
+            )
+        );
+        CREATE INDEX idx_agent_run_integration_dispatches_owner
+            ON agent_run_integration_dispatches(user_id,run_id,status);
+        CREATE FUNCTION aibrain_validate_agent_run_integration_dispatch_insert()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.status <> 'prepared' OR NOT EXISTS (
+                SELECT 1 FROM agent_run_integration_bindings b
+                JOIN agent_run_steps s ON s.id=b.step_id AND s.user_id=b.user_id
+                JOIN agent_runs r ON r.id=b.run_id AND r.user_id=b.user_id
+                JOIN integration_connections c ON c.id=b.connection_id AND c.user_id=b.user_id
+                JOIN users u ON u.id=b.user_id
+                WHERE b.step_id=NEW.step_id AND b.user_id=NEW.user_id
+                  AND b.run_id=NEW.run_id AND b.connection_id=NEW.connection_id
+                  AND b.integration_id=NEW.integration_id AND b.tool_id=NEW.tool_id
+                  AND b.contract_fingerprint=NEW.contract_fingerprint
+                  AND s.status='running' AND r.status='running' AND u.deleted_at IS NULL
+                  AND c.integration_id=b.integration_id AND c.status='active'
+                  AND (c.expires_at IS NULL OR c.expires_at>NEW.created_at)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(b.required_scopes_json::jsonb) requested(scope)
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM integration_connection_grants g
+                        WHERE g.user_id=b.user_id AND g.connection_id=b.connection_id
+                          AND g.scope=requested.scope AND g.status='active'
+                          AND g.revoked_at IS NULL
+                          AND (g.expires_at IS NULL OR g.expires_at>NEW.created_at)
+                    )
+                  )
+            ) THEN
+                RAISE EXCEPTION 'integration dispatch requires a running bound step and live owner authority'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_integration_dispatch_insert
+            BEFORE INSERT ON agent_run_integration_dispatches
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_integration_dispatch_insert();
+        CREATE FUNCTION aibrain_validate_agent_run_integration_dispatch_transition()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE expected_event TEXT;
+        BEGIN
+            IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
+                OLD.status='prepared' AND NEW.status='dispatch_started'
+                AND NEW.dispatch_started_at IS NOT NULL
+                AND NEW.finished_at IS NULL AND NEW.outcome_json IS NULL AND NEW.error_code IS NULL
+                AND EXISTS (
+                    SELECT 1 FROM agent_run_integration_bindings b
+                    JOIN agent_run_steps s ON s.id=b.step_id AND s.user_id=b.user_id
+                    JOIN agent_runs r ON r.id=b.run_id AND r.user_id=b.user_id
+                    JOIN integration_connections c ON c.id=b.connection_id AND c.user_id=b.user_id
+                    JOIN users u ON u.id=b.user_id
+                    WHERE b.step_id=OLD.step_id AND b.user_id=OLD.user_id
+                      AND b.run_id=OLD.run_id AND b.connection_id=OLD.connection_id
+                      AND b.integration_id=OLD.integration_id AND b.tool_id=OLD.tool_id
+                      AND b.contract_fingerprint=OLD.contract_fingerprint
+                      AND s.status='running' AND r.status='running'
+                      AND c.integration_id=OLD.integration_id AND c.status='active'
+                      AND (c.expires_at IS NULL OR c.expires_at>NEW.dispatch_started_at)
+                      AND u.deleted_at IS NULL
+                      AND NOT EXISTS (
+                        SELECT 1 FROM jsonb_array_elements_text(b.required_scopes_json::jsonb) requested(scope)
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM integration_connection_grants g
+                            WHERE g.user_id=b.user_id AND g.connection_id=b.connection_id
+                              AND g.scope=requested.scope AND g.status='active'
+                              AND g.revoked_at IS NULL
+                              AND (g.expires_at IS NULL OR g.expires_at>NEW.dispatch_started_at)
+                        )
+                      )
+                )
+                AND EXISTS (
+                    SELECT 1 FROM agent_run_events e
+                    WHERE e.run_id=OLD.run_id AND e.user_id=OLD.user_id
+                      AND e.event_type='integration_dispatch_started'
+                      AND e.details_json::jsonb ->> 'step_id'=OLD.step_id
+                )
+            ) AND NOT (
+                OLD.status='dispatch_started'
+                AND NEW.status IN ('succeeded','failed','outcome_unknown')
+                AND NEW.dispatch_started_at=OLD.dispatch_started_at
+                AND NEW.finished_at IS NOT NULL
+                AND NEW.finished_at>=OLD.dispatch_started_at
+                AND EXISTS (
+                    SELECT 1 FROM agent_run_events e
+                    WHERE e.run_id=OLD.run_id AND e.user_id=OLD.user_id
+                      AND e.details_json::jsonb ->> 'step_id'=OLD.step_id
+                      AND e.event_type=CASE NEW.status
+                          WHEN 'succeeded' THEN 'integration_dispatch_succeeded'
+                          WHEN 'failed' THEN 'integration_dispatch_failed'
+                          ELSE 'integration_dispatch_outcome_unknown' END
+                )
+            ) THEN
+                RAISE EXCEPTION 'invalid integration dispatch lifecycle transition'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_agent_run_integration_dispatch_transition
+            BEFORE UPDATE OF status ON agent_run_integration_dispatches
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_agent_run_integration_dispatch_transition();
+        CREATE FUNCTION aibrain_reject_agent_run_integration_dispatch_identity_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.step_id IS DISTINCT FROM OLD.step_id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+               OR NEW.run_id IS DISTINCT FROM OLD.run_id OR NEW.connection_id IS DISTINCT FROM OLD.connection_id
+               OR NEW.integration_id IS DISTINCT FROM OLD.integration_id OR NEW.tool_id IS DISTINCT FROM OLD.tool_id
+               OR NEW.contract_fingerprint IS DISTINCT FROM OLD.contract_fingerprint
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'integration dispatch identity is immutable' USING ERRCODE='23514';
+            END IF;
+            IF OLD.status IN ('succeeded','failed','outcome_unknown') THEN
+                RAISE EXCEPTION 'terminal integration dispatches are immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_agent_run_integration_dispatch_identity_update
+            BEFORE UPDATE ON agent_run_integration_dispatches
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_run_integration_dispatch_identity_update();
+        CREATE TRIGGER prevent_agent_run_integration_dispatch_delete
+            BEFORE DELETE ON agent_run_integration_dispatches
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
+        """,
+    ),
+
 )
 
 
