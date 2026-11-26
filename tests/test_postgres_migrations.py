@@ -64,7 +64,20 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE agent_runs" in MIGRATIONS[17].sql
     assert "CREATE TABLE agent_run_steps" in MIGRATIONS[17].sql
     assert "validate_agent_run_step_status_transition" in MIGRATIONS[17].sql
-    for migration in MIGRATIONS[1:18]:
+    assert MIGRATIONS[18].version == 19
+    assert "CREATE TABLE integration_connections" in MIGRATIONS[18].sql
+    assert "validate_integration_connection_insert" in MIGRATIONS[18].sql
+    assert "require_active_connection_for_active_grant" in MIGRATIONS[18].sql
+    assert MIGRATIONS[19].version == 20
+    assert "CREATE TABLE integration_secrets" in MIGRATIONS[19].sql
+    assert "erase_integration_secret_on_terminal_connection" in MIGRATIONS[19].sql
+    assert MIGRATIONS[20].version == 21
+    assert "CREATE TABLE agent_run_integration_bindings" in MIGRATIONS[20].sql
+    assert "exact active owner-granted scopes" in MIGRATIONS[20].sql
+    assert MIGRATIONS[21].version == 22
+    assert "CREATE TABLE agent_run_integration_dispatches" in MIGRATIONS[21].sql
+    assert "invalid integration dispatch lifecycle transition" in MIGRATIONS[21].sql
+    for migration in MIGRATIONS[1:22]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
