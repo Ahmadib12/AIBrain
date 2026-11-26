@@ -1700,7 +1700,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
             actor_user_id TEXT NOT NULL REFERENCES users(id),
             event_type TEXT NOT NULL,
-            details_json TEXT NOT NULL CHECK (jsonb_typeof(details_json::jsonb)='object'),
+            details_json TEXT NOT NULL CHECK (details_json::jsonb IS NOT NULL),
             created_at TEXT NOT NULL
         );
         CREATE INDEX idx_agent_run_events_owner_run
