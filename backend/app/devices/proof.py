@@ -562,3 +562,245 @@ class DeviceProofRepository:
                 ),
             )
         return row["proposed_fingerprint"]
+
+
+    def create_recovery_rotation_challenge(
+        self,
+        owner_id: str,
+        device_id: str,
+        recovery_code: str,
+        new_public_key_b64: str,
+    ) -> dict:
+        """Issue a one-use recovery challenge after validating an unused code."""
+        if (
+            not isinstance(recovery_code, str)
+            or not recovery_code.isascii()
+            or not 20 <= len(recovery_code) <= 128
+        ):
+            raise ValueError("Invalid recovery code")
+        new_public_key = _b64decode(new_public_key_b64, expected_length=32)
+        canonical_key = base64.b64encode(new_public_key).decode("ascii")
+        new_fingerprint = hashlib.sha256(new_public_key).hexdigest()
+        code_hash = hashlib.sha256(recovery_code.encode("ascii")).hexdigest()
+        challenge_id = str(uuid.uuid4())
+        nonce = secrets.token_urlsafe(32)
+        now = _now()
+        expires_text = (now + timedelta(minutes=5)).isoformat()
+
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            device = connection.execute(
+                """
+                SELECT d.public_key_fingerprint
+                FROM devices d
+                JOIN users u ON u.id=d.user_id
+                WHERE d.id=? AND d.user_id=? AND d.status='active'
+                  AND d.public_key_b64 IS NOT NULL AND u.deleted_at IS NULL
+                """,
+                (device_id, owner_id),
+            ).fetchone()
+            if device is None:
+                raise LookupError("Recovery target not found")
+            if secrets.compare_digest(
+                device["public_key_fingerprint"], new_fingerprint
+            ):
+                raise ValueError("Replacement key must differ from the current key")
+
+            recovery = connection.execute(
+                """
+                SELECT id FROM webauthn_recovery_codes
+                WHERE user_id=? AND code_hash=? AND used_at IS NULL
+                """,
+                (owner_id, code_hash),
+            ).fetchone()
+            if recovery is None:
+                raise LookupError("Recovery target not found")
+
+            cutoff = (now - timedelta(minutes=5)).isoformat()
+            recent = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM device_key_rotation_challenges
+                WHERE device_id=? AND user_id=? AND created_at>?
+                """,
+                (device_id, owner_id, cutoff),
+            ).fetchone()["total"]
+            if recent >= 5:
+                raise PermissionError("Device recovery rate limit exceeded")
+
+            connection.execute(
+                """
+                DELETE FROM device_key_rotation_challenges
+                WHERE expires_at<=? OR (used_at IS NOT NULL AND used_at<=?)
+                """,
+                (now.isoformat(), (now - timedelta(days=1)).isoformat()),
+            )
+            connection.execute(
+                """
+                INSERT INTO device_key_rotation_challenges (
+                    id,device_id,user_id,nonce_hash,previous_fingerprint,
+                    proposed_public_key_b64,proposed_fingerprint,expires_at,
+                    created_at,recovery_code_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    challenge_id, device_id, owner_id,
+                    hashlib.sha256(nonce.encode("ascii")).hexdigest(),
+                    device["public_key_fingerprint"], canonical_key,
+                    new_fingerprint, expires_text, now.isoformat(),
+                    recovery["id"],
+                ),
+            )
+
+        message = (
+            f"AIBRAIN_DEVICE_KEY_RECOVERY_V1\\n{challenge_id}\\n{device_id}\\n"
+            f"{owner_id}\\n{expires_text}\\n{nonce}\\n{new_fingerprint}"
+        ).encode("utf-8")
+        return {
+            "challenge_id": challenge_id,
+            "device_id": device_id,
+            "nonce": nonce,
+            "expires_at": expires_text,
+            "new_public_key_fingerprint": new_fingerprint,
+            "message_b64": base64.b64encode(message).decode("ascii"),
+        }
+
+    def verify_and_recover_key(
+        self,
+        device_id: str,
+        challenge_id: str,
+        nonce: str,
+        new_signature_b64: str,
+    ) -> str:
+        """Consume one recovery code and rotate a lost device key atomically."""
+        new_signature = _b64decode(new_signature_b64, expected_length=64)
+        if (
+            not isinstance(nonce, str)
+            or not nonce.isascii()
+            or not 20 <= len(nonce) <= 128
+        ):
+            raise ValueError("Invalid challenge nonce")
+        now = _now()
+
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT c.user_id,c.nonce_hash,c.expires_at,c.used_at,c.applied_at,
+                       c.previous_fingerprint,c.proposed_public_key_b64,
+                       c.proposed_fingerprint,c.recovery_code_id,
+                       d.public_key_fingerprint,r.used_at AS recovery_used_at
+                FROM device_key_rotation_challenges c
+                JOIN devices d ON d.id=c.device_id AND d.user_id=c.user_id
+                JOIN users u ON u.id=c.user_id
+                JOIN webauthn_recovery_codes r
+                  ON r.id=c.recovery_code_id AND r.user_id=c.user_id
+                WHERE c.id=? AND c.device_id=? AND c.recovery_code_id IS NOT NULL
+                  AND d.status='active' AND u.deleted_at IS NULL
+                """,
+                (challenge_id, device_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("Device recovery challenge not found")
+            if row["used_at"] is not None or row["applied_at"] is not None:
+                raise ValueError("Device recovery challenge already used")
+            if row["recovery_used_at"] is not None:
+                raise ValueError("Recovery code has already been used")
+            if not secrets.compare_digest(
+                row["previous_fingerprint"], row["public_key_fingerprint"]
+            ):
+                raise ValueError("Device key changed after recovery challenge issuance")
+            if datetime.fromisoformat(row["expires_at"]) <= now:
+                raise ValueError("Device recovery challenge expired")
+            nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+            if not secrets.compare_digest(nonce_hash, row["nonce_hash"]):
+                raise ValueError("Device recovery nonce mismatch")
+
+            message = (
+                f"AIBRAIN_DEVICE_KEY_RECOVERY_V1\\n{challenge_id}\\n{device_id}\\n"
+                f"{row['user_id']}\\n{row['expires_at']}\\n{nonce}\\n"
+                f"{row['proposed_fingerprint']}"
+            ).encode("utf-8")
+            try:
+                replacement_key = _b64decode(
+                    row["proposed_public_key_b64"], expected_length=32
+                )
+                Ed25519PublicKey.from_public_bytes(replacement_key).verify(
+                    new_signature, message
+                )
+            except (InvalidSignature, ValueError):
+                raise PermissionError(
+                    "Replacement device key proof was rejected"
+                ) from None
+
+            consumed_code = connection.execute(
+                """
+                UPDATE webauthn_recovery_codes SET used_at=?
+                WHERE id=? AND user_id=? AND used_at IS NULL
+                """,
+                (now.isoformat(), row["recovery_code_id"], row["user_id"]),
+            )
+            if consumed_code.rowcount != 1:
+                raise ValueError("Recovery code has already been used")
+
+            consumed_challenge = connection.execute(
+                """
+                UPDATE device_key_rotation_challenges SET used_at=?
+                WHERE id=? AND device_id=? AND user_id=? AND used_at IS NULL
+                """,
+                (now.isoformat(), challenge_id, device_id, row["user_id"]),
+            )
+            if consumed_challenge.rowcount != 1:
+                raise ValueError("Device recovery challenge already used")
+
+            connection.execute(
+                """
+                UPDATE devices
+                SET public_key_b64=?,public_key_fingerprint=?,last_seen_at=?
+                WHERE id=? AND user_id=? AND status='active'
+                """,
+                (
+                    row["proposed_public_key_b64"],
+                    row["proposed_fingerprint"],
+                    now.isoformat(),
+                    device_id,
+                    row["user_id"],
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE device_key_rotation_challenges SET applied_at=?
+                WHERE id=? AND used_at=? AND applied_at IS NULL
+                """,
+                (now.isoformat(), challenge_id, now.isoformat()),
+            )
+            connection.execute(
+                """
+                UPDATE sessions SET revoked_at=?
+                WHERE device_id=? AND user_id=? AND revoked_at IS NULL
+                """,
+                (now.isoformat(), device_id, row["user_id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO device_security_events
+                    (id,user_id,device_id,event_type,occurred_at,details_json)
+                VALUES (?,?,?,'device.key_rotated',?,?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    row["user_id"],
+                    device_id,
+                    now.isoformat(),
+                    json.dumps(
+                        {
+                            "previous_fingerprint": row["public_key_fingerprint"],
+                            "new_fingerprint": row["proposed_fingerprint"],
+                            "recovery": True,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        return row["proposed_fingerprint"]
