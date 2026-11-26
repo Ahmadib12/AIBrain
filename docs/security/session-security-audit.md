@@ -131,8 +131,9 @@ crashed workers do not permanently strand notifications. SMTP delivery is
 optional and starts only when explicitly configured; successful delivery is
 recorded by the supervised worker.
 
-Remote device attestation and a distributed rate-limit service also remain
-unimplemented.
+Remote device attestation remains unimplemented. A Redis-backed distributed
+recovery-abuse counter is now available when explicitly configured; deployment
+requirements and its remaining operational validation are documented below.
 
 
 ### SMTP delivery for recovery notifications
@@ -188,3 +189,25 @@ The Redis implementation uses one Lua script to increment the account and direct
 When Redis is selected, AIBrain does not fall back to SQLite or process-local counters if Redis is unavailable. Recovery challenge creation returns a generic 503 and does not proceed. This is deliberate: silently falling back would let individual application instances bypass the shared limit. The Redis client uses bounded connect/read timeouts and is closed with application state.
 
 The Redis monitor's atomic behavior, shared-client coordination, account and IP limits, identifier confidentiality, and fail-closed error path have unit tests using a shared in-memory Redis test server. An opt-in real-service test uses two independent Redis clients and requires `AIBRAIN_SECURITY_RECOVERY_ABUSE_REDIS_TEST_URL` pointing to a dedicated test Redis instance; it uses a unique key namespace and deletes only those test keys. This still does not replace deployment-level verification of the managed Redis service's TLS configuration, ACLs, failover, or network topology. Production distributed protection is only active after the Redis backend and the same high-entropy HMAC secret are configured on every application instance. Network-edge rate limiting remains a separate defense-in-depth requirement.
+
+
+#### Multi-process notification claim verification
+
+The notification outbox now has a dedicated multi-process test module:
+`tests/test_security_notification_multiprocess.py`. It starts independent OS
+processes with independent SQLite connections to verify that two workers cannot
+claim the same pending notification. A second test lets the first claiming
+process exit without acknowledging the row, expires its lease, and verifies
+that a new process reclaims the notification with an incremented attempt count
+and a different claim token.
+
+Run these checks with:
+
+```bash
+pytest -q tests/test_security_notification_multiprocess.py
+```
+
+These tests validate SQLite process coordination and lease recovery. They do
+not establish cross-host SQLite suitability, prevent duplicate SMTP delivery
+after an ambiguous provider acknowledgement, or replace a production
+multi-instance test against the selected database and SMTP provider.
