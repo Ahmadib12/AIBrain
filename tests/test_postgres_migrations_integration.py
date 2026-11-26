@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
+    assert runner.migrate() == 36
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -303,7 +303,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -447,7 +447,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
@@ -647,7 +647,7 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
 
     suffix = str(uuid.uuid4())
     user_id = "memory-learning-owner-" + suffix
@@ -1395,8 +1395,8 @@ def test_real_postgres_device_foundation_migrations_preserve_owner_and_challenge
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
+    assert runner.migrate() == 36
 
     owner = str(uuid.uuid4())
     email = f"postgres-device-{owner}@example.invalid"
@@ -1535,8 +1535,8 @@ def test_real_postgres_device_security_audit_lifecycle_and_session_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
+    assert runner.migrate() == 36
     owner = str(uuid.uuid4())
     timestamp = "2026-01-01T00:00:00+00:00"
     future = "2027-01-01T00:00:00+00:00"
@@ -1637,8 +1637,8 @@ def test_real_postgres_session_audit_device_rotation_and_recovery_outbox():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 35
-    assert runner.migrate() == 35
+    assert runner.migrate() == 36
+    assert runner.migrate() == 36
     owner = str(uuid.uuid4())
     timestamp = "2026-01-01T00:00:00+00:00"
     future = "2027-01-01T00:00:00+00:00"
@@ -1766,6 +1766,151 @@ def test_real_postgres_session_audit_device_rotation_and_recovery_outbox():
                     "SELECT status,failed_at,failure_code FROM security_notification_outbox WHERE event_id=%s",
                     (event_id,),
                 ).fetchone() == ("failed",future,"smtp_unavailable")
+                raise RollbackFixture()
+    except RollbackFixture:
+        pass
+
+
+
+def test_real_postgres_notification_operations_and_recovery_abuse_windows():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+    psycopg = pytest.importorskip("psycopg")
+    runner = PostgresMigrationRunner(database_url)
+    assert runner.migrate() == 36
+    assert runner.migrate() == 36
+
+    owner = str(uuid.uuid4())
+    timestamp = "2026-01-01T00:00:00+00:00"
+    device_id = "notification-ops-device-" + owner
+    notification_a = "notification-a-" + owner
+    notification_b = "notification-b-" + owner
+    claim_token = "claim-" + owner
+
+    class RollbackFixture(Exception):
+        pass
+
+    try:
+        with psycopg.connect(database_url) as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO users (id,email,password_salt,password_hash,created_at)
+                    VALUES (%s,%s,'salt','hash',%s)
+                    """,
+                    (owner, f"postgres-notification-ops-{owner}@example.invalid", timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO devices (
+                        id,user_id,platform,app_version,public_key_fingerprint,status,enrolled_at
+                    ) VALUES (%s,%s,'android','1.0',%s,'pending',%s)
+                    """,
+                    (device_id, owner, "a" * 64, timestamp),
+                )
+                connection.execute(
+                    "UPDATE devices SET public_key_b64=%s WHERE id=%s",
+                    ("cHVibGljLWtleQ==", device_id),
+                )
+                event_ids = [
+                    row[0] for row in connection.execute(
+                        "SELECT id FROM device_security_events WHERE user_id=%s ORDER BY occurred_at,id",
+                        (owner,),
+                    ).fetchall()
+                ]
+                assert len(event_ids) >= 2
+
+                for notification_id, event_id in (
+                    (notification_a, event_ids[0]),
+                    (notification_b, event_ids[1]),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO security_notification_outbox (
+                            id,event_id,user_id,recipient_email,notification_type,
+                            payload_json,status,attempts,available_at,created_at,
+                            failed_at,failure_code
+                        ) VALUES (%s,%s,%s,%s,'device.recovery.completed',%s,
+                                  'failed',8,%s,%s,%s,'smtp_unavailable')
+                        """,
+                        (
+                            notification_id,event_id,owner,
+                            f"postgres-notification-ops-{owner}@example.invalid",
+                            '{"device_id":"device"}',timestamp,timestamp,timestamp,
+                        ),
+                    )
+
+                connection.execute(
+                    "UPDATE security_notification_outbox SET redrive_count=1,claim_token=%s WHERE id=%s",
+                    (claim_token, notification_a),
+                )
+                with pytest.raises(psycopg.errors.UniqueViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            "UPDATE security_notification_outbox SET claim_token=%s WHERE id=%s",
+                            (claim_token, notification_b),
+                        )
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            "UPDATE security_notification_outbox SET redrive_count=-1 WHERE id=%s",
+                            (notification_a,),
+                        )
+
+                operator_event = "operator-redrive-" + owner
+                connection.execute(
+                    """
+                    INSERT INTO security_notification_operator_events (
+                        id,notification_id,operator_user_id,action,reason,
+                        attempts_before,failure_code_before,created_at
+                    ) VALUES (%s,%s,%s,'redrive','manual review confirmed safe retry',
+                              8,'smtp_unavailable',%s)
+                    """,
+                    (operator_event,notification_a,owner,timestamp),
+                )
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            "UPDATE security_notification_operator_events SET reason='tampered' WHERE id=%s",
+                            (operator_event,),
+                        )
+
+                scope_hash = "f" * 64
+                connection.execute(
+                    """
+                    INSERT INTO security_recovery_abuse_windows (
+                        scope_hash,window_start,attempts,blocked_attempts,updated_at
+                    ) VALUES (%s,%s,12,3,%s)
+                    """,
+                    (scope_hash, 1798761600, timestamp),
+                )
+                assert connection.execute(
+                    """
+                    SELECT attempts,blocked_attempts FROM security_recovery_abuse_windows
+                    WHERE scope_hash=%s AND window_start=%s
+                    """,
+                    (scope_hash,1798761600),
+                ).fetchone() == (12,3)
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    with connection.transaction():
+                        connection.execute(
+                            """
+                            INSERT INTO security_recovery_abuse_windows (
+                                scope_hash,window_start,attempts,blocked_attempts,updated_at
+                            ) VALUES (%s,%s,-1,0,%s)
+                            """,
+                            ("e"*64,1798761600,timestamp),
+                        )
+                connection.execute("DELETE FROM users WHERE id=%s", (owner,))
+                assert connection.execute(
+                    "SELECT count(*) FROM security_notification_operator_events WHERE id=%s",
+                    (operator_event,),
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM security_recovery_abuse_windows WHERE scope_hash=%s",
+                    (scope_hash,),
+                ).fetchone()[0] == 1
                 raise RollbackFixture()
     except RollbackFixture:
         pass
