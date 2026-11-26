@@ -104,3 +104,30 @@ def test_redis_recovery_abuse_settings_require_shared_url_and_stable_hmac_key():
             security_recovery_abuse_redis_url="redis://localhost:6379/0",
             security_recovery_abuse_hmac_key="short",
         )
+
+
+def test_recovery_api_returns_503_instead_of_bypassing_shared_limits(monkeypatch):
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from backend.app.app_state import get_app_state
+    from backend.app.main import app
+
+    class UnavailableMonitor:
+        def check_and_record(self, *_args, **_kwargs):
+            raise RecoveryAbuseUnavailable("Redis unavailable")
+
+    with TestClient(app) as client:
+        state = get_app_state()
+        state.security_recovery_abuse = UnavailableMonitor()
+        response = client.post(
+            f"/api/v1/devices/{uuid4()}/recovery/challenge",
+            json={
+                "email": "owner@example.com",
+                "recovery_code": "R" * 32,
+                "new_public_key_b64": "A" * 44,
+            },
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DEVICE_RECOVERY_PROTECTION_UNAVAILABLE"
