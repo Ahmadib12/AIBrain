@@ -19,12 +19,14 @@ used to rebuild or replace triggers are counted once by name.
 These counts are an audit baseline, not proof that PostgreSQL has equivalent
 objects. PostgreSQL migrations 1–2 cover identity/session, memory, observations,
 adaptations, audit events, tool requests, WebAuthn and tool authorization
-foundations. PostgreSQL migration 3 adds tool execution attempts, immutable
-dispatch bindings, and dispatch audit lifecycle guards (SQLite migrations
-9–11). PostgreSQL still lacks the remaining SQLite migrations 12–45, complete
-repository compatibility, and shared multi-instance acceptance. The stream
-must not be described as schema-complete or application-ready until every
-required invariant below is ported and tested.
+foundations. PostgreSQL migrations 3–7 cover tool execution, external adapter
+evidence, trusted runner attestations and operator audit (SQLite migrations
+9–15). PostgreSQL migrations 8–11 add dispatch recovery, certification-bound
+lookup authorization, account-erasure guards and execution reconciliation
+(SQLite migrations 16–20). PostgreSQL still lacks SQLite migrations 21–45,
+complete repository compatibility, and shared multi-instance acceptance. The
+stream must not be described as schema-complete or application-ready until
+every required invariant below is ported and tested.
 
 ## Migration domains
 
@@ -32,7 +34,7 @@ required invariant below is ported and tested.
 |---|---|
 | 1–11 | Identity, sessions, memory/observations/adaptations, tool requests, WebAuthn/passkeys, tool authorization, execution attempts/bindings, dispatch audit |
 | 12–15 | External adapter certification/evidence, trusted runner keys/attestations, operator audit (PostgreSQL migrations 4–7) |
-| 16–20 | Dispatch recovery/lookup authorization and execution reconciliation |
+| 16–20 | Dispatch recovery/lookup authorization and execution reconciliation (PostgreSQL migrations 8–11) |
 | 21–22 | Memory consent lifecycle, learning adaptation events and evaluations |
 | 23–27 | Agent identity/events, capability grants and revocations, tasks/messages/control events, runs/steps/events |
 | 28–31 | Integration connections/grants/events/secrets, agent-run integration bindings and dispatches |
