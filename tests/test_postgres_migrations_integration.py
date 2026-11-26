@@ -1084,7 +1084,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                         id,user_id,name,metadata_json,status,created_at,updated_at
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s)
                     """,
-                    (agent, owner, "Integration agent", "{}", "active", timestamp, timestamp),
+                    (agent, owner, "Integration agent", "{}", "draft", timestamp, timestamp),
                 )
                 connection.execute(
                     """
@@ -1094,6 +1094,19 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                     """,
                     ("registered-" + suffix, owner, agent, owner, "registered",
                      '{"initial_status":"active"}', timestamp),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO agent_events (
+                        id,user_id,agent_id,actor_user_id,event_type,details_json,created_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    ("activated-" + suffix, owner, agent, owner, "activated",
+                     '{"from_status":"draft","to_status":"active"}', timestamp),
+                )
+                connection.execute(
+                    "UPDATE agents SET status='active',updated_at=%s WHERE id=%s",
+                    (timestamp, agent),
                 )
                 connection.execute(
                     """
@@ -1227,7 +1240,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                                 required_scopes_json,created_at
                             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             """,
-                            ("wrong-scope-step-" + suffix, owner, run, connection_id,
+                            (step, owner, run, connection_id,
                              "calendar", "1", "calendar.read", "b" * 64,
                              '["calendar.write"]', timestamp),
                         )
