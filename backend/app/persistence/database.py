@@ -3443,6 +3443,8 @@ created_at TEXT NOT NULL,
             (
                 44,
                 """
+                -- Preserve the recovery enqueue trigger across the outbox table rebuild.
+                DROP TRIGGER enqueue_device_recovery_notification;
                 -- Add a terminal failure state without discarding existing queue history.
                 ALTER TABLE security_notification_outbox
                     RENAME TO security_notification_outbox_v43;
@@ -3482,6 +3484,33 @@ created_at TEXT NOT NULL,
                 DROP TABLE security_notification_outbox_v43;
                 CREATE INDEX idx_security_notification_outbox_ready
                     ON security_notification_outbox(status, available_at, created_at);
+                CREATE TRIGGER enqueue_device_recovery_notification
+                AFTER INSERT ON device_security_events
+                WHEN NEW.event_type = 'device.key_rotated'
+                  AND CASE
+                      WHEN json_valid(NEW.details_json)
+                      THEN json_extract(NEW.details_json, '$.recovery')
+                      ELSE 0
+                  END = 1
+                BEGIN
+                    INSERT INTO security_notification_outbox (
+                        id, event_id, user_id, recipient_email,
+                        notification_type, payload_json, status,
+                        attempts, available_at, created_at
+                    )
+                    SELECT
+                        lower(hex(randomblob(4))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(2))) || '-' ||
+                        lower(hex(randomblob(6))),
+                        NEW.id, NEW.user_id, u.email,
+                        'device.recovery.completed',
+                        json_object('device_id', NEW.device_id, 'occurred_at', NEW.occurred_at),
+                        'pending', 0, NEW.occurred_at, NEW.occurred_at
+                    FROM users u
+                    WHERE u.id = NEW.user_id AND u.deleted_at IS NULL;
+                END;
                 """
             ),
 
