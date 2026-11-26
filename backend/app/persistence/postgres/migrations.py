@@ -645,6 +645,275 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
     ),
 
 
+    PostgresMigration(
+        version=8,
+        name="tool_dispatch_recovery_events",
+        sql="""
+        CREATE TABLE tool_dispatch_recovery_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL UNIQUE REFERENCES tool_requests(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL CHECK (event_type = 'dispatch_not_started'),
+            action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+            details_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_tool_dispatch_recovery_request
+            ON tool_dispatch_recovery_events(request_id, created_at);
+        CREATE FUNCTION aibrain_validate_dispatch_recovery_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM tool_requests r
+                JOIN tool_execution_attempts a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                JOIN tool_execution_bindings b
+                  ON b.request_id = r.id AND b.user_id = r.user_id
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = NEW.request_id
+                  AND r.user_id = NEW.user_id
+                  AND u.deleted_at IS NULL
+                  AND r.status = 'executing'
+                  AND r.consumed_at IS NOT NULL
+                  AND a.status = 'claimed'
+                  AND b.idempotency_key = r.id
+                  AND b.action_digest = NEW.action_digest
+                  AND NOT EXISTS (
+                      SELECT 1 FROM tool_dispatch_audit_events s
+                      WHERE s.request_id = r.id AND s.user_id = r.user_id
+                        AND s.event_type = 'dispatch_started'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM tool_dispatch_recovery_events prior
+                      WHERE prior.request_id = r.id AND prior.user_id = r.user_id
+                  )
+            ) THEN
+                RAISE EXCEPTION 'dispatch recovery event violates execution lifecycle'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_tool_dispatch_recovery_event
+            BEFORE INSERT ON tool_dispatch_recovery_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_dispatch_recovery_event();
+        CREATE FUNCTION aibrain_reject_dispatch_recovery_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION 'tool dispatch recovery events are immutable'
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_tool_dispatch_recovery_update
+            BEFORE UPDATE ON tool_dispatch_recovery_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_dispatch_recovery_mutation();
+        """,
+    ),
+    PostgresMigration(
+        version=9,
+        name="tool_dispatch_lookup_authorizations",
+        sql="""
+        CREATE TABLE tool_dispatch_lookup_authorizations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL REFERENCES tool_requests(id) ON DELETE CASCADE,
+            certification_id TEXT NOT NULL REFERENCES external_adapter_certifications(id),
+            action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+            details_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_tool_dispatch_lookup_authorizations_request
+            ON tool_dispatch_lookup_authorizations(user_id, request_id, created_at);
+        CREATE FUNCTION aibrain_validate_dispatch_lookup_authorization()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM tool_requests r
+                JOIN tool_execution_attempts a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                JOIN tool_execution_bindings b
+                  ON b.request_id = r.id AND b.user_id = r.user_id
+                JOIN tool_dispatch_audit_events s
+                  ON s.request_id = r.id AND s.user_id = r.user_id
+                 AND s.event_type = 'dispatch_started'
+                JOIN external_adapter_certifications c
+                  ON c.id = NEW.certification_id
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = NEW.request_id
+                  AND r.user_id = NEW.user_id
+                  AND u.deleted_at IS NULL
+                  AND r.status = 'outcome_unknown'
+                  AND r.consumed_at IS NOT NULL
+                  AND a.status = 'outcome_unknown'
+                  AND b.idempotency_key = r.id
+                  AND b.action_digest = NEW.action_digest
+                  AND s.action_digest = NEW.action_digest
+                  AND c.expires_at > NEW.created_at
+                  AND NOT EXISTS (
+                      SELECT 1 FROM external_adapter_certification_revocations cr
+                      WHERE cr.certification_id = c.id
+                  )
+            ) THEN
+                RAISE EXCEPTION 'lookup authorization violates execution lifecycle'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_tool_dispatch_lookup_authorization
+            BEFORE INSERT ON tool_dispatch_lookup_authorizations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_dispatch_lookup_authorization();
+        CREATE FUNCTION aibrain_reject_dispatch_lookup_mutation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION 'tool dispatch lookup authorizations are immutable'
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_update
+            BEFORE UPDATE ON tool_dispatch_lookup_authorizations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_dispatch_lookup_mutation();
+        """,
+    ),
+    PostgresMigration(
+        version=10,
+        name="dispatch_audit_recovery_and_lookup_erasure_guards",
+        sql="""
+        CREATE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users
+                WHERE id = OLD.user_id AND deleted_at IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'dispatch history may only be deleted during account erasure'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN OLD;
+        END;
+        $;
+        CREATE TRIGGER prevent_tool_dispatch_audit_delete
+            BEFORE DELETE ON tool_dispatch_audit_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure();
+        CREATE TRIGGER prevent_tool_dispatch_recovery_delete
+            BEFORE DELETE ON tool_dispatch_recovery_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure();
+        CREATE TRIGGER prevent_tool_dispatch_lookup_authorization_delete
+            BEFORE DELETE ON tool_dispatch_lookup_authorizations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure();
+        """,
+    ),
+    PostgresMigration(
+        version=11,
+        name="tool_execution_reconciliation_events",
+        sql="""
+        CREATE TABLE tool_execution_reconciliation_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL REFERENCES tool_requests(id) ON DELETE CASCADE,
+            outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+            note TEXT NOT NULL CHECK (length(btrim(note)) BETWEEN 1 AND 1000),
+            error_code TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, request_id)
+        );
+        CREATE INDEX idx_tool_execution_reconciliation_request
+            ON tool_execution_reconciliation_events(user_id, request_id, created_at);
+
+        -- Preserve legacy reconciliation records before removing the JSON field.
+        INSERT INTO tool_execution_reconciliation_events (
+            id, user_id, request_id, outcome, note, error_code, created_at
+        )
+        SELECT
+            md5(random()::text || clock_timestamp()::text || r.id),
+            r.user_id,
+            r.id,
+            j.data -> 'execution_reconciliation' ->> 'outcome',
+            j.data -> 'execution_reconciliation' ->> 'note',
+            j.data -> 'execution_reconciliation' ->> 'error_code',
+            COALESCE(
+                j.data -> 'execution_reconciliation' ->> 'reconciled_at',
+                r.updated_at
+            )
+        FROM tool_requests r
+        JOIN users u ON u.id = r.user_id
+        CROSS JOIN LATERAL (
+            SELECT CASE
+                WHEN pg_input_is_valid(COALESCE(r.audit_json, '{}'), 'jsonb')
+                THEN COALESCE(r.audit_json, '{}')::jsonb
+                ELSE '{}'::jsonb
+            END AS data
+        ) j
+        WHERE u.deleted_at IS NULL
+          AND jsonb_typeof(j.data -> 'execution_reconciliation') = 'object'
+          AND j.data -> 'execution_reconciliation' ->> 'outcome'
+              IN ('succeeded', 'failed')
+          AND length(btrim(COALESCE(
+              j.data -> 'execution_reconciliation' ->> 'note', ''
+          ))) BETWEEN 1 AND 1000
+        ON CONFLICT (user_id, request_id) DO NOTHING;
+
+        UPDATE tool_requests r
+        SET audit_json = (
+            CASE
+                WHEN pg_input_is_valid(COALESCE(r.audit_json, '{}'), 'jsonb')
+                THEN COALESCE(r.audit_json, '{}')::jsonb
+                ELSE '{}'::jsonb
+            END #- '{execution_reconciliation}'
+        )::text
+        WHERE EXISTS (
+            SELECT 1 FROM tool_execution_reconciliation_events e
+            WHERE e.user_id = r.user_id AND e.request_id = r.id
+        );
+
+        CREATE FUNCTION aibrain_validate_execution_reconciliation_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM tool_requests r
+                JOIN tool_execution_attempts a
+                  ON a.request_id = r.id AND a.user_id = r.user_id
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = NEW.request_id
+                  AND r.user_id = NEW.user_id
+                  AND u.deleted_at IS NULL
+                  AND r.status = 'outcome_unknown'
+                  AND r.consumed_at IS NOT NULL
+                  AND a.status = 'outcome_unknown'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM tool_execution_reconciliation_events prior
+                      WHERE prior.user_id = r.user_id AND prior.request_id = r.id
+                  )
+            ) THEN
+                RAISE EXCEPTION 'reconciliation event violates execution lifecycle'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER validate_tool_execution_reconciliation_event
+            BEFORE INSERT ON tool_execution_reconciliation_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_validate_execution_reconciliation_event();
+
+        CREATE FUNCTION aibrain_reject_reconciliation_update()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            RAISE EXCEPTION 'tool execution reconciliation events are immutable'
+                USING ERRCODE = '23514';
+        END;
+        $;
+        CREATE TRIGGER prevent_tool_execution_reconciliation_update
+            BEFORE UPDATE ON tool_execution_reconciliation_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_reject_reconciliation_update();
+        CREATE TRIGGER prevent_tool_execution_reconciliation_delete
+            BEFORE DELETE ON tool_execution_reconciliation_events
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_dispatch_erasure();
+        """,
+    ),
+
 )
 
 
