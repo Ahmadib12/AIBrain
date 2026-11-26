@@ -740,7 +740,8 @@ def test_session_revocation_cannot_be_reversed(client: TestClient) -> None:
             state.database.connect().execute(
                 "UPDATE sessions SET revoked_at=NULL WHERE token_hash=?",
                 (token_hash,),
-            )\n
+            )
+
 
 def test_device_key_rotation_requires_both_keys_and_revokes_old_sessions(
     client: TestClient,
