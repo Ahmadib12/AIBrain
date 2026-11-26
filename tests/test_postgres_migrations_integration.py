@@ -1093,7 +1093,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s)
                     """,
                     ("registered-" + suffix, owner, agent, owner, "registered",
-                     '{"initial_status":"active"}', timestamp),
+                     '{"initial_status":"draft"}', timestamp),
                 )
                 connection.execute(
                     """
@@ -1116,7 +1116,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (task, owner, agent, "Use calendar", "Read calendar", "{}",
-                     '["calendar.read"]', "assigned", future, timestamp, timestamp),
+                     '[]', "assigned", future, timestamp, timestamp),
                 )
                 connection.execute(
                     """
