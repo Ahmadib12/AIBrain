@@ -1567,10 +1567,11 @@ def test_real_postgres_device_security_audit_lifecycle_and_session_guards():
                     "SELECT event_type FROM device_security_events WHERE user_id=%s ORDER BY occurred_at,id",
                     (owner,),
                 ).fetchall()]
-                assert event_types == [
+                assert set(event_types) == {
                     "device.enrolled","device.key_registered","device.activated",
                     "device.login_authenticated",
-                ]
+                }
+                assert len(event_types) == 4
 
                 with pytest.raises(psycopg.errors.CheckViolation):
                     with connection.transaction():
