@@ -1172,7 +1172,6 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_learning_evaluation();
         """,
     ),
-,
 
     PostgresMigration(
         version=14,
