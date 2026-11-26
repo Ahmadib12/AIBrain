@@ -399,4 +399,159 @@ class DeviceProofRepository:
                 WHERE id=? AND user_id=? AND status='active'
                 """,
                 (now.isoformat(), device_id, owner_id),
+            )\n
+    def create_key_rotation_challenge(
+        self, owner_id: str, device_id: str, new_public_key_b64: str
+    ) -> dict:
+        """Create a short-lived challenge requiring both old and replacement keys."""
+        new_public_key = _b64decode(new_public_key_b64, expected_length=32)
+        canonical_key = base64.b64encode(new_public_key).decode("ascii")
+        new_fingerprint = hashlib.sha256(new_public_key).hexdigest()
+        challenge_id = str(uuid.uuid4())
+        nonce = secrets.token_urlsafe(32)
+        now = _now()
+        expires_text = (now + timedelta(minutes=5)).isoformat()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            device = connection.execute(
+                """
+                SELECT public_key_fingerprint FROM devices
+                WHERE id=? AND user_id=? AND status='active'
+                  AND public_key_b64 IS NOT NULL
+                """,
+                (device_id, owner_id),
+            ).fetchone()
+            if device is None:
+                raise LookupError("Active keyed device not found")
+            if secrets.compare_digest(device["public_key_fingerprint"], new_fingerprint):
+                raise ValueError("Replacement key must differ from the current key")
+            cutoff = (now - timedelta(minutes=5)).isoformat()
+            recent = connection.execute(
+                """
+                SELECT COUNT(*) AS total FROM device_key_rotation_challenges
+                WHERE device_id=? AND user_id=? AND created_at>?
+                """,
+                (device_id, owner_id, cutoff),
+            ).fetchone()["total"]
+            if recent >= 5:
+                raise PermissionError("Device key rotation rate limit exceeded")
+            connection.execute(
+                """
+                DELETE FROM device_key_rotation_challenges
+                WHERE expires_at<=? OR (used_at IS NOT NULL AND used_at<=?)
+                """,
+                (now.isoformat(), (now - timedelta(days=1)).isoformat()),
             )
+            connection.execute(
+                """
+                INSERT INTO device_key_rotation_challenges
+                    (id,device_id,user_id,nonce_hash,proposed_public_key_b64,
+                     proposed_fingerprint,expires_at,created_at)
+                VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (challenge_id, device_id, owner_id,
+                 hashlib.sha256(nonce.encode("ascii")).hexdigest(),
+                 canonical_key, new_fingerprint, expires_text, now.isoformat()),
+            )
+        message = (
+            f"AIBRAIN_DEVICE_KEY_ROTATION_V1\n{challenge_id}\n{device_id}\n"
+            f"{owner_id}\n{expires_text}\n{nonce}\n{new_fingerprint}"
+        ).encode("utf-8")
+        return {
+            "challenge_id": challenge_id, "device_id": device_id, "nonce": nonce,
+            "expires_at": expires_text,
+            "new_public_key_fingerprint": new_fingerprint,
+            "message_b64": base64.b64encode(message).decode("ascii"),
+        }
+
+    def verify_and_rotate_key(
+        self, owner_id: str, device_id: str, challenge_id: str, nonce: str,
+        old_signature_b64: str, new_signature_b64: str,
+    ) -> str:
+        """Verify both keys and atomically rotate, revoke sessions and append audit."""
+        old_signature = _b64decode(old_signature_b64, expected_length=64)
+        new_signature = _b64decode(new_signature_b64, expected_length=64)
+        if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
+            raise ValueError("Invalid challenge nonce")
+        now = _now()
+        with self.database.transaction(immediate=True):
+            connection = self.database.connect()
+            row = connection.execute(
+                """
+                SELECT c.nonce_hash,c.expires_at,c.used_at,c.applied_at,
+                       c.proposed_public_key_b64,c.proposed_fingerprint,
+                       d.public_key_b64,d.public_key_fingerprint
+                FROM device_key_rotation_challenges c
+                JOIN devices d ON d.id=c.device_id AND d.user_id=c.user_id
+                JOIN users u ON u.id=c.user_id
+                WHERE c.id=? AND c.device_id=? AND c.user_id=?
+                  AND d.status='active' AND u.deleted_at IS NULL
+                """,
+                (challenge_id, device_id, owner_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError("Device key rotation challenge not found")
+            if row["used_at"] is not None or row["applied_at"] is not None:
+                raise ValueError("Device key rotation challenge already used")
+            if datetime.fromisoformat(row["expires_at"]) <= now:
+                raise ValueError("Device key rotation challenge expired")
+            nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+            if not secrets.compare_digest(nonce_hash, row["nonce_hash"]):
+                raise ValueError("Device key rotation nonce mismatch")
+            message = (
+                f"AIBRAIN_DEVICE_KEY_ROTATION_V1\n{challenge_id}\n{device_id}\n"
+                f"{owner_id}\n{row['expires_at']}\n{nonce}\n{row['proposed_fingerprint']}"
+            ).encode("utf-8")
+            try:
+                old_public_key = _b64decode(row["public_key_b64"], expected_length=32)
+                new_public_key = _b64decode(row["proposed_public_key_b64"], expected_length=32)
+                Ed25519PublicKey.from_public_bytes(old_public_key).verify(old_signature, message)
+                Ed25519PublicKey.from_public_bytes(new_public_key).verify(new_signature, message)
+            except (InvalidSignature, ValueError):
+                raise PermissionError("Both device keys must prove possession") from None
+            used = connection.execute(
+                """
+                UPDATE device_key_rotation_challenges SET used_at=?
+                WHERE id=? AND device_id=? AND user_id=? AND used_at IS NULL
+                """,
+                (now.isoformat(), challenge_id, device_id, owner_id),
+            )
+            if used.rowcount != 1:
+                raise ValueError("Device key rotation challenge already used")
+            connection.execute(
+                """
+                UPDATE devices SET public_key_b64=?,public_key_fingerprint=?,last_seen_at=?
+                WHERE id=? AND user_id=? AND status='active'
+                """,
+                (row["proposed_public_key_b64"],row["proposed_fingerprint"],
+                 now.isoformat(),device_id,owner_id),
+            )
+            connection.execute(
+                """
+                UPDATE device_key_rotation_challenges SET applied_at=?
+                WHERE id=? AND used_at=? AND applied_at IS NULL
+                """,
+                (now.isoformat(),challenge_id,now.isoformat()),
+            )
+            connection.execute(
+                """
+                UPDATE sessions SET revoked_at=?
+                WHERE device_id=? AND user_id=? AND revoked_at IS NULL
+                """,
+                (now.isoformat(),device_id,owner_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO device_security_events
+                    (id,user_id,device_id,event_type,occurred_at,details_json)
+                VALUES (?,?,?,'device.key_rotated',?,?)
+                """,
+                (
+                    str(uuid.uuid4()),owner_id,device_id,now.isoformat(),
+                    json.dumps({
+                        "previous_fingerprint":row["public_key_fingerprint"],
+                        "new_fingerprint":row["proposed_fingerprint"],
+                    },separators=(",",":"),sort_keys=True),
+                ),
+            )
+        return row["proposed_fingerprint"]
