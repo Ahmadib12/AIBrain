@@ -76,6 +76,9 @@ def test_redis_recovery_abuse_keys_do_not_expose_email_or_ip():
 
 def test_redis_recovery_abuse_fails_closed_when_shared_store_is_unavailable():
     class UnavailableRedis:
+        def time(self):
+            return (1_800_000_000, 0)
+
         def eval(self, *_args):
             raise OSError("connection unavailable")
 
@@ -105,8 +108,11 @@ def test_redis_recovery_abuse_settings_require_shared_url_and_stable_hmac_key():
             security_recovery_abuse_hmac_key="short",
         )
 
+    with pytest.raises(ValueError, match="Redis key prefix is invalid"):
+        Settings(security_recovery_abuse_redis_key_prefix="unsafe:{tag}")
 
-def test_recovery_api_returns_503_instead_of_bypassing_shared_limits(monkeypatch):
+
+def test_recovery_api_returns_503_instead_of_bypassing_shared_limits():
     from uuid import uuid4
 
     from fastapi.testclient import TestClient
