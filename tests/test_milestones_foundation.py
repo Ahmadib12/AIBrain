@@ -827,7 +827,7 @@ def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
         ).fetchall()
     }
     assert {
-        "id", "device_id", "user_id", "nonce_hash",
+        "id", "device_id", "user_id", "nonce_hash", "previous_fingerprint",
         "proposed_public_key_b64", "proposed_fingerprint",
         "expires_at", "used_at", "applied_at", "created_at",
     } <= columns
