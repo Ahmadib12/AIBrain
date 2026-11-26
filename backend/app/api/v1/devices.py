@@ -305,7 +305,7 @@ async def create_device_recovery_challenge(
     """Start lost-device recovery using a one-time code and replacement key."""
     email_key = request.email.strip().lower()
     state = get_app_state()
-    if not state.security_recovery_abuse.check_and_record(email_key, str(device_id)):
+    if not state.security_recovery_abuse.check_and_record(email_key):
         raise HTTPException(
             status_code=429,
             detail={
