@@ -1407,7 +1407,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON agent_control_events(user_id, agent_id, created_at, id);
 
         CREATE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
@@ -1417,7 +1417,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_agent_delete BEFORE DELETE ON agents
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
 
