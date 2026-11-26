@@ -29,8 +29,7 @@ async def lifespan(app: FastAPI):
         stale_after_seconds=settings.tool_execution_stale_after_seconds,
     )
     memory_retention_worker = MemoryRetentionWorker(
-        state.memory,
-        interval_seconds=settings.memory_retention_interval_seconds,
+        state.memory, interval_seconds=settings.memory_retention_interval_seconds,
     )
     integration_expiry_worker = IntegrationConnectionExpiryWorker(
         state.integration_connections,
@@ -64,17 +63,17 @@ async def lifespan(app: FastAPI):
         finally:
             try:
                 await integration_dispatch_recovery_worker.stop()
-        finally:
-            try:
-                await integration_expiry_worker.stop()
             finally:
                 try:
-                    await memory_retention_worker.stop()
+                    await integration_expiry_worker.stop()
                 finally:
                     try:
-                        await recovery_worker.stop()
+                        await memory_retention_worker.stop()
                     finally:
-                        reset_app_state()
+                        try:
+                            await recovery_worker.stop()
+                        finally:
+                            reset_app_state()
 
 
 app = FastAPI(
