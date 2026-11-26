@@ -80,6 +80,8 @@ Provider behavior can be configured through environment variables:
 - `AIBRAIN_TOOL_EXECUTION_RECOVERY_INTERVAL_SECONDS` — recovery worker polling interval, default `60`
 - `AIBRAIN_TOOL_EXECUTION_STALE_AFTER_SECONDS` — age after which a claimed execution is marked `outcome_unknown`, default `300`
 
+Recovery security emails are queued durably. Delivery remains disabled unless both `AIBRAIN_SECURITY_NOTIFICATION_SMTP_HOST` and `AIBRAIN_SECURITY_NOTIFICATION_SENDER` are configured. Optional SMTP authentication uses the paired `AIBRAIN_SECURITY_NOTIFICATION_SMTP_USERNAME` and `AIBRAIN_SECURITY_NOTIFICATION_SMTP_PASSWORD` secrets. The worker requires verified STARTTLS, retries failures with bounded exponential backoff, and does not start without explicit SMTP configuration. See [security notification delivery](docs/security/session-security-audit.md) for all settings and the at-least-once delivery limitation.
+
 The recovery worker starts with the FastAPI application and stops during shutdown. It only marks stale attempts as `outcome_unknown`; it never retries or re-dispatches a tool. An uncertain external outcome must be reconciled explicitly.
 - `AIBRAIN_SESSION_TTL_SECONDS` — bearer-session lifetime in seconds
 - `AIBRAIN_LOGIN_RATE_LIMIT_ATTEMPTS` — process-local login failure limit
