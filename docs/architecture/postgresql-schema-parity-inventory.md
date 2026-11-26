@@ -1,6 +1,6 @@
 # PostgreSQL schema parity inventory
 
-Status: **inventory baseline only; PostgreSQL parity is not implemented**.
+Status: **partial PostgreSQL schema port; not application-selectable and not parity-complete**.
 
 Source of truth: `backend/app/persistence/database.py`, method
 `Database.migrate()`, at the commit where this inventory was prepared.
@@ -17,10 +17,14 @@ used to rebuild or replace triggers are counted once by name.
 | Migration versions | 45 |
 
 These counts are an audit baseline, not proof that PostgreSQL has equivalent
-objects. PostgreSQL migrations 1–2 currently cover identity/session, memory,
-observations, adaptations, audit events, tool requests, WebAuthn and tool
-authorization foundations. The PostgreSQL stream must not be described as
-schema-complete until every required invariant below is ported and tested.
+objects. PostgreSQL migrations 1–2 cover identity/session, memory, observations,
+adaptations, audit events, tool requests, WebAuthn and tool authorization
+foundations. PostgreSQL migration 3 adds tool execution attempts, immutable
+dispatch bindings, and dispatch audit lifecycle guards (SQLite migrations
+9–11). PostgreSQL still lacks the remaining SQLite migrations 12–45, complete
+repository compatibility, and shared multi-instance acceptance. The stream
+must not be described as schema-complete or application-ready until every
+required invariant below is ported and tested.
 
 ## Migration domains
 
