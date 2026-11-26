@@ -30,10 +30,10 @@ are a coverage checklist, not a claim that PostgreSQL currently has parity.
    structurally implements the connection, transaction, and shutdown contract.
    This is an architectural seam, not a PostgreSQL adapter.
 2. **PostgreSQL-native migrations** — partially implemented in the isolated
-   ordered migration stream. Versions 1–11 currently cover SQLite migration
-   domains 1–20, including dispatch recovery, lookup authorization, and
-   execution reconciliation. SQLite migrations 21–45 and full invariant
-   parity remain outstanding. Port every remaining table, check, unique/index
+   ordered migration stream. Versions 1–13 currently cover SQLite migration
+   domains 1–22, including dispatch recovery, lookup authorization, execution
+   reconciliation, memory consent, and learning history. SQLite migrations 23–45
+   and full invariant parity remain outstanding. Port every remaining table, check, unique/index
    constraint, foreign key, append-only rule, account-active guard, lifecycle
    transition, notification outbox trigger, and account-erasure behavior.
    Do not translate SQLite trigger SQL mechanically.
