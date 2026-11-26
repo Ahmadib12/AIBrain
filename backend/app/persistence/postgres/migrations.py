@@ -2829,6 +2829,15 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         version=32,
         name="device_key_rotation_challenges",
         sql="""
+        ALTER TABLE device_security_events
+            DROP CONSTRAINT device_security_events_event_type_check;
+        ALTER TABLE device_security_events
+            ADD CONSTRAINT device_security_events_event_type_check
+            CHECK (event_type IN (
+                'device.enrolled','device.key_registered','device.activated',
+                'device.revoked','device.session_authenticated',
+                'device.login_authenticated','device.key_rotated'
+            ));
         CREATE TABLE device_key_rotation_challenges (
             id TEXT PRIMARY KEY,
             device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
