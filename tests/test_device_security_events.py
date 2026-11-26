@@ -198,7 +198,7 @@ def test_device_identity_and_registered_key_are_immutable(client: TestClient):
     other_id = client.get("/api/v1/auth/me", headers=other_headers).json()["user"]["id"]
     replacement_key = base64.b64encode(b"x" * 32).decode("ascii")
 
-    with pytest.raises(Exception, match="registered device public keys are immutable"):
+    with pytest.raises(Exception, match="device key replacement requires verified rotation"):
         with state.database.transaction(immediate=True):
             state.database.connect().execute(
                 "UPDATE devices SET public_key_b64=? WHERE id=?",
