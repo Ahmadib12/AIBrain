@@ -45,6 +45,172 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_sessions_user ON sessions(user_id);
         """,
     ),
+    PostgresMigration(
+        version=2,
+        name="memory_tool_requests_and_passkey_authorization",
+        sql="""
+        CREATE TABLE memory_items (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            memory_type TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence DOUBLE PRECISION NOT NULL,
+            status TEXT NOT NULL,
+            expires_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE observations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            source TEXT NOT NULL,
+            observation_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE adaptations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            proposal_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE audit_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            event_type TEXT NOT NULL,
+            details_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE tool_requests (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            tool_id TEXT NOT NULL,
+            arguments_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT,
+            consumed_at TEXT,
+            confirmation_id TEXT,
+            audit_json TEXT,
+            contract_fingerprint TEXT,
+            authorization_policy TEXT NOT NULL DEFAULT 'unknown'
+                CHECK (authorization_policy IN ('unknown', 'read_only', 'passkey'))
+        );
+        CREATE INDEX idx_memory_user ON memory_items(user_id);
+        CREATE INDEX idx_observation_user ON observations(user_id);
+        CREATE INDEX idx_adaptation_user ON adaptations(user_id);
+        CREATE INDEX idx_tool_request_user ON tool_requests(user_id);
+
+        CREATE TABLE webauthn_credentials (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            credential_id TEXT NOT NULL UNIQUE,
+            public_key BYTEA NOT NULL,
+            sign_count BIGINT NOT NULL DEFAULT 0 CHECK (sign_count >= 0),
+            transports_json TEXT NOT NULL DEFAULT '[]',
+            device_type TEXT,
+            backed_up BOOLEAN NOT NULL DEFAULT FALSE,
+            name TEXT,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT,
+            revoked_at TEXT
+        );
+        CREATE INDEX idx_webauthn_credentials_user
+            ON webauthn_credentials(user_id);
+
+        CREATE TABLE webauthn_challenges (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            challenge_hash TEXT NOT NULL UNIQUE,
+            purpose TEXT NOT NULL CHECK (
+                purpose IN ('registration', 'authentication', 'tool_approval', 'recovery')
+            ),
+            request_id TEXT REFERENCES tool_requests(id),
+            proposal_digest TEXT,
+            contract_fingerprint TEXT,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_webauthn_challenges_user
+            ON webauthn_challenges(user_id);
+        CREATE INDEX idx_webauthn_challenges_expiry
+            ON webauthn_challenges(expires_at);
+
+        CREATE TABLE webauthn_recovery_codes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            code_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            used_at TEXT
+        );
+        CREATE INDEX idx_webauthn_recovery_codes_user
+            ON webauthn_recovery_codes(user_id);
+
+        CREATE TABLE tool_authorizations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            request_id TEXT NOT NULL UNIQUE REFERENCES tool_requests(id),
+            challenge_id TEXT NOT NULL UNIQUE REFERENCES webauthn_challenges(id),
+            credential_id TEXT NOT NULL REFERENCES webauthn_credentials(id),
+            proposal_digest TEXT NOT NULL,
+            contract_fingerprint TEXT NOT NULL,
+            authorized_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_tool_authorizations_user
+            ON tool_authorizations(user_id);
+
+        CREATE FUNCTION aibrain_require_active_owner()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users
+                WHERE id = NEW.user_id AND deleted_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'user account is not active'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+
+        CREATE TRIGGER prevent_session_for_deleted_user
+            BEFORE INSERT ON sessions
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_memory_for_deleted_user
+            BEFORE INSERT ON memory_items
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_observation_for_deleted_user
+            BEFORE INSERT ON observations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_adaptation_for_deleted_user
+            BEFORE INSERT ON adaptations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_tool_request_for_deleted_user
+            BEFORE INSERT ON tool_requests
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_webauthn_credential_for_deleted_user
+            BEFORE INSERT ON webauthn_credentials
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_webauthn_challenge_for_deleted_user
+            BEFORE INSERT ON webauthn_challenges
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_webauthn_recovery_code_for_deleted_user
+            BEFORE INSERT ON webauthn_recovery_codes
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        CREATE TRIGGER prevent_tool_authorization_for_deleted_user
+            BEFORE INSERT ON tool_authorizations
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
+        """,
+    ),
 )
 
 
