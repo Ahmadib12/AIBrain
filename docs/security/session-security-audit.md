@@ -81,27 +81,6 @@ key is unavailable, rotation must not be bypassed by an ordinary account
 session. Recovery requires a separate high-assurance process.
 
 
-## Recovery-code issuance
-
-Authenticated owners can rotate a set of ten one-time recovery codes through
-POST /api/v1/auth/passkeys/recovery-codes. The request requires password
-reauthentication in addition to the current session. The plaintext codes are
-returned only by the successful issuance response; the persistence layer stores
-only SHA-256 digests. Reissuing a set marks every previously unused code as
-used in the same immediate transaction that inserts the replacement set.
-
-GET /api/v1/auth/passkeys/recovery-codes/status returns only the number of
-unused codes. It never returns code material or stored digests. Requests are
-subject to the shared reauthentication rate limiter, and request models reject
-unexpected identity fields.
-
-This is the recovery-factor provisioning foundation only. A recovery code is
-not yet accepted as proof to replace a lost device key, create a device session,
-or bypass the dual-key rotation requirement. Those actions remain unavailable
-until a separate recovery challenge verifies the code and replacement-key
-possession atomically.
-
-
 ## Lost-device recovery
 
 Migration 42 extends the device key rotation challenge with an optional
