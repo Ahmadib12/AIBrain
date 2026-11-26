@@ -266,7 +266,8 @@ metrics, and logs without credentials, raw account identifiers, recovery
 codes, tokens, or message bodies.
 
 Current status: local SQLite multi-process notification tests pass, and the
-Redis service integration is being added to CI. The real SMTP workflow is
+Redis service integration is configured in CI, awaiting a successful workflow
+run. The real SMTP workflow is
 available for a controlled provider run. The shared network database backend
 and the above deployed multi-host acceptance exercise are not implemented or
 verified; this is an explicit production deployment blocker, not a test that
