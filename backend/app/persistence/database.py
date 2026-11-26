@@ -3171,6 +3171,7 @@ created_at TEXT NOT NULL,
                     device_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     nonce_hash TEXT NOT NULL CHECK(length(nonce_hash)=64),
+                    previous_fingerprint TEXT NOT NULL CHECK(length(previous_fingerprint)=64),
                     proposed_public_key_b64 TEXT NOT NULL,
                     proposed_fingerprint TEXT NOT NULL CHECK(length(proposed_fingerprint)=64),
                     expires_at TEXT NOT NULL,
@@ -3328,6 +3329,7 @@ created_at TEXT NOT NULL,
                     SELECT 1 FROM device_key_rotation_challenges c
                     WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
                       AND c.used_at IS NOT NULL AND c.applied_at IS NULL
+                      AND c.previous_fingerprint=OLD.public_key_fingerprint
                       AND c.proposed_public_key_b64=NEW.public_key_b64
                       AND c.proposed_fingerprint=NEW.public_key_fingerprint
                  )
