@@ -19,6 +19,7 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE webauthn_recovery_codes" in MIGRATIONS[1].sql
     assert "CREATE TABLE tool_authorizations" in MIGRATIONS[1].sql
     assert "aibrain_require_active_owner" in MIGRATIONS[1].sql
+    assert "AS $" in MIGRATIONS[1].sql
 
 
 def test_postgres_migration_versions_must_be_unique_and_increasing():
