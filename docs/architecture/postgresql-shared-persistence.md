@@ -15,6 +15,14 @@ serialization. Adding a PostgreSQL driver or accepting a postgresql URL would
 create a false sense of support and can silently weaken race-sensitive
 security operations.
 
+## Schema parity inventory
+
+The baseline inventory of all 45 SQLite migrations, 56 tables, 60 indexes,
+and 139 distinct triggers is maintained in
+[`postgresql-schema-parity-inventory.md`](postgresql-schema-parity-inventory.md).
+It records the security invariants that must be ported and tested. The counts
+are a coverage checklist, not a claim that PostgreSQL currently has parity.
+
 ## Required implementation gates
 
 1. **Persistence contract** — introduced in
