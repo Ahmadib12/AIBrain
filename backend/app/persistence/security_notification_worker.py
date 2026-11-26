@@ -14,7 +14,7 @@ class SecurityNotificationDeliveryWorker:
         self.interval_seconds = interval_seconds
         self.batch_size = batch_size
         # Claims are renewed immediately before each send. The 10-minute
-        # per-message lease exceeds the bounded SMTP operation timeout. 
+        # per-message lease exceeds the bounded SMTP operation timeout.
         self.lease_seconds = 600
         self._task: asyncio.Task | None = None
         self._stop_event: asyncio.Event | None = None
