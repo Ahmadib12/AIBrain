@@ -13,11 +13,14 @@ class SecurityNotificationDeliveryWorker:
         self.transport = transport
         self.interval_seconds = interval_seconds
         self.batch_size = batch_size
+        # The batch is sent sequentially; reserve enough lease time for every
+        # SMTP call at the configured 60-second transport timeout.
+        self.lease_seconds = max(300, batch_size * 65)
         self._task: asyncio.Task | None = None
         self._stop_event: asyncio.Event | None = None
 
     async def run_once(self) -> int:
-        batch = await asyncio.to_thread(self.repository.claim_batch, limit=self.batch_size)
+        batch = await asyncio.to_thread(self.repository.claim_batch, limit=self.batch_size, lease_seconds=self.lease_seconds)
         delivered = 0
         for notification in batch:
             notification_id = notification["id"]
