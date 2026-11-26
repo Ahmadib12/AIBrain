@@ -402,3 +402,203 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
                      "1.0", "scope", "tool", "a" * 64, "Ed25519", b"short",
                      timestamp, "2027-01-01T00:00:00+00:00", "operator", timestamp),
                 )
+
+
+def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
+    database_url = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
+
+    psycopg = pytest.importorskip("psycopg")
+    runner = PostgresMigrationRunner(database_url)
+    assert runner.migrate() == 11
+
+    suffix = str(uuid.uuid4())
+    user_id = "dispatch-owner-" + suffix
+    email = "dispatch-" + suffix + "@example.invalid"
+    recovery_request = "recovery-request-" + suffix
+    lookup_request = "lookup-request-" + suffix
+    digest = "f" * 64
+    timestamp = "2026-01-01T00:00:00+00:00"
+    future = "2027-01-01T00:00:00+00:00"
+
+    with psycopg.connect(database_url) as connection:
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO users (id, email, password_salt, password_hash, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (user_id, email, "salt", "hash", timestamp),
+            )
+
+            # A request claimed for execution but with no dispatch_started event
+            # can receive exactly one dispatch_not_started recovery record.
+            connection.execute(
+                """
+                INSERT INTO tool_requests (
+                    id, user_id, tool_id, arguments_json, status, consumed_at,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'executing', %s, %s, %s)
+                """,
+                (recovery_request, user_id, "external.test", "{}", timestamp,
+                 timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key, status,
+                    claimed_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'claimed', %s, %s)
+                """,
+                ("recovery-attempt-" + suffix, user_id, recovery_request,
+                 recovery_request, timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_execution_bindings (
+                    id, user_id, request_id, idempotency_key, action_digest,
+                    payload_json, tool_contract_fingerprint, adapter_id,
+                    adapter_version, provider_id, provider_scope,
+                    capabilities_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                ("recovery-binding-" + suffix, user_id, recovery_request,
+                 recovery_request, digest, "{}", "a" * 64, "adapter", "1",
+                 "provider", "scope", "[]", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_recovery_events (
+                    id, user_id, request_id, event_type, action_digest,
+                    details_json, created_at
+                ) VALUES (%s, %s, %s, 'dispatch_not_started', %s, %s, %s)
+                """,
+                ("recovery-event-" + suffix, user_id, recovery_request,
+                 digest, "{}", timestamp),
+            )
+
+            # A started dispatch that becomes outcome-unknown can be given a
+            # current certification-bound lookup authorization and one
+            # immutable human reconciliation record.
+            connection.execute(
+                """
+                INSERT INTO tool_requests (
+                    id, user_id, tool_id, arguments_json, status, consumed_at,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'executing', %s, %s, %s)
+                """,
+                (lookup_request, user_id, "external.test", "{}", timestamp,
+                 timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_execution_attempts (
+                    id, user_id, request_id, idempotency_key, status,
+                    claimed_at, updated_at
+                ) VALUES (%s, %s, %s, %s, 'claimed', %s, %s)
+                """,
+                ("lookup-attempt-" + suffix, user_id, lookup_request,
+                 lookup_request, timestamp, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_execution_bindings (
+                    id, user_id, request_id, idempotency_key, action_digest,
+                    payload_json, tool_contract_fingerprint, adapter_id,
+                    adapter_version, provider_id, provider_scope,
+                    capabilities_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                ("lookup-binding-" + suffix, user_id, lookup_request,
+                 lookup_request, digest, "{}", "b" * 64, "adapter", "1",
+                 "provider", "scope", "[]", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_audit_events (
+                    id, user_id, request_id, event_type, action_digest,
+                    details_json, created_at
+                ) VALUES (%s, %s, %s, 'dispatch_started', %s, %s, %s)
+                """,
+                ("lookup-start-" + suffix, user_id, lookup_request,
+                 digest, "{}", timestamp),
+            )
+            connection.execute(
+                "UPDATE tool_requests SET status='outcome_unknown' WHERE id=%s",
+                (lookup_request,),
+            )
+            connection.execute(
+                """
+                UPDATE tool_execution_attempts
+                SET status='outcome_unknown', finished_at=%s, updated_at=%s
+                WHERE request_id=%s
+                """,
+                (timestamp, timestamp, lookup_request),
+            )
+            connection.execute(
+                """
+                INSERT INTO external_adapter_certifications (
+                    id, provider_id, adapter_id, adapter_version, provider_scope,
+                    tool_id, tool_contract_fingerprint, capabilities_json,
+                    test_suite_version, conformance_results_json, test_report_sha256,
+                    evidence_references_json, verified_at, expires_at, approved_by,
+                    created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                ("lookup-cert-" + suffix, "provider", "adapter", "1", "scope",
+                 "external.test", "b" * 64, "[]", "suite", "{}", "c" * 64,
+                 "[]", timestamp, future, "operator", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_dispatch_lookup_authorizations (
+                    id, user_id, request_id, certification_id, action_digest,
+                    details_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                ("lookup-auth-" + suffix, user_id, lookup_request,
+                 "lookup-cert-" + suffix, digest, "{}", timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO tool_execution_reconciliation_events (
+                    id, user_id, request_id, outcome, note, error_code, created_at
+                ) VALUES (%s, %s, %s, 'succeeded', %s, NULL, %s)
+                """,
+                ("reconciliation-" + suffix, user_id, lookup_request,
+                 "Verified completion with the external provider.", timestamp),
+            )
+
+        for table, column, value in (
+            ("tool_dispatch_recovery_events", "id", "recovery-event-" + suffix),
+            ("tool_dispatch_lookup_authorizations", "id", "lookup-auth-" + suffix),
+            ("tool_execution_reconciliation_events", "id", "reconciliation-" + suffix),
+        ):
+            with pytest.raises(psycopg.errors.CheckViolation):
+                with connection.transaction():
+                    connection.execute(
+                        f"UPDATE {table} SET created_at=%s WHERE {column}=%s",
+                        (future, value),
+                    )
+
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO tool_dispatch_recovery_events (
+                        id, user_id, request_id, event_type, action_digest,
+                        details_json, created_at
+                    ) VALUES (%s, %s, %s, 'dispatch_not_started', %s, %s, %s)
+                    """,
+                    ("duplicate-recovery-" + suffix, user_id, recovery_request,
+                     digest, "{}", timestamp),
+                )
+
+        with connection.transaction():
+            connection.execute(
+                "UPDATE users SET deleted_at=%s WHERE id=%s",
+                (timestamp, user_id),
+            )
+            connection.execute("DELETE FROM tool_requests WHERE user_id=%s", (user_id,))
+            connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
