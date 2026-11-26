@@ -848,7 +848,7 @@ def test_real_postgres_agent_lifecycle_capability_and_run_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 22
+    assert PostgresMigrationRunner(database_url).migrate() == 26
     suffix = str(uuid.uuid4())
     owner = "agent-owner-" + suffix
     other = "agent-other-" + suffix
@@ -1059,7 +1059,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 22
+    assert PostgresMigrationRunner(database_url).migrate() == 26
     suffix = str(uuid.uuid4())
     owner = "integration-owner-" + suffix
     other = "integration-other-" + suffix
