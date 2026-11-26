@@ -3439,6 +3439,51 @@ created_at TEXT NOT NULL,
                 """
             ),
         )
+            ),
+            (
+                44,
+                """
+                -- Add a terminal failure state without discarding existing queue history.
+                ALTER TABLE security_notification_outbox
+                    RENAME TO security_notification_outbox_v43;
+                CREATE TABLE security_notification_outbox (
+                    id TEXT PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE,
+                    user_id TEXT NOT NULL,
+                    recipient_email TEXT NOT NULL,
+                    notification_type TEXT NOT NULL CHECK (
+                        notification_type IN ('device.recovery.completed')
+                    ),
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (
+                        status IN ('pending', 'processing', 'delivered', 'failed')
+                    ),
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    available_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    delivered_at TEXT,
+                    failed_at TEXT,
+                    failure_code TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(event_id) REFERENCES device_security_events(id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                INSERT INTO security_notification_outbox (
+                    id, event_id, user_id, recipient_email, notification_type,
+                    payload_json, status, attempts, available_at, claimed_at,
+                    delivered_at, created_at
+                )
+                SELECT
+                    id, event_id, user_id, recipient_email, notification_type,
+                    payload_json, status, attempts, available_at, claimed_at,
+                    delivered_at, created_at
+                FROM security_notification_outbox_v43;
+                DROP TABLE security_notification_outbox_v43;
+                CREATE INDEX idx_security_notification_outbox_ready
+                    ON security_notification_outbox(status, available_at, created_at);
+                """
+            ),
 
         with self._lock:
             for version, script in migrations:
