@@ -88,18 +88,18 @@ class SecurityRecoveryAbuseMonitor:
 _REDIS_CHECK_SCRIPT = """
 local ttl = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
-local scope_count = tonumber(ARGV[3])
-local redis_time = redis.call('TIME')
-local now = tonumber(redis_time[1])
-local window_start = now - (now % window_seconds)
-local base = KEYS[1] .. ':' .. window_seconds .. ':' .. window_start
-local metric_key = base .. ':metrics'
+local expected_window_start = tonumber(ARGV[3])
+local now = tonumber(redis.call('TIME')[1])
+local actual_window_start = now - (now % window_seconds)
+if actual_window_start ~= expected_window_start then
+    return {-1, 0}
+end
+local scope_count = tonumber(ARGV[4])
 local blocked = 0
 local active_scopes = 0
 for i = 1, scope_count do
-    local digest_arg = 4 + ((i - 1) * 2)
-    local scope_key = base .. ':scope:' .. ARGV[digest_arg]
-    local scope_limit = tonumber(ARGV[digest_arg + 1])
+    local scope_key = KEYS[i + 1]
+    local scope_limit = tonumber(ARGV[i + 4])
     local count = redis.call('INCR', scope_key)
     if count == 1 then
         redis.call('EXPIRE', scope_key, ttl)
@@ -109,15 +109,15 @@ for i = 1, scope_count do
         blocked = 1
     end
 end
-redis.call('HINCRBY', metric_key, 'attempts', 1)
+redis.call('HINCRBY', KEYS[1], 'attempts', 1)
 if active_scopes > 0 then
-    redis.call('HINCRBY', metric_key, 'active_scopes', active_scopes)
+    redis.call('HINCRBY', KEYS[1], 'active_scopes', active_scopes)
 end
 if blocked == 1 then
-    redis.call('HINCRBY', metric_key, 'blocked_attempts', 1)
+    redis.call('HINCRBY', KEYS[1], 'blocked_attempts', 1)
 end
-redis.call('EXPIRE', metric_key, ttl)
-return {1 - blocked, blocked, window_start}
+redis.call('EXPIRE', KEYS[1], ttl)
+return {1 - blocked, blocked}
 """
 
 
@@ -134,7 +134,7 @@ class RedisSecurityRecoveryAbuseMonitor:
     ) -> None:
         if len(hmac_key.encode("utf-8")) < 32:
             raise ValueError("Recovery abuse HMAC key must contain at least 32 bytes")
-        if not key_prefix or len(key_prefix) > 128 or any(ch.isspace() for ch in key_prefix):
+        if not key_prefix or len(key_prefix) > 128 or any(ch.isspace() for ch in key_prefix) or "{" in key_prefix or "}" in key_prefix:
             raise ValueError("Recovery abuse Redis key prefix is invalid")
         if not 1 <= metrics_window_seconds <= 86_400:
             raise ValueError("Recovery abuse metrics window is invalid")
@@ -163,20 +163,35 @@ class RedisSecurityRecoveryAbuseMonitor:
         ]
         if source_ip:
             scopes.append((self._digest("source-ip:" + source_ip), ip_limit))
-        args: list[Any] = [ttl, window_seconds, len(scopes)]
-        for digest, scope_limit in scopes:
-            args.extend((digest, scope_limit))
         try:
-            # Redis TIME chooses the window boundary centrally, avoiding host
-            # clock skew between application instances.
-            result = self.redis.eval(
-                _REDIS_CHECK_SCRIPT, 1, self.key_prefix, *args
+            # Redis TIME provides one authoritative window clock for every
+            # application host. The script checks the window again atomically.
+            for _attempt in range(2):
+                redis_seconds, _microseconds = self.redis.time()
+                now = int(redis_seconds)
+                window_start = now - (now % window_seconds)
+                # A shared hash tag keeps every key in one Redis Cluster slot.
+                base = f"{self.key_prefix}:{{recovery-abuse}}:{window_seconds}:{window_start}"
+                metric_key = f"{base}:metrics"
+                keys = [metric_key]
+                args: list[Any] = [ttl, window_seconds, window_start, len(scopes)]
+                for digest, scope_limit in scopes:
+                    keys.append(f"{base}:scope:{digest}")
+                    args.append(scope_limit)
+                result = self.redis.eval(
+                    _REDIS_CHECK_SCRIPT, len(keys), *keys, *args
+                )
+                if int(result[0]) >= 0:
+                    return bool(int(result[0]))
+            raise RecoveryAbuseUnavailable(
+                "Shared recovery abuse window changed during request"
             )
+        except RecoveryAbuseUnavailable:
+            raise
         except Exception as exc:
             raise RecoveryAbuseUnavailable(
                 "Shared recovery abuse protection is unavailable"
             ) from exc
-        return bool(int(result[0]))
 
     def metrics(self) -> dict[str, int]:
         window = self.metrics_window_seconds
@@ -186,7 +201,7 @@ class RedisSecurityRecoveryAbuseMonitor:
             now = int(redis_seconds)
             current_start = now - (now % window)
             for offset in range(3):
-                key = f"{self.key_prefix}:{window}:{current_start - (offset * window)}:metrics"
+                key = f"{self.key_prefix}:{{recovery-abuse}}:{window}:{current_start - (offset * window)}:metrics"
                 values = self.redis.hgetall(key)
                 for field in totals:
                     totals[field] += int(values.get(field, 0))
