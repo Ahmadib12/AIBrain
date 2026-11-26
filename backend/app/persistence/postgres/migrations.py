@@ -1177,6 +1177,19 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         version=14,
         name="agent_identity_and_registration_events",
         sql="""
+        CREATE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM users WHERE id=OLD.user_id AND deleted_at IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'agent records may only be deleted during account erasure'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN OLD;
+        END;
+        $;
+
         CREATE TABLE agents (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1405,7 +1418,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_agent_control_events_owner_agent
             ON agent_control_events(user_id, agent_id, created_at, id);
 
-        CREATE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
+        CREATE OR REPLACE FUNCTION aibrain_require_deleted_owner_for_agent_erasure()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
