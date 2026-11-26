@@ -82,6 +82,19 @@ async def register_device_public_key(
         ) from None
 
 
+
+class KeyRotationChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    new_public_key_b64: str = Field(min_length=40, max_length=64)
+
+
+class KeyRotationVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    nonce: str = Field(min_length=20, max_length=128)
+    old_signature_b64: str = Field(min_length=80, max_length=100)
+    new_signature_b64: str = Field(min_length=80, max_length=100)
+
+
 @router.post("/{device_id}/challenge", response_model=dict)
 async def create_device_challenge(
     device_id: UUID,
@@ -133,6 +146,71 @@ async def verify_device_proof(
             status_code=409,
             detail={"code": "DEVICE_CHALLENGE_INVALID", "message": "Device challenge is invalid, expired, or already used"},
         ) from None
+
+
+
+@router.post("/{device_id}/key-rotation/challenge", response_model=dict)
+async def create_device_key_rotation_challenge(
+    device_id: UUID,
+    request: KeyRotationChallengeRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        return get_app_state().device_proofs.create_key_rotation_challenge(
+            user["id"], str(device_id), request.new_public_key_b64
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail={
+            "code": "ACTIVE_DEVICE_NOT_FOUND", "message": "Active keyed device not found"
+        }) from None
+    except PermissionError:
+        raise HTTPException(status_code=429, detail={
+            "code": "DEVICE_KEY_ROTATION_RATE_LIMITED",
+            "message": "Too many key rotation challenges were requested"
+        }) from None
+    except ValueError:
+        raise HTTPException(status_code=400, detail={
+            "code": "DEVICE_KEY_ROTATION_KEY_INVALID",
+            "message": "Replacement public key is invalid or unchanged"
+        }) from None
+
+
+@router.post("/{device_id}/key-rotation/verify", response_model=dict)
+async def verify_device_key_rotation(
+    device_id: UUID,
+    request: KeyRotationVerifyRequest,
+    challenge_id: UUID,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    try:
+        fingerprint = get_app_state().device_proofs.verify_and_rotate_key(
+            user["id"], str(device_id), str(challenge_id), request.nonce,
+            request.old_signature_b64, request.new_signature_b64,
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail={
+            "code": "DEVICE_KEY_ROTATION_CHALLENGE_NOT_FOUND",
+            "message": "Device key rotation challenge not found"
+        }) from None
+    except PermissionError:
+        raise HTTPException(status_code=401, detail={
+            "code": "DEVICE_KEY_ROTATION_PROOF_REJECTED",
+            "message": "Both device keys must prove possession"
+        }) from None
+    except ValueError:
+        raise HTTPException(status_code=409, detail={
+            "code": "DEVICE_KEY_ROTATION_CHALLENGE_INVALID",
+            "message": "Device key rotation challenge is invalid, expired, or already used"
+        }) from None
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail={
+            "code": "DEVICE_KEY_ALREADY_ENROLLED",
+            "message": "Replacement key is already enrolled on another device"
+        }) from None
+    return {
+        "status": "rotated", "device_id": str(device_id),
+        "public_key_fingerprint": fingerprint
+    }
 
 
 @router.post("/{device_id}/session/challenge", response_model=dict)
