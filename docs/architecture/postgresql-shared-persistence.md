@@ -33,10 +33,11 @@ are a coverage checklist, not a claim that PostgreSQL currently has parity.
    ordered migration stream. Versions 1–18 currently cover SQLite migration
    domains 1–27, including dispatch recovery, lookup authorization, execution
    reconciliation, memory consent, learning history, agent lifecycle, capability
-   grants, tasks, messages, and bounded agent runs. SQLite migrations 28–45
-   and full invariant parity remain outstanding. Port every remaining table, check, unique/index
+   grants, tasks, messages, and bounded agent runs. Repository compatibility and full multi-instance invariant parity
+   remain outstanding. Port every remaining table, check, unique/index
    constraint, foreign key, append-only rule, account-active guard, lifecycle
-   transition, notification outbox trigger, and account-erasure behavior.
+   transition, notification outbox trigger, operator redrive audit, claim-token
+   fencing, recovery-abuse windows, and account-erasure behavior.
    Do not translate SQLite trigger SQL mechanically.
 3. **Repository compatibility** — still required. Audit every repository for
    SQLite-only SQL/API assumptions. Use explicit dialect-aware implementations
