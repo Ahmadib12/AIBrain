@@ -349,7 +349,6 @@ async def create_device_recovery_challenge(
             },
         ) from None
 
-    _recovery_rate_limiter.reset(email_key)
     return result
 
 
