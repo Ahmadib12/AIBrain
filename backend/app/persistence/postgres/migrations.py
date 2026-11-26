@@ -2713,7 +2713,6 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             EXECUTE FUNCTION aibrain_protect_session_identity_and_revocation();
         """,
     ),
-,
 
     PostgresMigration(
         version=31,
