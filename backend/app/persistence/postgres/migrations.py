@@ -945,19 +945,19 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_active_owner();
 
         CREATE FUNCTION aibrain_reject_memory_consent_identity_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'memory consent identity is immutable'
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_memory_consent_identity_update
             BEFORE UPDATE OF id, user_id, purpose, policy_version, granted_at
             ON memory_consents
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_memory_consent_identity_mutation();
 
         CREATE FUNCTION aibrain_validate_memory_consent_revocation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL THEN
                 RAISE EXCEPTION 'memory consent revocation is immutable'
@@ -965,13 +965,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_memory_consent_reactivation
             BEFORE UPDATE OF revoked_at ON memory_consents
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_memory_consent_revocation();
 
         CREATE FUNCTION aibrain_validate_memory_consent_retention()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF OLD.revoked_at IS NOT NULL THEN
                 RAISE EXCEPTION 'revoked memory consent policy is immutable'
@@ -979,13 +979,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_memory_consent_policy_update_after_revoke
             BEFORE UPDATE OF retention_days ON memory_consents
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_memory_consent_retention();
 
         CREATE FUNCTION aibrain_require_deleted_owner_for_memory_consent_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users
@@ -996,13 +996,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_memory_consent_delete
             BEFORE DELETE ON memory_consents
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_memory_consent_erasure();
 
         CREATE FUNCTION aibrain_validate_memory_item_consent()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -1019,7 +1019,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_memory_consent_insert
             BEFORE INSERT ON memory_items
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_memory_item_consent();
@@ -1069,12 +1069,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON learning_evaluations(user_id, adaptation_id, created_at);
 
         CREATE FUNCTION aibrain_reject_learning_history_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_learning_adaptation_event_update
             BEFORE UPDATE ON learning_adaptation_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_learning_history_mutation();
@@ -1083,7 +1083,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_learning_history_mutation();
 
         CREATE FUNCTION aibrain_require_deleted_owner_for_learning_erasure()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users
@@ -1094,7 +1094,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN OLD;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_learning_adaptation_event_delete
             BEFORE DELETE ON learning_adaptation_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_learning_erasure();
@@ -1103,7 +1103,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_learning_erasure();
 
         CREATE FUNCTION aibrain_validate_learning_adaptation_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT (
                 OLD.status = NEW.status
@@ -1122,13 +1122,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_learning_adaptation_transition
             BEFORE UPDATE OF status ON adaptations
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_learning_adaptation_transition();
 
         CREATE FUNCTION aibrain_validate_learning_adaptation_event()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -1143,13 +1143,13 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_learning_adaptation_event
             BEFORE INSERT ON learning_adaptation_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_learning_adaptation_event();
 
         CREATE FUNCTION aibrain_validate_learning_evaluation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -1166,7 +1166,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_learning_evaluation
             BEFORE INSERT ON learning_evaluations
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_learning_evaluation();
