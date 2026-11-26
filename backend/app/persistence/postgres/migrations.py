@@ -452,12 +452,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_external_adapter_certification_revocations
             ON external_adapter_certification_revocations(certification_id);
         CREATE FUNCTION aibrain_reject_certification_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_external_adapter_certification_update
             BEFORE UPDATE ON external_adapter_certifications
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_certification_mutation();
@@ -514,12 +514,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
                 tool_id, tool_contract_fingerprint, expires_at
             );
         CREATE FUNCTION aibrain_reject_evidence_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_external_adapter_evidence_update
             BEFORE UPDATE ON external_adapter_evidence_packages
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_evidence_mutation();
@@ -583,12 +583,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_evidence_attestation_key
             ON external_adapter_evidence_attestations(key_id);
         CREATE FUNCTION aibrain_reject_runner_key_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION '% records are immutable', TG_TABLE_NAME
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_trusted_runner_key_update
             BEFORE UPDATE ON trusted_runner_keys
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_runner_key_mutation();
@@ -629,12 +629,12 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_security_operator_audit_target
             ON security_operator_audit_events(target_type, target_id, created_at);
         CREATE FUNCTION aibrain_reject_operator_audit_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION 'security operator audit events are immutable'
                 USING ERRCODE = '23514';
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_security_operator_audit_update
             BEFORE UPDATE ON security_operator_audit_events
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_operator_audit_mutation();
