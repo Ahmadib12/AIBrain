@@ -19,6 +19,18 @@ jobs:
   tests:
     name: Python ${{ matrix.python-version }} tests
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      AIBRAIN_SECURITY_RECOVERY_ABUSE_REDIS_TEST_URL: redis://localhost:6379/15
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +54,10 @@ jobs:
       - name: Compile application and tests
         run: |
           python -m compileall -q backend tests scripts
+
+      - name: Verify real Redis integration
+        run: |
+          pytest -q tests/test_security_recovery_abuse_redis_integration.py
 
       - name: Run complete test suite
         run: pytest -q
