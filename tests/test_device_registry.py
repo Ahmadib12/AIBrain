@@ -789,6 +789,19 @@ def test_device_key_rotation_requires_both_keys_and_revokes_old_sessions(
     assert rejected.json()["error"]["code"] == "DEVICE_KEY_ROTATION_PROOF_REJECTED"
     assert client.get("/api/v1/auth/me", headers=old_headers).status_code == 200
 
+    forged_replacement = client.post(
+        f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
+        params={"challenge_id": challenge["challenge_id"]},
+        headers=owner_headers,
+        json={
+            "nonce": challenge["nonce"],
+            "old_signature_b64": base64.b64encode(old_private_key.sign(message)).decode("ascii"),
+            "new_signature_b64": base64.b64encode(attacker.sign(message)).decode("ascii"),
+        },
+    )
+    assert forged_replacement.status_code == 401
+    assert client.get("/api/v1/auth/me", headers=old_headers).status_code == 200
+
     rotated = client.post(
         f"/api/v1/devices/{device['device_id']}/key-rotation/verify",
         params={"challenge_id": challenge["challenge_id"]},
