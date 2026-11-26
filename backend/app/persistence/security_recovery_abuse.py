@@ -6,8 +6,8 @@ from hashlib import sha256
 class SecurityRecoveryAbuseMonitor:
     """Coordinates account-scoped rate limits across processes sharing a database.
 
-    Only a one-way digest of the normalized account email is persisted. A
-    shared database is required for cross-host coordination.
+    Only one-way digests of the normalized account email and direct peer IP
+    are persisted. A shared database is required for cross-host coordination.
     """
 
     def __init__(self, database) -> None:
