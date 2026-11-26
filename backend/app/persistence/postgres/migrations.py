@@ -2412,7 +2412,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_devices_owner_status
             ON devices(user_id,status,enrolled_at);
         CREATE FUNCTION aibrain_validate_device_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM users WHERE id=NEW.user_id AND deleted_at IS NULL
@@ -2421,7 +2421,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER prevent_device_for_inactive_user
             BEFORE INSERT ON devices
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_device_insert();
@@ -2444,7 +2444,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_device_auth_challenges_expiry
             ON device_auth_challenges(expires_at,used_at);
         CREATE FUNCTION aibrain_validate_device_challenge_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM devices d JOIN users u ON u.id=d.user_id
@@ -2457,7 +2457,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         CREATE TRIGGER validate_device_challenge_insert
             BEFORE INSERT ON device_auth_challenges
             FOR EACH ROW EXECUTE FUNCTION aibrain_validate_device_challenge_insert();
@@ -2478,7 +2478,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ADD COLUMN purpose TEXT NOT NULL DEFAULT 'enrollment'
             CHECK (purpose IN ('enrollment','session'));
         CREATE OR REPLACE FUNCTION aibrain_validate_device_challenge_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $
+        RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM devices d JOIN users u ON u.id=d.user_id
@@ -2494,7 +2494,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             END IF;
             RETURN NEW;
         END;
-        $;
+        $$;
         """,
     ),
 
