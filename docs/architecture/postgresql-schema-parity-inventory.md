@@ -18,7 +18,7 @@ used to rebuild or replace triggers are counted once by name.
 
 These counts are an audit baseline, not proof that PostgreSQL has equivalent
 objects. PostgreSQL migration version 1 currently creates only `users`,
-sessions`, and `idx_sessions_user` (plus `schema_migrations`). The
+`sessions`, and `idx_sessions_user` (plus `schema_migrations`). The
 PostgreSQL stream must not be described as schema-complete until every
 required invariant below is ported and tested.
 
