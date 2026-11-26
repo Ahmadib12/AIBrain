@@ -118,5 +118,17 @@ device must perform the normal device login proof with its new key.
 This recovery flow requires two independent factors: possession of a
 single-use recovery code and possession of the replacement private key. It
 does not require the lost key, and it does not treat a normal account session
-as sufficient. It does not yet provide remote attestation, out-of-band
-recovery notifications, or a distributed rate-limit service.
+as sufficient.
+
+Migration 43 adds a durable notification outbox. The same transaction that
+writes a recovery key-rotation audit event enqueues one
+`device.recovery.completed` notification for the account email. The outbox
+payload contains only the device ID and event timestamp; it excludes recovery
+codes, signatures, nonces, and key fingerprints. Claims use an immediate
+transaction, bounded batches, attempt counts, and expiring processing leases so
+crashed workers do not permanently strand notifications. Delivery is not yet
+enabled: a configured email transport and supervised delivery worker are still
+required before the system can claim that an owner was actually notified.
+
+Remote device attestation and a distributed rate-limit service also remain
+unimplemented.
