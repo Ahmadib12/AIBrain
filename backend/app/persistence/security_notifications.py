@@ -88,21 +88,48 @@ class SecurityNotificationOutbox:
         notification_id: str,
         *,
         delay_seconds: int,
+        max_attempts: int = 8,
     ) -> bool:
-        if not 1 <= delay_seconds <= 86_400:
-            raise ValueError("Notification retry delay is invalid")
-        available = (_now() + timedelta(seconds=delay_seconds)).isoformat()
+        if not 1 <= delay_seconds <= 86_400 or not 1 <= max_attempts <= 100:
+            raise ValueError("Notification retry bounds are invalid")
+        now = _now()
+        available = (now + timedelta(seconds=delay_seconds)).isoformat()
         with self.database.transaction(immediate=True):
-            cursor = self.database.connect().execute(
-                """
-                UPDATE security_notification_outbox
-                SET status='pending', available_at=?, claimed_at=NULL
-                WHERE id=? AND status='processing'
-                """,
-                (available, notification_id),
-            )
+            connection = self.database.connect()
+            row = connection.execute(
+                "SELECT attempts FROM security_notification_outbox "
+                "WHERE id=? AND status='processing'",
+                (notification_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if int(row["attempts"]) >= max_attempts:
+                cursor = connection.execute(
+                    """
+                    UPDATE security_notification_outbox
+                    SET status='failed', failed_at=?, failure_code=?, claimed_at=NULL
+                    WHERE id=? AND status='processing'
+                    """,
+                    (now.isoformat(), "delivery_attempts_exhausted", notification_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE security_notification_outbox
+                    SET status='pending', available_at=?, claimed_at=NULL
+                    WHERE id=? AND status='processing'
+                    """,
+                    (available, notification_id),
+                )
             return cursor.rowcount == 1
 
+    def delivery_counts(self) -> dict[str, int]:
+        rows = self.database.connect().execute(
+            "SELECT status, COUNT(*) AS total FROM security_notification_outbox GROUP BY status"
+        ).fetchall()
+        counts = {"pending": 0, "processing": 0, "delivered": 0, "failed": 0}
+        counts.update({row["status"]: int(row["total"]) for row in rows})
+        return counts
     def pending_count(self) -> int:
         row = self.database.connect().execute(
             "SELECT COUNT(*) AS total FROM security_notification_outbox "
