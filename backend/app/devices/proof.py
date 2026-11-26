@@ -653,8 +653,8 @@ class DeviceProofRepository:
             )
 
         message = (
-            f"AIBRAIN_DEVICE_KEY_RECOVERY_V1\\n{challenge_id}\\n{device_id}\\n"
-            f"{owner_id}\\n{expires_text}\\n{nonce}\\n{new_fingerprint}"
+            f"AIBRAIN_DEVICE_KEY_RECOVERY_V1\n{challenge_id}\n{device_id}\n"
+            f"{owner_id}\n{expires_text}\n{nonce}\n{new_fingerprint}"
         ).encode("utf-8")
         return {
             "challenge_id": challenge_id,
@@ -717,8 +717,8 @@ class DeviceProofRepository:
                 raise ValueError("Device recovery nonce mismatch")
 
             message = (
-                f"AIBRAIN_DEVICE_KEY_RECOVERY_V1\\n{challenge_id}\\n{device_id}\\n"
-                f"{row['user_id']}\\n{row['expires_at']}\\n{nonce}\\n"
+                f"AIBRAIN_DEVICE_KEY_RECOVERY_V1\n{challenge_id}\n{device_id}\n"
+                f"{row['user_id']}\n{row['expires_at']}\n{nonce}\n"
                 f"{row['proposed_fingerprint']}"
             ).encode("utf-8")
             try:
