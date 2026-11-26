@@ -522,6 +522,47 @@ async def list_session_security_events(
         ) from None
 
 
+@router.get("/sessions", response_model=list[dict])
+async def list_active_sessions(
+    authorization: str | None = Header(default=None),
+    user: dict = Depends(get_current_user),
+) -> list[dict]:
+    """List the authenticated owner's active sessions, marking this request's session."""
+    token = authorization[len("Bearer "):].strip()
+    return list(get_app_state().identity.list_owned_sessions(user["id"], token))
+
+
+@router.delete("/sessions/{session_ref}", response_model=dict)
+async def revoke_owned_session(
+    session_ref: UUID,
+    authorization: str | None = Header(default=None),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Revoke one selected session belonging to the authenticated owner."""
+    token = authorization[len("Bearer "):].strip()
+    try:
+        revoked = get_app_state().identity.revoke_owned_session(
+            user["id"], str(session_ref), token
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CURRENT_SESSION_CANNOT_BE_REVOKED",
+                "message": "Use logout to end the session making this request",
+            },
+        ) from None
+    if not revoked:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "SESSION_NOT_FOUND",
+                "message": "The requested active session was not found",
+            },
+        )
+    return {"status": "revoked", "session_ref": str(session_ref)}
+
+
 @router.get("/me", response_model=dict)
 async def me(user: dict = Depends(get_current_user)) -> dict:
     return {"user": user}
