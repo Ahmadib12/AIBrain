@@ -212,7 +212,7 @@ def test_device_identity_and_registered_key_are_immutable(client: TestClient):
                 (other_id, device["device_id"]),
             )
 
-    with pytest.raises(Exception, match="device identity fields are immutable"):
+    with pytest.raises(Exception, match="device key replacement requires verified rotation"):
         with state.database.transaction(immediate=True):
             state.database.connect().execute(
                 "UPDATE devices SET public_key_fingerprint=? WHERE id=?",
