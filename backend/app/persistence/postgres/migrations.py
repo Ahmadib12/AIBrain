@@ -1505,6 +1505,8 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         $$;
         CREATE TRIGGER prevent_agent_task_identity_update BEFORE UPDATE ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_agent_task_identity_update();
+        CREATE TRIGGER prevent_agent_task_delete BEFORE DELETE ON agent_tasks
+            FOR EACH ROW EXECUTE FUNCTION aibrain_require_deleted_owner_for_agent_erasure();
         CREATE TRIGGER prevent_agent_task_update BEFORE UPDATE ON agent_tasks
             FOR EACH ROW EXECUTE FUNCTION aibrain_reject_immutable_update();
         CREATE FUNCTION aibrain_validate_agent_task_event()
