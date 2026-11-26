@@ -50,8 +50,7 @@ this endpoint; it must be ended through `POST /api/v1/auth/logout` so the
 caller does not invalidate its own request context mid-operation.
 
 This is an application-level session inventory and revocation control. It does
-not yet provide device recovery, cryptographic key rotation, or remote device
-attestation.\n
+not provide remote device attestation.\n
 
 ## Device key rotation
 
@@ -101,3 +100,44 @@ not yet accepted as proof to replace a lost device key, create a device session,
 or bypass the dual-key rotation requirement. Those actions remain unavailable
 until a separate recovery challenge verifies the code and replacement-key
 possession atomically.
+
+
+## Lost-device recovery
+
+Migration 42 extends the device key rotation challenge with an optional
+recovery-code reference and updates the database key-change guard. Ordinary
+rotation still requires both old and replacement private-key signatures.
+Recovery is a separate unauthenticated flow and never accepts an ordinary
+account session as its authorization factor.
+
+Owners first provision ten high-entropy recovery codes through
+POST /api/v1/auth/passkeys/recovery-codes after password reauthentication.
+Only SHA-256 digests are stored. Reissuing the set invalidates every unused
+code in the same transaction. The status endpoint returns only the remaining
+count; plaintext is returned only at issuance.
+
+To recover a lost device, the replacement installation submits the account
+email, one unused recovery code, the target device ID, and its new Ed25519
+public key to POST /api/v1/devices/{device_id}/recovery/challenge. The server
+checks that the device is active and belongs to that account, validates the
+unused code, and creates a five-minute challenge bound to the previous key
+fingerprint and replacement key. The replacement installation signs the exact
+challenge message with its new private key and submits it to
+POST /api/v1/devices/{device_id}/recovery/verify.
+
+The verification transaction rechecks the active account and device, key
+version, challenge expiry and replay state, recovery-code state, nonce, and
+replacement-key signature. It consumes the recovery code and challenge,
+updates the device key, revokes all sessions bound to that device, marks the
+challenge applied, and appends the device key-rotation audit event atomically.
+A database trigger independently requires the referenced recovery code to be
+consumed before accepting a recovery-authorized key replacement. A recovery
+code cannot be reused across challenges; only one concurrent verification can
+consume it. A successful recovery does not create a session: the replacement
+device must perform the normal device login proof with its new key.
+
+This recovery flow requires two independent factors: possession of a
+single-use recovery code and possession of the replacement private key. It
+does not require the lost key, and it does not treat a normal account session
+as sufficient. It does not yet provide remote attestation, out-of-band
+recovery notifications, or a distributed rate-limit service.
