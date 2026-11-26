@@ -29,7 +29,15 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "CREATE TABLE trusted_runner_keys" in MIGRATIONS[5].sql
     assert MIGRATIONS[6].version == 7
     assert "CREATE TABLE security_operator_audit_events" in MIGRATIONS[6].sql
-    for migration in MIGRATIONS[1:7]:
+    assert MIGRATIONS[7].version == 8
+    assert "CREATE TABLE tool_dispatch_recovery_events" in MIGRATIONS[7].sql
+    assert MIGRATIONS[8].version == 9
+    assert "CREATE TABLE tool_dispatch_lookup_authorizations" in MIGRATIONS[8].sql
+    assert MIGRATIONS[9].version == 10
+    assert "prevent_tool_dispatch_audit_delete" in MIGRATIONS[9].sql
+    assert MIGRATIONS[10].version == 11
+    assert "CREATE TABLE tool_execution_reconciliation_events" in MIGRATIONS[10].sql
+    for migration in MIGRATIONS[1:11]:
         if "LANGUAGE plpgsql" in migration.sql:
             assert "AS $" in migration.sql
             assert "$;" in migration.sql
