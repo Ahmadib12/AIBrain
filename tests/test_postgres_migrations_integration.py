@@ -262,6 +262,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
     assert runner.migrate() == 7
 
     suffix = str(uuid.uuid4())
+    runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
     timestamp = "2026-01-01T00:00:00+00:00"
     with psycopg.connect(database_url) as connection:
         connection.execute(
@@ -329,7 +330,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             ("runner-key-" + suffix, "runner", "provider", "adapter", "1.0",
-             "scope", "tool", "a" * 64, "Ed25519", bytes(range(32)),
+             "scope", "tool", "a" * 64, "Ed25519", runner_public_key,
              "2026-01-01T00:00:00+00:00", "2027-01-01T00:00:00+00:00",
              "operator", timestamp),
         )
