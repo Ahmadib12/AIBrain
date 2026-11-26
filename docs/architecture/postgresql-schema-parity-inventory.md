@@ -31,7 +31,7 @@ required invariant below is ported and tested.
 | SQLite versions | Domain to port |
 |---|---|
 | 1–11 | Identity, sessions, memory/observations/adaptations, tool requests, WebAuthn/passkeys, tool authorization, execution attempts/bindings, dispatch audit |
-| 12–20 | External adapter certification and evidence, trusted runner keys/attestations, operator audit, dispatch recovery/lookup authorization, execution reconciliation |
+| 12–15 | External adapter certification/evidence, trusted runner keys/attestations, operator audit (PostgreSQL migrations 4–7) |\n| 16–20 | Dispatch recovery/lookup authorization and execution reconciliation |
 | 21–22 | Memory consent lifecycle, learning adaptation events and evaluations |
 | 23–27 | Agent identity/events, capability grants and revocations, tasks/messages/control events, runs/steps/events |
 | 28–31 | Integration connections/grants/events/secrets, agent-run integration bindings and dispatches |
