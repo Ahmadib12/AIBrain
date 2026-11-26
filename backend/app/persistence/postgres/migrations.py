@@ -1675,7 +1675,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             required_capability TEXT,
             status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed','skipped')),
             tool_request_id TEXT,
-            result_json TEXT CHECK (result_json IS NULL OR jsonb_typeof(result_json::jsonb) IS NOT NULL),
+            result_json TEXT CHECK (result_json IS NULL OR result_json::jsonb IS NOT NULL),
             error_code TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
