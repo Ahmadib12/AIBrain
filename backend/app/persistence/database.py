@@ -3409,8 +3409,11 @@ created_at TEXT NOT NULL,
                 CREATE TRIGGER enqueue_device_recovery_notification
                 AFTER INSERT ON device_security_events
                 WHEN NEW.event_type = 'device.key_rotated'
-                  AND json_valid(NEW.details_json)
-                  AND json_extract(NEW.details_json, '$.recovery') = 1
+                  AND CASE
+                      WHEN json_valid(NEW.details_json)
+                      THEN json_extract(NEW.details_json, '$.recovery')
+                      ELSE 0
+                  END = 1
                 BEGIN
                     INSERT INTO security_notification_outbox (
                         id, event_id, user_id, recipient_email,
