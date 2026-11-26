@@ -20,9 +20,8 @@ class SecurityRecoveryAbuseMonitor:
             raise ValueError("Recovery abuse monitor bounds are invalid")
         now = int(datetime.now(timezone.utc).timestamp())
         window_start = now - (now % window_seconds)
-        scope = sha256(
-            (email.strip().lower() + "\\0" + device_id).encode("utf-8")
-        ).hexdigest()
+        # Account-scoped throttling prevents bypass by rotating device IDs.
+        scope = sha256(email.strip().lower().encode("utf-8")).hexdigest()
         now_text = datetime.now(timezone.utc).isoformat()
         with self.database.transaction(immediate=True):
             connection = self.database.connect()
