@@ -23,7 +23,10 @@ foundations. PostgreSQL migrations 3–7 cover tool execution, external adapter
 evidence, trusted runner attestations and operator audit (SQLite migrations
 9–15). PostgreSQL migrations 8–11 add dispatch recovery, certification-bound
 lookup authorization, account-erasure guards and execution reconciliation
-(SQLite migrations 16–20). PostgreSQL still lacks SQLite migrations 21–45,
+(SQLite migrations 16–20). PostgreSQL migrations 12–13 now port memory consent
+and memory binding plus learning adaptation history, lifecycle transitions and
+evaluations (SQLite migrations 21–22). PostgreSQL still lacks SQLite migrations
+23–45,
 complete repository compatibility, and shared multi-instance acceptance. The
 stream must not be described as schema-complete or application-ready until
 every required invariant below is ported and tested.
@@ -35,7 +38,7 @@ every required invariant below is ported and tested.
 | 1–11 | Identity, sessions, memory/observations/adaptations, tool requests, WebAuthn/passkeys, tool authorization, execution attempts/bindings, dispatch audit |
 | 12–15 | External adapter certification/evidence, trusted runner keys/attestations, operator audit (PostgreSQL migrations 4–7) |
 | 16–20 | Dispatch recovery/lookup authorization and execution reconciliation (PostgreSQL migrations 8–11) |
-| 21–22 | Memory consent lifecycle, learning adaptation events and evaluations |
+| 21–22 | Memory consent lifecycle, learning adaptation events and evaluations (PostgreSQL migrations 12–13) |
 | 23–27 | Agent identity/events, capability grants and revocations, tasks/messages/control events, runs/steps/events |
 | 28–31 | Integration connections/grants/events/secrets, agent-run integration bindings and dispatches |
 | 32–35 | Capability-table transition and device/session schema evolution |
