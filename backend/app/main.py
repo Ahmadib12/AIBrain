@@ -12,6 +12,8 @@ from backend.app.tools.recovery import ToolExecutionRecoveryWorker
 from backend.app.persistence.memory_retention import MemoryRetentionWorker
 from backend.app.persistence.integration_expiry import IntegrationConnectionExpiryWorker
 from backend.app.persistence.integration_dispatch_recovery import IntegrationDispatchRecoveryWorker
+from backend.app.persistence.security_notification_transport import SmtpSecurityNotificationTransport
+from backend.app.persistence.security_notification_worker import SecurityNotificationDeliveryWorker
 
 
 settings = get_settings()
@@ -39,15 +41,29 @@ async def lifespan(app: FastAPI):
         interval_seconds=settings.integration_dispatch_recovery_interval_seconds,
         stale_after_seconds=settings.integration_dispatch_stale_after_seconds,
     )
+    notification_worker = None
+    if settings.security_notification_delivery_enabled:
+        notification_worker = SecurityNotificationDeliveryWorker(
+            state.security_notifications,
+            SmtpSecurityNotificationTransport(settings),
+            interval_seconds=settings.security_notification_worker_interval_seconds,
+            batch_size=settings.security_notification_batch_size,
+        )
     try:
         await recovery_worker.start()
         await memory_retention_worker.start()
         await integration_expiry_worker.start()
         await integration_dispatch_recovery_worker.start()
+        if notification_worker is not None:
+            await notification_worker.start()
         yield
     finally:
         try:
-            await integration_dispatch_recovery_worker.stop()
+            if notification_worker is not None:
+                await notification_worker.stop()
+        finally:
+            try:
+                await integration_dispatch_recovery_worker.stop()
         finally:
             try:
                 await integration_expiry_worker.stop()
