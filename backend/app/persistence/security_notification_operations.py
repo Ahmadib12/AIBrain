@@ -83,7 +83,7 @@ class SecurityNotificationOperations:
         counts = {"pending": 0, "processing": 0, "delivered": 0, "failed": 0}
         counts.update({row["status"]: int(row["total"]) for row in rows})
         oldest = connection.execute(
-            "SELECT MIN(available_at) AS oldest FROM security_notification_outbox "
+            "SELECT MIN(created_at) AS oldest FROM security_notification_outbox "
             "WHERE status IN ('pending','processing')"
         ).fetchone()["oldest"]
         age = None
