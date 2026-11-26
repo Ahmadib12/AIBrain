@@ -27,9 +27,12 @@ lookup authorization, account-erasure guards and execution reconciliation
 adaptation history, lifecycle transitions and evaluations (SQLite migrations
 21–22). PostgreSQL migrations 14–18 now port agent identity/lifecycle, capability
 grants and revocations, tasks, messages, control events, bounded runs, steps,
-and immutable run history (SQLite migrations 23–27). PostgreSQL still lacks
-SQLite migrations 28–45, complete repository compatibility, and shared
-multi-instance acceptance. The
+and immutable run history (SQLite migrations 23–27). PostgreSQL migrations
+19–22 now port integration connections, owner-scoped grants and event history,
+credential-vault lifecycle and terminal secret erasure, agent-run integration
+bindings, and event-gated dispatch transitions (SQLite migrations 28–31).
+PostgreSQL still lacks SQLite migrations 32–45, complete repository
+compatibility, and shared multi-instance acceptance. The
 stream must not be described as schema-complete or application-ready until
 every required invariant below is ported and tested.
 
@@ -42,7 +45,7 @@ every required invariant below is ported and tested.
 | 16–20 | Dispatch recovery/lookup authorization and execution reconciliation (PostgreSQL migrations 8–11) |
 | 21–22 | Memory consent lifecycle, learning adaptation events and evaluations (PostgreSQL migrations 12–13) |
 | 23–27 | Agent identity/events, capability grants and revocations, tasks/messages/control events, runs/steps/events |
-| 28–31 | Integration connections/grants/events/secrets, agent-run integration bindings and dispatches |
+| 28–31 | Integration connections/grants/events/secrets, agent-run integration bindings and dispatches (PostgreSQL migrations 19–22) |
 | 32–35 | Capability-table transition and device/session schema evolution |
 | 36–42 | Device security audit, device lifecycle guards, session/device binding and audit, key rotation and lost-device recovery |
 | 43–45 | Recovery notification outbox, terminal failure/dead-letter state, operator redrive audit, claim fencing, recovery-abuse windows |
