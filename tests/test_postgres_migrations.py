@@ -89,7 +89,18 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "ADD COLUMN device_id" in MIGRATIONS[25].sql
     assert "ADD COLUMN auth_method" in MIGRATIONS[25].sql
     assert "ADD COLUMN purpose" in MIGRATIONS[25].sql
-    for migration in MIGRATIONS[1:26]:
+    assert MIGRATIONS[26].version == 27
+    assert "CREATE TABLE device_security_events" in MIGRATIONS[26].sql
+    assert MIGRATIONS[27].version == 28
+    assert "audit_device_enrollment" in MIGRATIONS[27].sql
+    assert "device security events may only be erased with the account" in MIGRATIONS[27].sql
+    assert MIGRATIONS[28].version == 29
+    assert "device identity fields are immutable" in MIGRATIONS[28].sql
+    assert "invalid device lifecycle transition" in MIGRATIONS[28].sql
+    assert MIGRATIONS[29].version == 30
+    assert "validate_session_device_binding" in MIGRATIONS[29].sql
+    assert "session revocation is irreversible" in MIGRATIONS[29].sql
+    for migration in MIGRATIONS[1:30]:
         if "LANGUAGE plpgsql" in migration.sql:
             openings = re.findall(r"\bAS\s+\$\$", migration.sql)
             closings = re.findall(r"\$\$;", migration.sql)
