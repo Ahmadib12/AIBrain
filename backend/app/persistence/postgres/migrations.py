@@ -2713,7 +2713,279 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             EXECUTE FUNCTION aibrain_protect_session_identity_and_revocation();
         """,
     ),
+,
 
+    PostgresMigration(
+        version=31,
+        name="session_security_audit_history",
+        sql="""
+        ALTER TABLE sessions ADD COLUMN audit_ref TEXT;
+        UPDATE sessions SET audit_ref=gen_random_uuid()::text WHERE audit_ref IS NULL;
+        ALTER TABLE sessions ALTER COLUMN audit_ref SET NOT NULL;
+        CREATE UNIQUE INDEX idx_sessions_audit_ref ON sessions(audit_ref);
+
+        CREATE TABLE session_security_events (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            session_ref TEXT NOT NULL,
+            device_id TEXT,
+            auth_method TEXT NOT NULL CHECK (auth_method IN ('account','device_proof','device_login')),
+            event_type TEXT NOT NULL CHECK (event_type IN ('session.created','session.revoked','session.expired')),
+            occurred_at TEXT NOT NULL,
+            UNIQUE(session_ref,event_type)
+        );
+        CREATE INDEX idx_session_security_events_owner_time
+            ON session_security_events(user_id,occurred_at DESC,id DESC);
+        CREATE INDEX idx_session_security_events_session
+            ON session_security_events(user_id,session_ref,occurred_at);
+
+        CREATE FUNCTION aibrain_guard_session_security_event()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF TG_OP='UPDATE' THEN
+                RAISE EXCEPTION 'session security events are immutable' USING ERRCODE='23514';
+            END IF;
+            IF current_setting('aibrain.account_erasure_user_id',true) IS DISTINCT FROM OLD.user_id THEN
+                RAISE EXCEPTION 'session security events may only be erased with the account'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN OLD;
+        END;
+        $;
+        CREATE TRIGGER prevent_session_security_event_update
+            BEFORE UPDATE ON session_security_events FOR EACH ROW
+            EXECUTE FUNCTION aibrain_guard_session_security_event();
+        CREATE TRIGGER prevent_session_security_event_delete
+            BEFORE DELETE ON session_security_events FOR EACH ROW
+            EXECUTE FUNCTION aibrain_guard_session_security_event();
+
+        CREATE FUNCTION aibrain_protect_session_audit_ref()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF TG_OP='INSERT' AND NEW.audit_ref IS NOT NULL THEN
+                RAISE EXCEPTION 'session audit reference is server generated' USING ERRCODE='23514';
+            END IF;
+            IF TG_OP='UPDATE' AND OLD.audit_ref IS NOT NULL
+               AND NEW.audit_ref IS DISTINCT FROM OLD.audit_ref THEN
+                RAISE EXCEPTION 'session audit reference is immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_client_session_audit_ref
+            BEFORE INSERT ON sessions FOR EACH ROW
+            EXECUTE FUNCTION aibrain_protect_session_audit_ref();
+        CREATE TRIGGER prevent_session_audit_ref_replacement
+            BEFORE UPDATE OF audit_ref ON sessions FOR EACH ROW
+            EXECUTE FUNCTION aibrain_protect_session_audit_ref();
+
+        CREATE FUNCTION aibrain_audit_session_lifecycle()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE
+            session_reference TEXT;
+            event_time TEXT;
+            event_kind TEXT;
+            owner_id TEXT;
+            device_reference TEXT;
+            method TEXT;
+        BEGIN
+            IF TG_OP='INSERT' THEN
+                session_reference := COALESCE(NEW.audit_ref,gen_random_uuid()::text);
+                IF NEW.audit_ref IS NULL THEN
+                    UPDATE sessions SET audit_ref=session_reference WHERE token_hash=NEW.token_hash;
+                END IF;
+                INSERT INTO session_security_events
+                    (id,user_id,session_ref,device_id,auth_method,event_type,occurred_at)
+                VALUES (gen_random_uuid()::text,NEW.user_id,session_reference,NEW.device_id,
+                        NEW.auth_method,'session.created',NEW.created_at);
+                RETURN NEW;
+            ELSIF TG_OP='UPDATE' AND OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL THEN
+                INSERT INTO session_security_events
+                    (id,user_id,session_ref,device_id,auth_method,event_type,occurred_at)
+                VALUES (gen_random_uuid()::text,NEW.user_id,NEW.audit_ref,NEW.device_id,
+                        NEW.auth_method,'session.revoked',NEW.revoked_at);
+                RETURN NEW;
+            ELSIF TG_OP='DELETE' AND OLD.expires_at::timestamptz <= CURRENT_TIMESTAMP THEN
+                INSERT INTO session_security_events
+                    (id,user_id,session_ref,device_id,auth_method,event_type,occurred_at)
+                VALUES (gen_random_uuid()::text,OLD.user_id,OLD.audit_ref,OLD.device_id,
+                        OLD.auth_method,'session.expired',OLD.expires_at);
+                RETURN OLD;
+            END IF;
+            RETURN COALESCE(NEW,OLD);
+        END;
+        $;
+        CREATE TRIGGER audit_session_created
+            AFTER INSERT ON sessions FOR EACH ROW
+            EXECUTE FUNCTION aibrain_audit_session_lifecycle();
+        CREATE TRIGGER audit_session_revoked
+            AFTER UPDATE OF revoked_at ON sessions FOR EACH ROW
+            EXECUTE FUNCTION aibrain_audit_session_lifecycle();
+        CREATE TRIGGER audit_session_expired
+            BEFORE DELETE ON sessions FOR EACH ROW
+            EXECUTE FUNCTION aibrain_audit_session_lifecycle();
+        """,
+    ),
+    PostgresMigration(
+        version=32,
+        name="device_key_rotation_challenges",
+        sql="""
+        CREATE TABLE device_key_rotation_challenges (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            nonce_hash TEXT NOT NULL CHECK(length(nonce_hash)=64),
+            previous_fingerprint TEXT NOT NULL CHECK(length(previous_fingerprint)=64),
+            proposed_public_key_b64 TEXT NOT NULL,
+            proposed_fingerprint TEXT NOT NULL CHECK(length(proposed_fingerprint)=64),
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            applied_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_device_key_rotation_expiry
+            ON device_key_rotation_challenges(expires_at,used_at);
+
+        DROP TRIGGER prevent_device_identity_mutation;
+        CREATE FUNCTION aibrain_validate_device_rotation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+                RAISE EXCEPTION 'device identity fields are immutable' USING ERRCODE='23514';
+            END IF;
+            IF NEW.public_key_fingerprint IS DISTINCT FROM OLD.public_key_fingerprint
+               OR (OLD.public_key_b64 IS NOT NULL AND NEW.public_key_b64 IS DISTINCT FROM OLD.public_key_b64) THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM device_key_rotation_challenges c
+                    WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
+                      AND c.used_at IS NOT NULL AND c.applied_at IS NULL
+                      AND c.previous_fingerprint=OLD.public_key_fingerprint
+                      AND c.proposed_public_key_b64=NEW.public_key_b64
+                      AND c.proposed_fingerprint=NEW.public_key_fingerprint
+                ) THEN
+                    RAISE EXCEPTION 'device key replacement requires verified rotation'
+                        USING ERRCODE='23514';
+                END IF;
+            END IF;
+            IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
+                (OLD.status='pending' AND NEW.status IN ('active','revoked'))
+                OR (OLD.status='active' AND NEW.status='revoked')
+            ) THEN
+                RAISE EXCEPTION 'invalid device lifecycle transition' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER prevent_device_identity_mutation
+            BEFORE UPDATE ON devices FOR EACH ROW
+            EXECUTE FUNCTION aibrain_validate_device_rotation();
+        """,
+    ),
+    PostgresMigration(
+        version=33,
+        name="recovery_code_authorized_device_rotation",
+        sql="""
+        ALTER TABLE device_key_rotation_challenges
+            ADD COLUMN recovery_code_id TEXT REFERENCES webauthn_recovery_codes(id) ON DELETE CASCADE;
+        CREATE INDEX idx_device_key_rotation_recovery_code
+            ON device_key_rotation_challenges(recovery_code_id);
+        CREATE OR REPLACE FUNCTION aibrain_validate_device_rotation()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+                RAISE EXCEPTION 'device identity fields are immutable' USING ERRCODE='23514';
+            END IF;
+            IF NEW.public_key_fingerprint IS DISTINCT FROM OLD.public_key_fingerprint
+               OR (OLD.public_key_b64 IS NOT NULL AND NEW.public_key_b64 IS DISTINCT FROM OLD.public_key_b64) THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM device_key_rotation_challenges c
+                    WHERE c.device_id=OLD.id AND c.user_id=OLD.user_id
+                      AND c.used_at IS NOT NULL AND c.applied_at IS NULL
+                      AND c.previous_fingerprint=OLD.public_key_fingerprint
+                      AND c.proposed_public_key_b64=NEW.public_key_b64
+                      AND c.proposed_fingerprint=NEW.public_key_fingerprint
+                      AND (c.recovery_code_id IS NULL OR EXISTS (
+                          SELECT 1 FROM webauthn_recovery_codes r
+                          WHERE r.id=c.recovery_code_id AND r.user_id=c.user_id AND r.used_at IS NOT NULL
+                      ))
+                ) THEN
+                    RAISE EXCEPTION 'device key replacement requires verified rotation'
+                        USING ERRCODE='23514';
+                END IF;
+            END IF;
+            IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
+                (OLD.status='pending' AND NEW.status IN ('active','revoked'))
+                OR (OLD.status='active' AND NEW.status='revoked')
+            ) THEN
+                RAISE EXCEPTION 'invalid device lifecycle transition' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        """,
+    ),
+    PostgresMigration(
+        version=34,
+        name="recovery_security_notification_outbox",
+        sql="""
+        CREATE TABLE security_notification_outbox (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL UNIQUE REFERENCES device_security_events(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            recipient_email TEXT NOT NULL,
+            notification_type TEXT NOT NULL CHECK(notification_type IN ('device.recovery.completed')),
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','delivered')),
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),
+            available_at TEXT NOT NULL,
+            claimed_at TEXT,
+            delivered_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_security_notification_outbox_ready
+            ON security_notification_outbox(status,available_at,created_at);
+        CREATE FUNCTION aibrain_enqueue_device_recovery_notification()
+        RETURNS trigger LANGUAGE plpgsql AS $
+        DECLARE details JSONB;
+        BEGIN
+            IF NEW.event_type <> 'device.key_rotated' OR NOT pg_input_is_valid(NEW.details_json,'jsonb') THEN
+                RETURN NEW;
+            END IF;
+            details := NEW.details_json::jsonb;
+            IF details ->> 'recovery' = 'true' THEN
+                INSERT INTO security_notification_outbox (
+                    id,event_id,user_id,recipient_email,notification_type,payload_json,
+                    status,attempts,available_at,created_at
+                )
+                SELECT gen_random_uuid()::text,NEW.id,NEW.user_id,u.email,
+                       'device.recovery.completed',
+                       jsonb_build_object('device_id',NEW.device_id,'occurred_at',NEW.occurred_at)::text,
+                       'pending',0,NEW.occurred_at,NEW.occurred_at
+                FROM users u WHERE u.id=NEW.user_id AND u.deleted_at IS NULL;
+            END IF;
+            RETURN NEW;
+        END;
+        $;
+        CREATE TRIGGER enqueue_device_recovery_notification
+            AFTER INSERT ON device_security_events FOR EACH ROW
+            EXECUTE FUNCTION aibrain_enqueue_device_recovery_notification();
+        """,
+    ),
+    PostgresMigration(
+        version=35,
+        name="security_notification_dead_letter_state",
+        sql="""
+        ALTER TABLE security_notification_outbox
+            DROP CONSTRAINT security_notification_outbox_status_check;
+        ALTER TABLE security_notification_outbox
+            ADD CONSTRAINT security_notification_outbox_status_check
+            CHECK(status IN ('pending','processing','delivered','failed'));
+        ALTER TABLE security_notification_outbox ADD COLUMN failed_at TEXT;
+        ALTER TABLE security_notification_outbox ADD COLUMN failure_code TEXT;
+        """,
+    ),
 
 )
 
