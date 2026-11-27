@@ -1934,8 +1934,7 @@ class ToolRequestRepository:
             normalized["capabilities"], ensure_ascii=False,
             sort_keys=True, separators=(",", ":"), allow_nan=False,
         )
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._operator_write_transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO external_adapter_evidence_packages (
@@ -2266,8 +2265,20 @@ class ToolRequestRepository:
         payload_hash = verify_ed25519_signature(
             key["public_key"], payload, signature
         )
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._operator_write_transaction() as connection:
+            if getattr(self.database, "dialect", None) == "postgresql":
+                locked_key = connection.execute(
+                    "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE",
+                    (key_id,),
+                ).fetchone()
+                if locked_key is None:
+                    raise PermissionError("Trusted runner key is no longer registered")
+                locked_package = connection.execute(
+                    "SELECT id FROM external_adapter_evidence_packages WHERE id = ? FOR UPDATE",
+                    (package_id,),
+                ).fetchone()
+                if locked_package is None:
+                    raise LookupError("Verified evidence package not found")
             if connection.execute(
                 "SELECT 1 FROM trusted_runner_key_revocations WHERE key_id = ?",
                 (key_id,),
@@ -2404,8 +2415,21 @@ class ToolRequestRepository:
 
         certification_id = str(uuid.uuid4())
         now_text = now.isoformat()
-        with self.database.transaction(immediate=True):
-            current_attestation = self.database.connect().execute(
+        with self._operator_write_transaction() as connection:
+            if getattr(self.database, "dialect", None) == "postgresql":
+                locked_key = connection.execute(
+                    "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE",
+                    (attestation["key_id"],),
+                ).fetchone()
+                if locked_key is None:
+                    raise PermissionError("Evidence signer key is no longer registered")
+                locked_package = connection.execute(
+                    "SELECT id FROM external_adapter_evidence_packages WHERE id = ? FOR UPDATE",
+                    (evidence_package_id,),
+                ).fetchone()
+                if locked_package is None:
+                    raise LookupError("Verified evidence package not found")
+            current_attestation = connection.execute(
                 """
                 SELECT a.key_id FROM external_adapter_evidence_attestations AS a
                 WHERE a.package_id = ?
@@ -2416,13 +2440,18 @@ class ToolRequestRepository:
                 """,
                 (evidence_package_id,),
             ).fetchone()
+            if (
+                current_attestation is not None
+                and current_attestation["key_id"] != attestation["key_id"]
+            ):
+                raise PermissionError("Evidence attestation changed during certification")
             if current_attestation is None:
                 raise PermissionError("Trusted runner key is revoked or attestation is missing")
             evidence_reference = json.dumps(
                 [f"evidence-package:{evidence_package_id}"],
                 separators=(",", ":"),
             )
-            duplicate_certification = self.database.connect().execute(
+            duplicate_certification = connection.execute(
                 """
                 SELECT 1 FROM external_adapter_certifications
                 WHERE evidence_references_json = ?
@@ -2431,7 +2460,7 @@ class ToolRequestRepository:
             ).fetchone()
             if duplicate_certification is not None:
                 raise PermissionError("Evidence package has already been certified")
-            self.database.connect().execute(
+            connection.execute(
                 """
                 INSERT INTO external_adapter_certifications (
                     id, provider_id, adapter_id, adapter_version, provider_scope,
@@ -2456,7 +2485,7 @@ class ToolRequestRepository:
             )
             if audit_actor is not None:
                 _insert_security_operator_audit(
-                    self.database.connect(), audit_actor,
+                    connection, audit_actor,
                     action="evidence.certify",
                     target_type="adapter_certification",
                     target_id=certification_id,
@@ -2613,21 +2642,27 @@ class ToolRequestRepository:
             raise ValueError("Revoking operator must be identified")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
             raise ValueError("Revocation reason must be 1 to 1000 characters")
-        with self.database.transaction(immediate=True):
-            exists = self.database.connect().execute(
-                "SELECT 1 FROM external_adapter_certifications WHERE id = ?",
-                (certification_id,),
-            ).fetchone()
+        with self._operator_write_transaction() as connection:
+            if getattr(self.database, "dialect", None) == "postgresql":
+                exists = connection.execute(
+                    "SELECT id FROM external_adapter_certifications WHERE id = ? FOR UPDATE",
+                    (certification_id,),
+                ).fetchone()
+            else:
+                exists = connection.execute(
+                    "SELECT 1 FROM external_adapter_certifications WHERE id = ?",
+                    (certification_id,),
+                ).fetchone()
             if exists is None:
                 raise LookupError("Adapter certification not found")
-            already = self.database.connect().execute(
+            already = connection.execute(
                 "SELECT 1 FROM external_adapter_certification_revocations "
                 "WHERE certification_id = ?",
                 (certification_id,),
             ).fetchone()
             if already is not None:
                 raise PermissionError("Adapter certification is already revoked")
-            self.database.connect().execute(
+            connection.execute(
                 """
                 INSERT INTO external_adapter_certification_revocations
                     (id, certification_id, revoked_by, reason, created_at)
@@ -2638,7 +2673,7 @@ class ToolRequestRepository:
             )
             if audit_actor is not None:
                 _insert_security_operator_audit(
-                    self.database.connect(), audit_actor,
+                    connection, audit_actor,
                     action="certification.revoke",
                     target_type="adapter_certification",
                     target_id=certification_id,
