@@ -129,7 +129,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 - [x] First-pass repository compatibility inventory recorded.
 - [x] SQL-aware qmark conversion and hybrid-row primitives (isolated; tested in `tests/test_postgres_compat.py`).
 - [x] Initial opt-in PostgreSQL connection/row/ordinary-transaction adapter.
-- [~] Initial PostgreSQL row-lock replacements for identity/session and device-proof/revocation paths; remaining repositories and device writes still rely on SQLite `immediate=True` semantics.
+- [~] Initial PostgreSQL row-lock replacements for identity/session and device-proof/revocation paths; device enrollment, capability reporting, device revocation, and security-event append now use explicit owner/device locks. Real PostgreSQL device concurrency acceptance tests cover duplicate enrollment and capability-report/revocation races, but remain opt-in via `AIBRAIN_POSTGRES_TEST_URL` and have not been locally executed in the current work session.
 - [~] Protocol decoupling now covers tool requests, device proof, integration vault, identity, memory, learning, tool runtime, agent control/execution, agent registry, integration connections, device registry, notification outbox and operations, recovery-abuse monitor, WebAuthn repository constructor, and session/device security-event services. A complete repository-wide constructor/type audit and SQL compatibility review are still required.
 - [ ] Repository SQL portability.
 - [ ] PostgreSQL repository conformance suite.
