@@ -79,7 +79,6 @@ class ToolRequestRepository:
         self.conformance_suite_trust = conformance_suite_trust
 
     @contextmanager
-    @contextmanager
     def _operator_write_transaction(self):
         """Use a backend-specific transaction for global operator-owned writes."""
         dialect = getattr(self.database, "dialect", None)
@@ -93,6 +92,7 @@ class ToolRequestRepository:
             return
         raise RuntimeError("Unsupported persistence dialect for operator write")
 
+    @contextmanager
     def _request_transaction(self, user_id: str, request_id: str):
         """Serialize a tool-request transition using backend-specific locking.
 
