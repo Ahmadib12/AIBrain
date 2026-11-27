@@ -1741,9 +1741,30 @@ class ToolRequestRepository:
         ):
             raise ValueError("Execution history offset is out of range")
 
-        with self.database.transaction(immediate=True):
+        dialect = getattr(self.database, "dialect", None)
+        if dialect == "sqlite":
+            transaction = self.database.transaction(immediate=True)
+        elif dialect == "postgresql":
+            transaction = self.database.transaction()
+        else:
+            raise RuntimeError("Unsupported persistence dialect for operator history")
+
+        with transaction:
             connection = self.database.connect()
-            request = connection.execute(
+            if dialect == "postgresql":
+                owner = connection.execute(
+                    "SELECT user_id FROM tool_requests WHERE id = ?",
+                    (request_id,),
+                ).fetchone()
+                if owner is None:
+                    raise LookupError("Tool request not found")
+                owner_lock = connection.execute(
+                    "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+                    (owner["user_id"],),
+                ).fetchone()
+                if owner_lock is None:
+                    raise LookupError("Tool request not found")
+            query = (
                 """
                 SELECT
                     r.user_id, r.tool_id, r.status, r.created_at,
@@ -1756,9 +1777,11 @@ class ToolRequestRepository:
                 LEFT JOIN tool_execution_attempts AS a
                   ON a.request_id = r.id AND a.user_id = r.user_id
                 WHERE r.id = ?
-                """,
-                (request_id,),
-            ).fetchone()
+                """
+            )
+            if dialect == "postgresql":
+                query += " FOR UPDATE OF r"
+            request = connection.execute(query, (request_id,)).fetchone()
             if request is None:
                 raise LookupError("Tool request not found")
 
