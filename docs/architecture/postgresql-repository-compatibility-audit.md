@@ -54,9 +54,12 @@ A focused source review of `identity.py`, `devices/proof.py`, and `webauthn.py` 
 
 ### Device proof
 
-- Device proof contains multiple immediate transactions for challenge issuance, challenge consumption, device activation, key rotation, session revocation, and security-event insertion.
-- These operations depend on single-use challenge semantics and atomic coupling of key/session changes with audit events. PostgreSQL porting must use row locks and conditional updates, preserve row-count checks, and keep audit writes in the same transaction.
-- Key rotation must serialize against other rotations and device proof operations for the same device; a generic transaction without an explicit locking order is not sufficient.
+- The device-proof repository now selects its transaction mode by explicit dialect: SQLite retains `immediate=True`; PostgreSQL uses ordinary transactions and explicit account-before-device row locks. Unknown dialects fail closed.
+- PostgreSQL lock order is the same owner row before device row used by the identity/session slice. Authenticated proof paths lock the known owner and device; unauthenticated login paths first resolve the trusted owner from the device/challenge record, then acquire owner and device locks in that order.
+- Enrollment/session challenge issuance, public-key registration, login proof, activation, active-device proof, key rotation, and recovery rotation now use this locking seam. Conditional challenge/recovery-code updates and affected-row checks remain the final single-use guards.
+- Key rotation and recovery still revoke device-bound sessions and append the `device.key_rotated` audit event inside the same transaction as key replacement. Recovery verification locks the recovery-code row before consuming it.
+- Device registry revocation now locks account then device on PostgreSQL and revokes sessions in the same transaction. SQLite retains its previous immediate transaction.
+- New fake-connection tests cover lock order and transaction selection. They are unit tests only: real PostgreSQL concurrency, trigger parity, and independent-connection acceptance remain outstanding. Other device repository writes such as enrollment and capability reporting still use SQLite immediate transactions and are not PostgreSQL-ready.
 
 ### WebAuthn
 
@@ -115,7 +118,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 1. [x] Add SQL-aware parameter and hybrid-row compatibility primitives with isolated unit tests (`postgres/compat.py`). These primitives are not yet wired into a connection.
 2. [x] Add an opt-in PostgreSQL connection adapter implementing `DatabaseProtocol` (`postgres/database.py`). It supports thread-owned connections, psycopg transactions, qmark conversion, and hybrid rows. `transaction(immediate=True)` deliberately fails closed; it is not yet safe for repositories that rely on SQLite writer serialization. The adapter is unused by `AppState`.
 3. [~] Convert repository/service constructor annotations to `DatabaseProtocol` in the first security-critical slice (`tool_requests.py`, `devices/proof.py`, and `tools/integration_vault.py`), then extended it to core identity, memory, learning, tool runtime, agent control/execution, agent registry, integration connections, device registry, notification, and session/device security-event services. This follow-up also moved `SecurityNotificationOperations`, the SQLite recovery-abuse monitor, and the WebAuthn repository constructor onto `DatabaseProtocol`. WebAuthn still contains SQLite-specific `sqlite3.Binary` handling; the recovery-abuse monitor and notification redrive still rely on `immediate=True`. The WebAuthn repository now binds public-key material as plain `bytes`, removing its direct `sqlite3.Binary` dependency; this is compatible with SQLite BLOB binding and psycopg `bytea` binding. Its security-critical methods still use `transaction(immediate=True)`, so this does not make WebAuthn PostgreSQL-ready. These are typing/composition seams only: the adapter remains opt-in and no SQL or transaction compatibility is implied.
-4. Port dialect-specific queries repository-by-repository, starting with identity/session and device proof, then WebAuthn/tool execution, agents/integrations, memory/learning, and notifications.
+4. Port dialect-specific queries repository-by-repository. Identity/session and the device-proof/revocation locking slice have initial PostgreSQL branches; remaining device writes, WebAuthn/tool execution, agents/integrations, memory/learning, and notifications are outstanding.
 5. Add cross-backend repository conformance and concurrency acceptance before enabling application composition.
 
 ## Current gate status
@@ -125,7 +128,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 - [x] First-pass repository compatibility inventory recorded.
 - [x] SQL-aware qmark conversion and hybrid-row primitives (isolated; tested in `tests/test_postgres_compat.py`).
 - [x] Initial opt-in PostgreSQL connection/row/ordinary-transaction adapter.
-- [ ] PostgreSQL-safe replacements for SQLite `immediate=True` transaction assumptions.
+- [~] Initial PostgreSQL row-lock replacements for identity/session and device-proof/revocation paths; remaining repositories and device writes still rely on SQLite `immediate=True` semantics.
 - [~] Protocol decoupling now covers tool requests, device proof, integration vault, identity, memory, learning, tool runtime, agent control/execution, agent registry, integration connections, device registry, notification outbox and operations, recovery-abuse monitor, WebAuthn repository constructor, and session/device security-event services. A complete repository-wide constructor/type audit and SQL compatibility review are still required.
 - [ ] Repository SQL portability.
 - [ ] PostgreSQL repository conformance suite.
