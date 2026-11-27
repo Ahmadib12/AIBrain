@@ -18,6 +18,28 @@ from backend.app.devices.contracts import (
 router = APIRouter(prefix="/devices", tags=["devices"])
 
 
+_DEVICE_FINGERPRINT_UNIQUE_CONSTRAINT = (
+    "devices_user_id_public_key_fingerprint_key"
+)
+
+
+def _is_device_fingerprint_conflict(error: Exception) -> bool:
+    """Match only the owner-scoped device fingerprint uniqueness violation."""
+    if isinstance(error, sqlite3.IntegrityError):
+        return str(error) == (
+            "UNIQUE constraint failed: "
+            "devices.user_id, devices.public_key_fingerprint"
+        )
+
+    sqlstate = getattr(error, "sqlstate", None) or getattr(error, "pgcode", None)
+    diagnostic = getattr(error, "diag", None)
+    constraint_name = getattr(diagnostic, "constraint_name", None)
+    return (
+        sqlstate == "23505"
+        and constraint_name == _DEVICE_FINGERPRINT_UNIQUE_CONSTRAINT
+    )
+
+
 class PublicKeyRegistrationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     public_key_b64: str = Field(min_length=40, max_length=64)
@@ -44,7 +66,9 @@ async def enroll_device(
         # assertion and does not create a device-bound session.
         device = get_app_state().devices.enroll(user["id"], request)
         return device
-    except sqlite3.IntegrityError:
+    except Exception as error:
+        if not _is_device_fingerprint_conflict(error):
+            raise
         raise HTTPException(
             status_code=409,
             detail={
