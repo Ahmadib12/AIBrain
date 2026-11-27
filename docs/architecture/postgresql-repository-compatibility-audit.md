@@ -182,3 +182,25 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 - [ ] PostgreSQL repository conformance suite.
 - [ ] Cross-instance security/concurrency acceptance.
 - [ ] PostgreSQL application composition and deployment acceptance.
+
+### Security notification outbox queue claims
+
+Notification batch claiming now has an explicit dialect boundary. SQLite retains
+its existing immediate transaction. PostgreSQL uses an ordinary transaction
+and selects eligible pending rows in deterministic availability/creation/id
+order with `FOR UPDATE SKIP LOCKED`. Concurrent PostgreSQL workers therefore
+skip rows already locked by another claimant and can claim disjoint batches
+without taking a database-wide writer reservation. Each selected row is still
+transitioned with a conditional `status='pending'` update, a fresh claim
+token, and an incremented attempt count in the same transaction. Stale
+processing leases are reset before selecting new work.
+
+Fake-connection tests assert the PostgreSQL locking clause, SQLite transaction
+preservation, and fail-closed behavior for unknown dialects. These tests do
+not replace independent-connection PostgreSQL worker acceptance; queue
+claiming under real concurrent workers remains unverified until the opt-in
+PostgreSQL integration environment is run. Notification renew/deliver/retry
+and operator redrive transitions still require a complete PostgreSQL
+transaction/locking review, and PostgreSQL application composition remains
+disabled.
+
