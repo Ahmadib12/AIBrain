@@ -435,7 +435,7 @@ async def verify_passwordless_device_login(
             request.signature_b64,
         )
         # create_session performs the final account/device active-state check
-        # in an IMMEDIATE transaction, closing the verification/revocation race.
+        # under the same account-before-device PostgreSQL row-lock order.
         authenticated_user, token = state.identity.create_session(
             owner_id, device_id=str(device_id), auth_method="device_login"
         )
