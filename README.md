@@ -2,6 +2,10 @@
 
 AIBrain is a foundation for a universal, adaptive, multi-model AI assistant. This repository currently implements the backend and the initial Global Language Intelligence (AGLI) foundation.
 
+## Brand identity
+
+The primary brain-and-globe logo and usage guidance are in [docs/branding](docs/branding/README.md). The scalable SVG source is [assets/branding/aibrain-logo.svg](assets/branding/aibrain-logo.svg).
+
 ## Requirements
 
 - Python 3.11 or newer
