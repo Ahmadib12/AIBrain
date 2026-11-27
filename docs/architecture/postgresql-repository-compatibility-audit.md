@@ -100,7 +100,9 @@ replacing their dependence on SQLite's global writer reservation.
 
 Stale-attempt recovery now discovers candidate attempts without taking a global writer lock, then revalidates each candidate under the same owner-account-before-request row locks used by dispatch and lifecycle transitions. It updates the attempt and request atomically and preserves the conservative distinction between a provably pre-dispatch failure and an outcome that may already have occurred. A fake-connection test asserts the PostgreSQL lock order and transaction mode; real PostgreSQL multi-connection recovery acceptance remains outstanding.
 
-This remains a partial `tool_requests.py` port. Operator-scoped execution history/audit operations, trusted-runner evidence/certification operations, and global operator writes still use SQLite immediate transactions or require additional PostgreSQL-specific query/locking review. The PostgreSQL adapter
+Trusted-runner key registration and revocation now use an explicit operator-write transaction seam: SQLite retains its immediate transaction, while PostgreSQL uses an ordinary transaction. Revocation locks the trusted key row with `FOR UPDATE` before checking for an existing revocation and inserting the immutable revocation record; optional operator audit insertion remains in the same transaction. Fake-connection tests assert the lock statement and fail-closed unknown-dialect behavior. Real PostgreSQL concurrent revocation acceptance is still outstanding.
+
+This remains a partial `tool_requests.py` port. Operator-scoped execution history/audit, evidence attestation and certification lifecycle operations, and other global operator writes still use SQLite immediate transactions or require additional PostgreSQL-specific query/locking review. The PostgreSQL adapter
 must remain out of application composition.
 
 ## Required compatibility work
