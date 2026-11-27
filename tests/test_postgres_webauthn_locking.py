@@ -25,29 +25,30 @@ class RecordingConnection:
 
 
 def test_postgres_webauthn_account_guard_locks_owner_row_first():
-    connection = RecordingConnection()
+    raw_connection = RecordingConnection()
     database = PostgresDatabase(
         "postgresql://example.invalid/aibrain",
-        connect_factory=lambda *args, **kwargs: connection,
+        connect_factory=lambda *args, **kwargs: raw_connection,
     )
     try:
         repository = WebAuthnRepository(database)
+        connection = database.connect()
         repository._require_active_user(connection, "user-1")
-        sql, params = connection.statements[0]
+        sql, params = raw_connection.statements[0]
         assert "FROM users" in sql
         assert "deleted_at IS NULL" in sql
         assert "FOR UPDATE" in sql
         assert params == ("user-1",)
     finally:
         database.shutdown()
-    assert connection.closed
+    assert raw_connection.closed
 
 
 def test_postgres_webauthn_transaction_uses_row_lock_strategy_not_immediate():
-    connection = RecordingConnection()
+    raw_connection = RecordingConnection()
     database = PostgresDatabase(
         "postgresql://example.invalid/aibrain",
-        connect_factory=lambda *args, **kwargs: connection,
+        connect_factory=lambda *args, **kwargs: raw_connection,
     )
     try:
         repository = WebAuthnRepository(database)
@@ -64,7 +65,7 @@ def test_postgres_webauthn_transaction_uses_row_lock_strategy_not_immediate():
         assert requested == [False]
     finally:
         database.shutdown()
-    assert connection.closed
+    assert raw_connection.closed
 
 
 def test_sqlite_webauthn_transaction_retains_immediate_writer_lock():
