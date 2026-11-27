@@ -81,7 +81,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 ## Recommended implementation sequence
 
 1. [x] Add SQL-aware parameter and hybrid-row compatibility primitives with isolated unit tests (`postgres/compat.py`). These primitives are not yet wired into a connection.
-2. Add a PostgreSQL connection/transaction adapter implementing `DatabaseProtocol`; keep it opt-in and unused by `AppState`.
+2. [x] Add an opt-in PostgreSQL connection adapter implementing `DatabaseProtocol` (`postgres/database.py`). It supports thread-owned connections, psycopg transactions, qmark conversion, and hybrid rows. `transaction(immediate=True)` deliberately fails closed; it is not yet safe for repositories that rely on SQLite writer serialization. The adapter is unused by `AppState`.
 3. Convert repository constructor annotations to the protocol and prove the adapter's low-level conformance.
 4. Port dialect-specific queries repository-by-repository, starting with identity/session and device proof, then WebAuthn/tool execution, agents/integrations, memory/learning, and notifications.
 5. Add cross-backend repository conformance and concurrency acceptance before enabling application composition.
@@ -92,7 +92,8 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 - [x] SQLite implements the structural persistence protocol.
 - [x] First-pass repository compatibility inventory recorded.
 - [x] SQL-aware qmark conversion and hybrid-row primitives (isolated; tested in `tests/test_postgres_compat.py`).
-- [ ] PostgreSQL connection/row/transaction adapter.
+- [x] Initial opt-in PostgreSQL connection/row/ordinary-transaction adapter.
+- [ ] PostgreSQL-safe replacements for SQLite `immediate=True` transaction assumptions.
 - [ ] Repository SQL portability.
 - [ ] PostgreSQL repository conformance suite.
 - [ ] Cross-instance security/concurrency acceptance.
