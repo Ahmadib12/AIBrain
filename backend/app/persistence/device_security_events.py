@@ -23,6 +23,28 @@ class DeviceSecurityEventRepository:
     def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
+    def _transaction(self):
+        dialect = getattr(self.database, "dialect", None)
+        if dialect not in {"sqlite", "postgresql"}:
+            raise RuntimeError("Unsupported database dialect for device security events")
+        return self.database.transaction(immediate=(dialect == "sqlite"))
+
+    def _lock_owner_device(self, connection, owner_id: str, device_id: str) -> None:
+        if getattr(self.database, "dialect", None) != "postgresql":
+            return
+        owner = connection.execute(
+            "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+            (owner_id,),
+        ).fetchone()
+        if owner is None:
+            raise LookupError("Device event owner not found")
+        device = connection.execute(
+            "SELECT id FROM devices WHERE id=? AND user_id=? FOR UPDATE",
+            (device_id, owner_id),
+        ).fetchone()
+        if device is None:
+            raise LookupError("Device not found")
+
     def record(
         self,
         owner_id: str,
@@ -40,21 +62,18 @@ class DeviceSecurityEventRepository:
         encoded = json.dumps(safe_details, separators=(",", ":"), sort_keys=True)
         if len(encoded) > 1024:
             raise ValueError("Event details are too large")
-        with self.database.transaction(immediate=True):
-            self.database.connect().execute(
+        with self._transaction():
+            connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
+            connection.execute(
                 """
                 INSERT INTO device_security_events
                     (id, user_id, device_id, event_type, occurred_at, details_json)
-                SELECT ?, ?, ?, ?, ?, ?
-                WHERE EXISTS (
-                    SELECT 1 FROM devices
-                    WHERE id=? AND user_id=?
-                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid.uuid4()), owner_id, device_id, event_type,
                     datetime.now(timezone.utc).isoformat(), encoded,
-                    device_id, owner_id,
                 ),
             )
 
