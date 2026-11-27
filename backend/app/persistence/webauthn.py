@@ -291,6 +291,8 @@ class WebAuthnRepository:
         with self._transaction():
             connection = self.database.connect()
 
+            self._require_active_user(connection, user_id)
+
             row = connection.execute(
                 """
                 SELECT *
@@ -544,6 +546,8 @@ class WebAuthnRepository:
 
         with self._transaction():
             connection = self.database.connect()
+
+            self._require_active_user(connection, user_id)
 
             row = connection.execute(
                 """
