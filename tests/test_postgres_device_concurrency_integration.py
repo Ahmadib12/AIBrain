@@ -2,6 +2,7 @@
 
 Set AIBRAIN_POSTGRES_TEST_URL to a dedicated PostgreSQL test database.
 """
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Barrier
@@ -20,7 +21,7 @@ from backend.app.persistence.postgres.migrations import PostgresMigrationRunner
 
 
 def _database_url():
-    value = __import__("os").getenv("AIBRAIN_POSTGRES_TEST_URL")
+    value = os.getenv("AIBRAIN_POSTGRES_TEST_URL")
     if not value:
         pytest.skip(
             "set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database"
