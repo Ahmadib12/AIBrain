@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 640" role="img" aria-labelledby="title desc">
+  <title id="title">AIBrain — brain and globe logo</title>
+  <desc id="desc">A single sphere combining a neural brain on the left and planet Earth on the right, surrounded by an orbital ring, above the AIBrain wordmark.</desc>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#75e7ff"/><stop offset=".52" stop-color="#168cff"/><stop offset="1" stop-color="#0752c7"/>
+    </linearGradient>
+    <linearGradient id="earth" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#68dcff"/><stop offset=".48" stop-color="#1674c9"/><stop offset="1" stop-color="#082c69"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#21baff"/><stop offset=".34" stop-color="#168cff"/><stop offset=".35" stop-color="#f4f8ff"/><stop offset="1" stop-color="#b8cce8"/>
+    </linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="#148bff" stop-opacity=".3"/><stop offset="1" stop-color="#148bff" stop-opacity="0"/></radialGradient>
+    <clipPath id="sphere"><circle cx="256" cy="236" r="142"/></clipPath>
+    <clipPath id="left"><rect x="110" y="90" width="146" height="292"/></clipPath>
+    <clipPath id="right"><rect x="256" y="90" width="146" height="292"/></clipPath>
+  </defs>
+  <ellipse cx="256" cy="238" rx="210" ry="205" fill="url(#glow)"/>
+  <circle cx="256" cy="236" r="142" fill="#071a39" stroke="url(#blue)" stroke-width="5"/>
+  <g clip-path="url(#sphere)">
+    <g clip-path="url(#left)">
+      <path d="M255 104 C225 87 190 99 180 125 C148 126 132 153 142 179 C117 200 126 231 143 244 C125 272 143 302 166 307 C165 337 193 356 218 343 C231 364 248 367 256 358 Z" fill="#082b61" stroke="url(#blue)" stroke-width="5" stroke-linejoin="round"/>
+      <g fill="none" stroke="#54d8ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M251 115 C229 107 209 119 211 139 C185 136 170 153 180 174 C155 181 153 205 171 218 C149 238 158 259 180 266 C170 288 188 308 208 302 C207 326 228 337 249 326"/>
+        <path d="M250 153 C231 144 217 153 219 170 C198 169 190 185 201 199 C184 214 191 232 211 234 C197 253 211 271 231 265 C230 285 241 294 253 292"/>
+        <path d="M179 174 C194 179 198 190 201 199 M171 218 C187 216 198 224 211 234 M180 266 C198 260 211 263 231 265 M211 139 C205 151 210 162 219 170"/>
+      </g>
+      <g fill="#baf5ff" stroke="#168cff" stroke-width="2">
+        <circle cx="211" cy="139" r="5"/><circle cx="180" cy="174" r="5"/><circle cx="171" cy="218" r="5"/><circle cx="180" cy="266" r="5"/><circle cx="208" cy="302" r="5"/><circle cx="219" cy="170" r="5"/><circle cx="201" cy="199" r="5"/><circle cx="211" cy="234" r="5"/><circle cx="231" cy="265" r="5"/>
+      </g>
+    </g>
+    <g clip-path="url(#right)">
+      <circle cx="256" cy="236" r="142" fill="url(#earth)"/>
+      <path d="M278 121 L301 112 321 126 327 146 348 154 358 175 344 191 355 210 339 225 323 218 310 236 292 230 282 211 266 202 264 178 277 164 Z" fill="#8bd5a2" opacity=".95"/>
+      <path d="M302 237 L321 243 336 262 329 285 341 301 325 323 312 344 295 331 289 309 276 291 282 269 Z" fill="#8bd5a2" opacity=".92"/>
+      <path d="M365 280 L381 287 392 304 382 323 366 318 356 300 Z" fill="#8bd5a2" opacity=".8"/>
+      <g fill="none" stroke="#b9e9ff" stroke-width="2.2" opacity=".8">
+        <ellipse cx="256" cy="236" rx="55" ry="142"/><ellipse cx="256" cy="236" rx="105" ry="142"/>
+        <ellipse cx="256" cy="236" rx="142" ry="52"/><ellipse cx="256" cy="236" rx="142" ry="101"/>
+        <path d="M256 94 V378"/>
+      </g>
+      <path d="M256 95 V377" stroke="#e7f8ff" stroke-width="3" opacity=".9"/>
+    </g>
+  </g>
+  <circle cx="256" cy="236" r="142" fill="none" stroke="#8feaff" stroke-width="3"/>
+  <ellipse cx="256" cy="236" rx="220" ry="76" transform="rotate(-23 256 236)" fill="none" stroke="url(#blue)" stroke-width="7"/>
+  <path d="M36 323 C112 362 202 377 286 367" fill="none" stroke="#7be7ff" stroke-width="3" opacity=".7"/>
+  <circle cx="256" cy="94" r="5" fill="#e6fbff"/>
+  <text x="256" y="478" text-anchor="middle" font-family="Inter, Avenir, Arial, sans-serif" font-size="76" font-weight="750" letter-spacing="-3" fill="url(#word)">AIBrain</text>
+  <path d="M95 500 H417" stroke="#178fff" stroke-width="2" opacity=".8"/>
+  <text x="256" y="535" text-anchor="middle" font-family="Inter, Avenir, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="3.1" fill="#d6e8ff">YOUR WORLD. YOUR INTELLIGENCE.</text>
+  <text x="256" y="558" text-anchor="middle" font-family="Inter, Avenir, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="3.1" fill="#d6e8ff">YOUR CONTROL.</text>
+</svg>
