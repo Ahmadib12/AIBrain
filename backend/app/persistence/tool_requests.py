@@ -92,6 +92,25 @@ class ToolRequestRepository:
             return
         raise RuntimeError("Unsupported persistence dialect for operator write")
 
+    def _lock_runner_key_and_evidence_package(
+        self, connection, key_id: str, package_id: str
+    ) -> None:
+        """Linearize attestation/certification against key revocation on PostgreSQL."""
+        if getattr(self.database, "dialect", None) != "postgresql":
+            return
+        key = connection.execute(
+            "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE",
+            (key_id,),
+        ).fetchone()
+        if key is None:
+            raise PermissionError("Evidence signer key is no longer registered")
+        package = connection.execute(
+            "SELECT id FROM external_adapter_evidence_packages WHERE id = ? FOR UPDATE",
+            (package_id,),
+        ).fetchone()
+        if package is None:
+            raise LookupError("Verified evidence package not found")
+
     @contextmanager
     def _request_transaction(self, user_id: str, request_id: str):
         """Serialize a tool-request transition using backend-specific locking.
@@ -2266,19 +2285,9 @@ class ToolRequestRepository:
             key["public_key"], payload, signature
         )
         with self._operator_write_transaction() as connection:
-            if getattr(self.database, "dialect", None) == "postgresql":
-                locked_key = connection.execute(
-                    "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE",
-                    (key_id,),
-                ).fetchone()
-                if locked_key is None:
-                    raise PermissionError("Trusted runner key is no longer registered")
-                locked_package = connection.execute(
-                    "SELECT id FROM external_adapter_evidence_packages WHERE id = ? FOR UPDATE",
-                    (package_id,),
-                ).fetchone()
-                if locked_package is None:
-                    raise LookupError("Verified evidence package not found")
+            self._lock_runner_key_and_evidence_package(
+                connection, key_id, package_id
+            )
             if connection.execute(
                 "SELECT 1 FROM trusted_runner_key_revocations WHERE key_id = ?",
                 (key_id,),
@@ -2416,19 +2425,9 @@ class ToolRequestRepository:
         certification_id = str(uuid.uuid4())
         now_text = now.isoformat()
         with self._operator_write_transaction() as connection:
-            if getattr(self.database, "dialect", None) == "postgresql":
-                locked_key = connection.execute(
-                    "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE",
-                    (attestation["key_id"],),
-                ).fetchone()
-                if locked_key is None:
-                    raise PermissionError("Evidence signer key is no longer registered")
-                locked_package = connection.execute(
-                    "SELECT id FROM external_adapter_evidence_packages WHERE id = ? FOR UPDATE",
-                    (evidence_package_id,),
-                ).fetchone()
-                if locked_package is None:
-                    raise LookupError("Verified evidence package not found")
+            self._lock_runner_key_and_evidence_package(
+                connection, attestation["key_id"], evidence_package_id
+            )
             current_attestation = connection.execute(
                 """
                 SELECT a.key_id FROM external_adapter_evidence_attestations AS a
