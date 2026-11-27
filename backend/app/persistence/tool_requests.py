@@ -719,8 +719,7 @@ class ToolRequestRepository:
     ) -> dict:
         validate_personal_payload(result)
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             cursor = connection.execute(
                 "UPDATE tool_requests "
                 "SET status = 'completed', result_json = ?, updated_at = ? "
@@ -764,8 +763,7 @@ class ToolRequestRepository:
             raise ValueError("Tool execution error code is invalid")
 
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             cursor = connection.execute(
                 "UPDATE tool_requests "
                 "SET status = 'failed', updated_at = ? "
@@ -914,8 +912,7 @@ class ToolRequestRepository:
     ) -> dict:
         """Atomically revalidate a passkey authorization and freeze dispatch start."""
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             row = connection.execute(
                 """
                 SELECT r.*, a.status AS attempt_status,
@@ -1270,8 +1267,7 @@ class ToolRequestRepository:
             "failed": "dispatch_failed",
             "unknown": "dispatch_unknown",
         }[outcome]
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             started = connection.execute(
                 """
                 SELECT action_digest FROM tool_dispatch_audit_events
@@ -1358,8 +1354,7 @@ class ToolRequestRepository:
             raise ValueError("Lookup action digest is invalid")
         lookup_id = str(uuid.uuid4())
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             execution = connection.execute(
                 """
                 SELECT r.status AS request_status, r.consumed_at,
@@ -1475,8 +1470,7 @@ class ToolRequestRepository:
         ):
             raise ValueError("Provider evidence reference is invalid")
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             started = connection.execute(
                 """
                 SELECT action_digest FROM tool_dispatch_audit_events
@@ -1806,8 +1800,7 @@ class ToolRequestRepository:
             final_error_code = error_code
 
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             row = connection.execute(
                 """
                 SELECT r.status AS request_status, r.consumed_at,
@@ -2620,8 +2613,8 @@ class ToolRequestRepository:
     def cancel_pending(self, user_id: str, request_id: str) -> dict:
         """Cancel a pending or approved request before execution is claimed."""
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            cursor = self.database.connect().execute(
+        with self._request_transaction(user_id, request_id) as connection:
+            cursor = connection.execute(
                 "UPDATE tool_requests SET status = 'cancelled', "
                 "updated_at = ? "
                 "WHERE id = ? AND user_id = ? "
