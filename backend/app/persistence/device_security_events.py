@@ -69,11 +69,15 @@ class DeviceSecurityEventRepository:
                 """
                 INSERT INTO device_security_events
                     (id, user_id, device_id, event_type, occurred_at, details_json)
-                VALUES (?, ?, ?, ?, ?, ?)
+                SELECT ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                    SELECT 1 FROM devices WHERE id=? AND user_id=?
+                )
                 """,
                 (
                     str(uuid.uuid4()), owner_id, device_id, event_type,
                     datetime.now(timezone.utc).isoformat(), encoded,
+                    device_id, owner_id,
                 ),
             )
 
