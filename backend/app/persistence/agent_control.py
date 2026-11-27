@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 from backend.app.persistence.validation import validate_personal_payload
 
 
@@ -44,7 +44,7 @@ class AgentControlRepository:
     executor, device, or agent runtime.
     """
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def _agent(self, user_id: str, agent_id: str, *, active: bool = False):
