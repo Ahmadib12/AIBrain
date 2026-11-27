@@ -169,13 +169,20 @@ class IdentityRepository:
         ).isoformat()
         now = _utc_now()
 
-        with self.database.transaction(immediate=True):
+        # SQLite serializes writers with BEGIN IMMEDIATE. PostgreSQL instead
+        # locks the account row; deletion takes the same lock before tombstoning.
+        with self.database.transaction(
+            immediate=getattr(self.database, "dialect", "sqlite") == "sqlite"
+        ):
             connection = self.database.connect()
+            user_lock = " FOR UPDATE" if getattr(
+                self.database, "dialect", "sqlite"
+            ) == "postgresql" else ""
             active_user = connection.execute(
                 """
                 SELECT id FROM users
                 WHERE id = ? AND deleted_at IS NULL
-                """,
+                """ + user_lock,
                 (user_id,),
             ).fetchone()
 
@@ -183,11 +190,14 @@ class IdentityRepository:
                 raise LookupError("User not found")
 
             if device_id is not None:
+                device_lock = " FOR UPDATE" if getattr(
+                    self.database, "dialect", "sqlite"
+                ) == "postgresql" else ""
                 active_device = connection.execute(
                     """
                     SELECT id FROM devices
                     WHERE id = ? AND user_id = ? AND status = 'active'
-                    """,
+                    """ + device_lock,
                     (device_id, user_id),
                 ).fetchone()
                 if active_device is None:
@@ -337,8 +347,17 @@ class IdentityRepository:
 
     def delete_user(self, user_id: str) -> None:
         now = _utc_now()
-        with self.database.transaction(immediate=True):
+        # Use the same account-row lock as create_session so PostgreSQL
+        # cannot commit a new session after account erasure has started.
+        with self.database.transaction(
+            immediate=getattr(self.database, "dialect", "sqlite") == "sqlite"
+        ):
             connection = self.database.connect()
+            if getattr(self.database, "dialect", "sqlite") == "postgresql":
+                connection.execute(
+                    "SELECT id FROM users WHERE id = ? FOR UPDATE",
+                    (user_id,),
+                ).fetchone()
 
             # Tombstone the account before erasing dependent rows. The
             # lookup-authorization ledger permits cascading deletion only
