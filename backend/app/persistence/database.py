@@ -6,6 +6,8 @@ import uuid
 
 
 class Database:
+    dialect = "sqlite"
+
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
         if database_url.startswith("sqlite:///"):
