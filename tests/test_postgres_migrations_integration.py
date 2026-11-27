@@ -292,6 +292,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (33, "recovery_code_authorized_device_rotation"),
             (34, "recovery_security_notification_outbox"),
             (35, "security_notification_dead_letter_state"),
+            (36, "security_notification_operations_and_recovery_abuse_windows"),
         ]
 
 
@@ -857,7 +858,7 @@ def test_real_postgres_agent_lifecycle_capability_and_run_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 35
+    assert PostgresMigrationRunner(database_url).migrate() == 36
     suffix = str(uuid.uuid4())
     owner = "agent-owner-" + suffix
     other = "agent-other-" + suffix
