@@ -13,7 +13,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 class IntegrationVaultUnavailable(RuntimeError):
@@ -21,7 +21,7 @@ class IntegrationVaultUnavailable(RuntimeError):
 
 
 class IntegrationSecretVault:
-    def __init__(self, database: Database, key_b64: str | None) -> None:
+    def __init__(self, database: DatabaseProtocol, key_b64: str | None) -> None:
         self.database = database
         self._key: bytes | None = None
         if key_b64 is not None:
