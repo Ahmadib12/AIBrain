@@ -1,6 +1,7 @@
 import hashlib
 import json
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from backend.app.persistence.contracts import DatabaseProtocol
@@ -76,6 +77,39 @@ class ToolRequestRepository:
     ) -> None:
         self.database = database
         self.conformance_suite_trust = conformance_suite_trust
+
+    @contextmanager
+    def _request_transaction(self, user_id: str, request_id: str):
+        """Serialize a tool-request transition using backend-specific locking.
+
+        SQLite keeps its existing database-wide writer reservation. PostgreSQL
+        locks the account first (the shared identity/WebAuthn lock order), then
+        the owner-scoped request row. Conditional UPDATE row-count checks remain
+        the final single-winner guard.
+        """
+        dialect = getattr(self.database, "dialect", None)
+        if dialect == "sqlite":
+            with self.database.transaction(immediate=True):
+                yield self.database.connect()
+            return
+        if dialect != "postgresql":
+            raise RuntimeError("Unsupported persistence dialect for tool execution")
+
+        with self.database.transaction():
+            connection = self.database.connect()
+            owner = connection.execute(
+                "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+                (user_id,),
+            ).fetchone()
+            if owner is None:
+                raise LookupError("Tool request not found")
+            request = connection.execute(
+                "SELECT id FROM tool_requests WHERE id = ? AND user_id = ? FOR UPDATE",
+                (request_id, user_id),
+            ).fetchone()
+            if request is None:
+                raise LookupError("Tool request not found")
+            yield connection
 
     def _verify_conformance_suite_package(self, package: dict) -> None:
         trust = self.conformance_suite_trust
@@ -166,8 +200,8 @@ class ToolRequestRepository:
         now = datetime.now(timezone.utc)
         now_text = now.isoformat()
 
-        with self.database.transaction(immediate=True):
-            row = self.database.connect().execute(
+        with self._request_transaction(user_id, request_id) as connection:
+            row = connection.execute(
                 "SELECT status, consumed_at, expires_at, audit_json, "
                 "tool_id, arguments_json, contract_fingerprint, "
                 "authorization_policy "
@@ -248,8 +282,7 @@ class ToolRequestRepository:
         now_text = now.isoformat()
         attempt_id = str(uuid.uuid4())
 
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             row = connection.execute(
                 "SELECT * FROM tool_requests "
                 "WHERE id = ? AND user_id = ?",
@@ -421,8 +454,7 @@ class ToolRequestRepository:
         )
         now_text = _utc_now()
 
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             row = connection.execute(
                 """
                 SELECT r.tool_id, r.arguments_json, r.contract_fingerprint,
@@ -531,8 +563,7 @@ class ToolRequestRepository:
         now = datetime.now(timezone.utc)
         now_text = now.isoformat()
 
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
+        with self._request_transaction(user_id, request_id) as connection:
             row = connection.execute(
                 """
                 SELECT
