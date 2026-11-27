@@ -20,6 +20,13 @@ class RecordingConnection:
             row = None
         return SimpleNamespace(fetchone=lambda: row, rowcount=1)
 
+    @contextmanager
+    def transaction(self):
+        yield self
+
+    def close(self):
+        pass
+
 
 def test_postgres_device_proof_locks_account_before_device():
     connection = RecordingConnection()
