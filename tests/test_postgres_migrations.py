@@ -217,7 +217,7 @@ def test_postgres_sql_splitter_preserves_procedural_bodies_and_quoted_semicolons
     """
     statements = _split_sql_statements(sql)
     assert len(statements) == 3
-    assert statements[0].startswith("CREATE TABLE sample")
+    assert "CREATE TABLE sample (value TEXT DEFAULT 'left;right')" in statements[0]
     assert "PERFORM 'inside;body';" in statements[1]
     assert "nested comment; /* still a comment; */ done" in statements[1]
     assert statements[1].endswith("$body$")
