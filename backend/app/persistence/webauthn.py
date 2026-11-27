@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import uuid
 
 from backend.app.persistence.contracts import DatabaseProtocol
@@ -172,7 +171,7 @@ class WebAuthnRepository:
                     credential_record_id,
                     user_id,
                     credential_id,
-                    sqlite3.Binary(public_key),
+                    bytes(public_key),
                     sign_count,
                     json.dumps(transports),
                     device_type,
@@ -1039,7 +1038,7 @@ class WebAuthnRepository:
                     credential_record_id,
                     user_id,
                     credential_id,
-                    sqlite3.Binary(public_key),
+                    bytes(public_key),
                     sign_count,
                     json.dumps(transports),
                     device_type,
