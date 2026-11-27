@@ -2,11 +2,11 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 class SecurityNotificationOperations:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def list_dead_letters(self, *, limit: int = 50) -> tuple[dict, ...]:
