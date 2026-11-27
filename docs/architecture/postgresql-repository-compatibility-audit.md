@@ -14,7 +14,7 @@ The current application must therefore remain SQLite-only. Do not inject a Postg
 
 ## First-pass compatibility inventory
 
-The audit inspected all Python modules under `backend/app/persistence/` (excluding the isolated PostgreSQL migration package), plus `backend/app/devices/proof.py` and `backend/app/tools/integration_vault.py`.
+The audit inspected the SQL-bearing persistence modules under `backend/app/persistence/` (excluding the isolated PostgreSQL migration package), plus `backend/app/devices/proof.py` and `backend/app/tools/integration_vault.py`. It also reviewed the database implementation, application composition, persistence protocol, and rollout documentation.
 
 | Surface | First-pass finding | Compatibility implication |
 |---|---:|---|
