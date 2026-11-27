@@ -4,7 +4,7 @@ import math
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 from backend.app.persistence.validation import validate_personal_payload
 
 
@@ -52,7 +52,7 @@ def _event(
 class BehavioralLearningRepository:
     """Owner-scoped learning records; approvals never execute or grant permissions."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def record_observation(
