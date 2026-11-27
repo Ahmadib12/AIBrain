@@ -41,6 +41,8 @@ class PostgresConnection:
 
 
 class PostgresDatabase:
+    dialect = "postgresql"
+
     """Thread-owned psycopg connections behind the shared database protocol.
 
     Schema migration is intentionally separate; callers must run the
