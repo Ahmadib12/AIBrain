@@ -402,6 +402,7 @@ class DeviceProofRepository:
         now = _now()
         with self._transaction():
             connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
             row = connection.execute(
                 """
                 SELECT c.nonce_hash, c.expires_at, c.used_at, d.public_key_b64
@@ -756,6 +757,7 @@ class DeviceProofRepository:
                   ON r.id=c.recovery_code_id AND r.user_id=c.user_id
                 WHERE c.id=? AND c.device_id=? AND c.recovery_code_id IS NOT NULL
                   AND d.status='active' AND u.deleted_at IS NULL
+                FOR UPDATE OF r
                 """,
                 (challenge_id, device_id),
             ).fetchone()
