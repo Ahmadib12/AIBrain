@@ -29,9 +29,19 @@ class SecurityNotificationOutbox:
         now_text = now.isoformat()
         stale_before = (now - timedelta(seconds=lease_seconds)).isoformat()
         claimed: list[dict] = []
-        with self.database.transaction(immediate=True):
+        dialect = getattr(self.database, "dialect", None)
+        if dialect == "sqlite":
+            transaction = self.database.transaction(immediate=True)
+        elif dialect == "postgresql":
+            transaction = self.database.transaction()
+        else:
+            raise RuntimeError("Unsupported persistence dialect for notification claims")
+
+        with transaction:
             connection = self.database.connect()
             # A process that died while sending cannot strand rows forever.
+            # The conditional status predicate keeps this safe if another worker
+            # has already reclaimed the notification.
             connection.execute(
                 """
                 UPDATE security_notification_outbox
@@ -40,14 +50,18 @@ class SecurityNotificationOutbox:
                 """,
                 (stale_before,),
             )
-            rows = connection.execute(
-                """
+            claim_query = """
                 SELECT id FROM security_notification_outbox
                 WHERE status='pending' AND available_at <= ?
                 ORDER BY available_at, created_at, id
                 LIMIT ?
-                """,
-                (now_text, limit),
+            """
+            if dialect == "postgresql":
+                # Row locks let independent workers claim disjoint batches
+                # without serializing the whole outbox table.
+                claim_query += " FOR UPDATE SKIP LOCKED"
+            rows = connection.execute(
+                claim_query, (now_text, limit)
             ).fetchall()
             for row in rows:
                 claim_token = str(uuid4())
