@@ -162,3 +162,54 @@ def test_postgres_stale_recovery_locks_owner_then_request_before_transition():
     assert "a.status = 'claimed' AND a.claimed_at < ?" in statements[3][0]
     assert statements[4][0].startswith("UPDATE tool_execution_attempts")
     assert statements[5][0].startswith("UPDATE tool_requests")
+
+
+class KeyRevocationConnection:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, params))
+        if "FROM trusted_runner_keys" in sql:
+            return RecoveryCursor({"key_id": "runner-key"})
+        if "FROM trusted_runner_key_revocations" in sql:
+            return RecoveryCursor(None)
+        if sql.lstrip().startswith("INSERT INTO trusted_runner_key_revocations"):
+            return RecoveryCursor()
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+def test_postgres_trusted_runner_revocation_locks_key_before_insert():
+    database = RecordingDatabase()
+    database.connection = KeyRevocationConnection()
+    repository = ToolRequestRepository(database)
+
+    repository.revoke_trusted_runner_key(
+        "runner-key",
+        revoked_by="operator",
+        reason="Key reported compromised",
+    )
+
+    assert database.transaction_calls == [False]
+    statements = database.connection.statements
+    assert statements[0][0] == (
+        "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE"
+    )
+    assert statements[1][0] == (
+        "SELECT 1 FROM trusted_runner_key_revocations WHERE key_id = ?"
+    )
+    assert statements[2][0].startswith(
+        "INSERT INTO trusted_runner_key_revocations"
+    )
+
+
+def test_operator_write_transaction_fails_closed_for_unknown_dialect():
+    class UnknownDatabase(RecordingDatabase):
+        dialect = "unknown"
+
+    repository = ToolRequestRepository(UnknownDatabase())
+
+    with pytest.raises(RuntimeError, match="Unsupported persistence dialect"):
+        with repository._operator_write_transaction():
+            pass
