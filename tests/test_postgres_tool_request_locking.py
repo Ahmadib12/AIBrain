@@ -309,6 +309,10 @@ class OperatorHistoryConnection:
             "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE"
         ):
             return RecoveryCursor({"id": "owner"})
+        if normalized == (
+            "SELECT 1 FROM tool_requests WHERE id = ? AND user_id = ?"
+        ):
+            return RecoveryCursor({"1": 1})
         if "LEFT JOIN tool_execution_attempts AS a" in sql and "FOR UPDATE OF r" in sql:
             return RecoveryCursor({
                 "user_id": "owner",
