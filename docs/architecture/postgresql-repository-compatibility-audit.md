@@ -99,10 +99,10 @@ This keeps their request/attempt/audit updates in one transaction while
 replacing their dependence on SQLite's global writer reservation.
 
 This is deliberately a first slice, not a completed `tool_requests.py` port.
-Other tool-request lifecycle transitions, stale-attempt recovery, dispatch
-audit/reconciliation, trusted-runner evidence/certification operations, and
-global operator writes still use SQLite immediate transactions or require
-additional PostgreSQL-specific query/locking review. The PostgreSQL adapter
+Stale-attempt recovery, operator-scoped execution history/audit operations,
+trusted-runner evidence/certification operations, and global operator writes
+still use SQLite immediate transactions or require additional PostgreSQL-
+specific query/locking review. The PostgreSQL adapter
 must remain out of application composition.
 
 ## Required compatibility work
