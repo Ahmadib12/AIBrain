@@ -1,6 +1,8 @@
 import json
 import sqlite3
 import uuid
+
+from backend.app.persistence.contracts import DatabaseProtocol
 from datetime import datetime, timezone
 
 
@@ -26,7 +28,7 @@ class WebAuthnRepository:
         "multi_device",
     }
 
-    def __init__(self, database):
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     @staticmethod
