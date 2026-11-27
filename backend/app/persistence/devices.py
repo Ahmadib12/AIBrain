@@ -8,7 +8,7 @@ from backend.app.devices.contracts import (
     DeviceRecord,
     DeviceRegistrationRequest,
 )
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 def _now() -> str:
@@ -16,7 +16,7 @@ def _now() -> str:
 
 
 class DeviceRepository:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     @staticmethod
