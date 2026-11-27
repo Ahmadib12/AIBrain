@@ -80,7 +80,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 
 ## Recommended implementation sequence
 
-1. Add SQL-aware parameter and hybrid-row compatibility primitives with isolated unit tests.
+1. [x] Add SQL-aware parameter and hybrid-row compatibility primitives with isolated unit tests (`postgres/compat.py`). These primitives are not yet wired into a connection.
 2. Add a PostgreSQL connection/transaction adapter implementing `DatabaseProtocol`; keep it opt-in and unused by `AppState`.
 3. Convert repository constructor annotations to the protocol and prove the adapter's low-level conformance.
 4. Port dialect-specific queries repository-by-repository, starting with identity/session and device proof, then WebAuthn/tool execution, agents/integrations, memory/learning, and notifications.
@@ -91,6 +91,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 - [x] PostgreSQL migration stream 1–36 passes real PostgreSQL CI.
 - [x] SQLite implements the structural persistence protocol.
 - [x] First-pass repository compatibility inventory recorded.
+- [x] SQL-aware qmark conversion and hybrid-row primitives (isolated; tested in `tests/test_postgres_compat.py`).
 - [ ] PostgreSQL connection/row/transaction adapter.
 - [ ] Repository SQL portability.
 - [ ] PostgreSQL repository conformance suite.
