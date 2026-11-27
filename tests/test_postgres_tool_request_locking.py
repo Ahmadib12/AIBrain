@@ -213,3 +213,84 @@ def test_operator_write_transaction_fails_closed_for_unknown_dialect():
     with pytest.raises(RuntimeError, match="Unsupported persistence dialect"):
         with repository._operator_write_transaction():
             pass
+
+
+
+class EvidenceLifecycleConnection:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, params))
+        if "FROM trusted_runner_keys" in sql:
+            return RecoveryCursor({"key_id": params[0]})
+        if "FROM external_adapter_evidence_packages" in sql:
+            return RecoveryCursor({"id": params[0]})
+        if "FROM external_adapter_certifications" in sql:
+            return RecoveryCursor({"id": params[0]})
+        if "FROM external_adapter_certification_revocations" in sql:
+            return RecoveryCursor(None)
+        if sql.lstrip().startswith("INSERT INTO external_adapter_certification_revocations"):
+            return RecoveryCursor()
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+def test_postgres_evidence_lifecycle_locks_runner_key_before_package():
+    database = RecordingDatabase()
+    database.connection = EvidenceLifecycleConnection()
+    repository = ToolRequestRepository(database)
+
+    with repository._operator_write_transaction() as connection:
+        repository._lock_runner_key_and_evidence_package(
+            connection, "runner-key", "evidence-package"
+        )
+
+    assert database.transaction_calls == [False]
+    statements = database.connection.statements
+    assert statements[0] == (
+        "SELECT key_id FROM trusted_runner_keys WHERE key_id = ? FOR UPDATE",
+        ("runner-key",),
+    )
+    assert statements[1] == (
+        "SELECT id FROM external_adapter_evidence_packages WHERE id = ? FOR UPDATE",
+        ("evidence-package",),
+    )
+
+
+def test_postgres_evidence_lifecycle_fails_closed_if_runner_key_missing():
+    database = RecordingDatabase()
+    database.connection = EvidenceLifecycleConnection()
+    database.connection.execute = lambda sql, params=(): RecoveryCursor(None)
+    repository = ToolRequestRepository(database)
+
+    with database.transaction() as connection:
+        with pytest.raises(PermissionError, match="signer key"):
+            repository._lock_runner_key_and_evidence_package(
+                connection, "missing-key", "evidence-package"
+            )
+
+
+def test_postgres_certification_revocation_locks_certificate_before_insert():
+    database = RecordingDatabase()
+    database.connection = EvidenceLifecycleConnection()
+    repository = ToolRequestRepository(database)
+
+    repository.revoke_external_adapter_certification(
+        "certification",
+        revoked_by="operator",
+        reason="Compromised certification",
+    )
+
+    assert database.transaction_calls == [False]
+    statements = database.connection.statements
+    assert statements[0] == (
+        "SELECT id FROM external_adapter_certifications WHERE id = ? FOR UPDATE",
+        ("certification",),
+    )
+    assert statements[1][0].startswith(
+        "SELECT 1 FROM external_adapter_certification_revocations"
+    )
+    assert statements[2][0].startswith(
+        "INSERT INTO external_adapter_certification_revocations"
+    )
