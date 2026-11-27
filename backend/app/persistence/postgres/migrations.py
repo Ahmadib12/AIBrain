@@ -2960,7 +2960,7 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         CREATE INDEX idx_device_key_rotation_expiry
             ON device_key_rotation_challenges(expires_at,used_at);
 
-        DROP TRIGGER prevent_device_identity_mutation;
+        DROP TRIGGER prevent_device_identity_mutation ON devices;
         CREATE FUNCTION aibrain_validate_device_rotation()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
