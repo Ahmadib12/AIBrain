@@ -1069,7 +1069,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 35
+    assert PostgresMigrationRunner(database_url).migrate() == 36
     suffix = str(uuid.uuid4())
     owner = "integration-owner-" + suffix
     other = "integration-other-" + suffix
@@ -1907,6 +1907,10 @@ def test_real_postgres_notification_operations_and_recovery_abuse_windows():
                             """,
                             ("e"*64,1798761600,timestamp),
                         )
+                connection.execute(
+                    "UPDATE users SET deleted_at=%s WHERE id=%s",
+                    ("2027-01-01T00:00:00+00:00", owner),
+                )
                 connection.execute("DELETE FROM users WHERE id=%s", (owner,))
                 assert connection.execute(
                     "SELECT count(*) FROM security_notification_operator_events WHERE id=%s",
