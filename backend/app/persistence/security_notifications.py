@@ -6,7 +6,7 @@ performed by a separate worker/adapter; database transactions never send email.
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 def _now() -> datetime:
@@ -14,7 +14,7 @@ def _now() -> datetime:
 
 
 class SecurityNotificationOutbox:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def claim_batch(
