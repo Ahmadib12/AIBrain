@@ -6,7 +6,7 @@ from backend.app.tools.contracts import (
     ToolRisk,
     contract_fingerprint,
 )
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 from backend.app.persistence.tool_requests import ToolRequestRepository
 from backend.app.tools.validation import validate_tool_arguments
 
@@ -19,7 +19,7 @@ class ToolExecutionGateway:
     def __init__(
         self,
         registry: ToolRegistry,
-        database: Database | None = None,
+        database: DatabaseProtocol | None = None,
         *,
         confirmation_ttl_seconds: int = 300,
     ) -> None:
