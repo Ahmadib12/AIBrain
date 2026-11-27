@@ -79,6 +79,20 @@ class ToolRequestRepository:
         self.conformance_suite_trust = conformance_suite_trust
 
     @contextmanager
+    @contextmanager
+    def _operator_write_transaction(self):
+        """Use a backend-specific transaction for global operator-owned writes."""
+        dialect = getattr(self.database, "dialect", None)
+        if dialect == "sqlite":
+            with self.database.transaction(immediate=True):
+                yield self.database.connect()
+            return
+        if dialect == "postgresql":
+            with self.database.transaction():
+                yield self.database.connect()
+            return
+        raise RuntimeError("Unsupported persistence dialect for operator write")
+
     def _request_transaction(self, user_id: str, request_id: str):
         """Serialize a tool-request transition using backend-specific locking.
 
@@ -2055,8 +2069,8 @@ class ToolRequestRepository:
         now = datetime.now(timezone.utc)
         if end <= start or end <= now:
             raise ValueError("Trusted runner key validity window is invalid or expired")
-        with self.database.transaction(immediate=True):
-            self.database.connect().execute(
+        with self._operator_write_transaction() as connection:
+            connection.execute(
                 """
                 INSERT INTO trusted_runner_keys (
                     key_id, runner_id, provider_id, adapter_id,
@@ -2075,7 +2089,7 @@ class ToolRequestRepository:
             )
             if audit_actor is not None:
                 _insert_security_operator_audit(
-                    self.database.connect(), audit_actor,
+                    connection, audit_actor,
                     action="runner_key.register",
                     target_type="trusted_runner_key",
                     target_id=key_id,
@@ -2113,19 +2127,22 @@ class ToolRequestRepository:
             raise ValueError("Revoking operator must be identified")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
             raise ValueError("Key revocation reason must be 1 to 1000 characters")
-        with self.database.transaction(immediate=True):
-            exists = self.database.connect().execute(
-                "SELECT 1 FROM trusted_runner_keys WHERE key_id = ?", (key_id,)
+        with self._operator_write_transaction() as connection:
+            dialect = getattr(self.database, "dialect", None)
+            lock_clause = " FOR UPDATE" if dialect == "postgresql" else ""
+            exists = connection.execute(
+                "SELECT key_id FROM trusted_runner_keys WHERE key_id = ?" + lock_clause,
+                (key_id,),
             ).fetchone()
             if exists is None:
                 raise LookupError("Trusted runner key not found")
-            prior = self.database.connect().execute(
+            prior = connection.execute(
                 "SELECT 1 FROM trusted_runner_key_revocations WHERE key_id = ?",
                 (key_id,),
             ).fetchone()
             if prior:
                 raise PermissionError("Trusted runner key is already revoked")
-            self.database.connect().execute(
+            connection.execute(
                 """
                 INSERT INTO trusted_runner_key_revocations
                     (id, key_id, revoked_by, reason, created_at)
@@ -2136,7 +2153,7 @@ class ToolRequestRepository:
             )
             if audit_actor is not None:
                 _insert_security_operator_audit(
-                    self.database.connect(), audit_actor,
+                    connection, audit_actor,
                     action="runner_key.revoke",
                     target_type="trusted_runner_key",
                     target_id=key_id,
