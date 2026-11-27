@@ -3,7 +3,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 _DUMMY_PASSWORD_SALT = "aibrain-dummy-password-salt"
@@ -25,7 +25,7 @@ def _hash_password(password: str, salt: str) -> str:
 class IdentityRepository:
     def __init__(
         self,
-        database: Database,
+        database: DatabaseProtocol,
         *,
         session_ttl_seconds: int,
     ) -> None:
