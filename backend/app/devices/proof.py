@@ -313,13 +313,15 @@ class DeviceProofRepository:
             )
             if consumed.rowcount != 1:
                 raise ValueError("Device challenge already used")
-            connection.execute(
+            touched = connection.execute(
                 """
                 UPDATE devices SET last_seen_at=?
                 WHERE id=? AND user_id=? AND status='active'
                 """,
                 (now.isoformat(), device_id, owner_id),
             )
+            if touched.rowcount != 1:
+                raise ValueError("Device is no longer active")
         return owner_id
 
 
@@ -378,13 +380,15 @@ class DeviceProofRepository:
             )
             if consumed.rowcount != 1:
                 raise ValueError("Device challenge already used")
-            connection.execute(
+            activated = connection.execute(
                 """
                 UPDATE devices SET status='active', last_seen_at=?
                 WHERE id=? AND user_id=? AND status='pending'
                 """,
                 (now.isoformat(), device_id, owner_id),
             )
+            if activated.rowcount != 1:
+                raise ValueError("Device activation state changed")
 
 
     def verify_session_proof(
@@ -443,13 +447,15 @@ class DeviceProofRepository:
             )
             if consumed.rowcount != 1:
                 raise ValueError("Device challenge already used")
-            connection.execute(
+            touched = connection.execute(
                 """
                 UPDATE devices SET last_seen_at=?
                 WHERE id=? AND user_id=? AND status='active'
                 """,
                 (now.isoformat(), device_id, owner_id),
             )
+            if touched.rowcount != 1:
+                raise ValueError("Device is no longer active")
 
     def create_key_rotation_challenge(
         self, owner_id: str, device_id: str, new_public_key_b64: str
@@ -576,7 +582,7 @@ class DeviceProofRepository:
             )
             if used.rowcount != 1:
                 raise ValueError("Device key rotation challenge already used")
-            connection.execute(
+            rotated = connection.execute(
                 """
                 UPDATE devices SET public_key_b64=?,public_key_fingerprint=?,last_seen_at=?
                 WHERE id=? AND user_id=? AND status='active'
@@ -584,13 +590,17 @@ class DeviceProofRepository:
                 (row["proposed_public_key_b64"],row["proposed_fingerprint"],
                  now.isoformat(),device_id,owner_id),
             )
-            connection.execute(
+            if rotated.rowcount != 1:
+                raise ValueError("Device key rotation state changed")
+            applied = connection.execute(
                 """
                 UPDATE device_key_rotation_challenges SET applied_at=?
                 WHERE id=? AND used_at=? AND applied_at IS NULL
                 """,
                 (now.isoformat(),challenge_id,now.isoformat()),
             )
+            if applied.rowcount != 1:
+                raise ValueError("Device key rotation challenge already used")
             connection.execute(
                 """
                 UPDATE sessions SET revoked_at=?
@@ -814,7 +824,7 @@ class DeviceProofRepository:
             if consumed_challenge.rowcount != 1:
                 raise ValueError("Device recovery challenge already used")
 
-            connection.execute(
+            recovered = connection.execute(
                 """
                 UPDATE devices
                 SET public_key_b64=?,public_key_fingerprint=?,last_seen_at=?
@@ -828,13 +838,17 @@ class DeviceProofRepository:
                     row["user_id"],
                 ),
             )
-            connection.execute(
+            if recovered.rowcount != 1:
+                raise ValueError("Device recovery state changed")
+            applied = connection.execute(
                 """
                 UPDATE device_key_rotation_challenges SET applied_at=?
                 WHERE id=? AND used_at=? AND applied_at IS NULL
                 """,
                 (now.isoformat(), challenge_id, now.isoformat()),
             )
+            if applied.rowcount != 1:
+                raise ValueError("Device recovery challenge already used")
             connection.execute(
                 """
                 UPDATE sessions SET revoked_at=?
