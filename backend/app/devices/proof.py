@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 def _now() -> datetime:
@@ -43,7 +43,7 @@ def _signed_message(
 class DeviceProofRepository:
     """Stores public keys and consumes one-time Ed25519 challenges atomically."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def register_public_key(
