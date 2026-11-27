@@ -61,9 +61,8 @@ def _delete_owner(database_url: str, owner_id: str) -> None:
 
 
 def test_real_postgres_concurrent_duplicate_enrollment_is_serialized():
-    import psycopg
-
     database_url = _database_url()
+    import psycopg
     assert PostgresMigrationRunner(database_url).migrate() == 36
     owner_id = _create_owner(database_url, uuid4().hex)
     database = PostgresDatabase(database_url)
@@ -113,9 +112,8 @@ def test_real_postgres_concurrent_duplicate_enrollment_is_serialized():
 
 
 def test_real_postgres_concurrent_capability_report_and_revoke_never_resurrect_device():
-    import psycopg
-
     database_url = _database_url()
+    import psycopg
     assert PostgresMigrationRunner(database_url).migrate() == 36
     owner_id = _create_owner(database_url, uuid4().hex)
     device_id = str(uuid4())
