@@ -31,10 +31,10 @@ def test_qmark_adapter_preserves_dollar_quoted_procedural_body():
 
 
 def test_qmark_adapter_handles_escaped_and_doubled_quotes():
-    sql = r"SELECT E'it\\'s ?' AS escaped, 'it''s ?' AS doubled, ?"
+    sql = r"SELECT E'it\'s ?' AS escaped, 'it''s ?' AS doubled, ?"
     adapted = adapt_qmark_placeholders(sql, (7,))
     assert adapted.endswith(", %s")
-    assert r"E'it\\'s ?'" in adapted
+    assert r"E'it\'s ?'" in adapted
     assert "'it''s ?'" in adapted
 
 
