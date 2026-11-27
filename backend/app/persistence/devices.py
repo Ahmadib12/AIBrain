@@ -19,6 +19,34 @@ class DeviceRepository:
     def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
+    def _transaction(self):
+        """Preserve SQLite writer serialization and use PostgreSQL row locks."""
+        dialect = getattr(self.database, "dialect", None)
+        if dialect not in {"sqlite", "postgresql"}:
+            raise RuntimeError("Unsupported database dialect for device repository")
+        return self.database.transaction(immediate=(dialect == "sqlite"))
+
+    def _lock_owner(self, connection, owner_id: str) -> None:
+        if getattr(self.database, "dialect", None) != "postgresql":
+            return
+        row = connection.execute(
+            "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+            (owner_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Device owner not found")
+
+    def _lock_owned_device(self, connection, owner_id: str, device_id: str) -> None:
+        if getattr(self.database, "dialect", None) != "postgresql":
+            return
+        self._lock_owner(connection, owner_id)
+        row = connection.execute(
+            "SELECT id FROM devices WHERE id=? AND user_id=? FOR UPDATE",
+            (device_id, owner_id),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Device not found")
+
     @staticmethod
     def _record(row) -> DeviceRecord:
         return DeviceRecord(
@@ -47,8 +75,10 @@ class DeviceRepository:
     ) -> DeviceRecord:
         device_id = str(uuid.uuid4())
         now = _now()
-        with self.database.transaction(immediate=True):
-            self.database.connect().execute(
+        with self._transaction():
+            connection = self.database.connect()
+            self._lock_owner(connection, owner_id)
+            connection.execute(
                 """
                 INSERT INTO devices (
                     id, user_id, platform, app_version, display_name,
@@ -65,7 +95,7 @@ class DeviceRepository:
                     now,
                 ),
             )
-            row = self.database.connect().execute(
+            row = connection.execute(
                 "SELECT * FROM devices WHERE id = ? AND user_id = ?",
                 (device_id, owner_id),
             ).fetchone()
@@ -106,20 +136,10 @@ class DeviceRepository:
         dialect = getattr(self.database, "dialect", None)
         if dialect not in {"sqlite", "postgresql"}:
             raise RuntimeError("Unsupported database dialect for device revocation")
-        with self.database.transaction(immediate=(dialect == "sqlite")):
+        with self._transaction():
             connection = self.database.connect()
             if dialect == "postgresql":
-                owner = connection.execute(
-                    "SELECT id FROM users WHERE id=? FOR UPDATE", (owner_id,)
-                ).fetchone()
-                if owner is None:
-                    raise LookupError("Device not found")
-                device = connection.execute(
-                    "SELECT id FROM devices WHERE id=? AND user_id=? FOR UPDATE",
-                    (device_id, owner_id),
-                ).fetchone()
-                if device is None:
-                    raise LookupError("Device not found")
+                self._lock_owned_device(connection, owner_id, device_id)
             cursor = connection.execute(
                 """
                 UPDATE devices
@@ -155,8 +175,10 @@ class DeviceRepository:
         report: DeviceCapabilityReport,
     ) -> DeviceRecord:
         capabilities = sorted({item.value for item in report.capabilities})
-        with self.database.transaction(immediate=True):
-            cursor = self.database.connect().execute(
+        with self._transaction():
+            connection = self.database.connect()
+            self._lock_owned_device(connection, owner_id, device_id)
+            cursor = connection.execute(
                 """
                 UPDATE devices
                 SET capability_report_json = ?,
@@ -173,7 +195,7 @@ class DeviceRepository:
                 ),
             )
             if cursor.rowcount != 1:
-                row = self.database.connect().execute(
+                row = connection.execute(
                     "SELECT status FROM devices WHERE id = ? AND user_id = ?",
                     (device_id, owner_id),
                 ).fetchone()
