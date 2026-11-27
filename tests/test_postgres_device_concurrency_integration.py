@@ -161,9 +161,12 @@ def test_real_postgres_concurrent_capability_report_and_revoke_never_resurrect_d
             revoke_result = revoke_future.result(timeout=30)
 
         assert revoke_result.status == "revoked"
-        assert not isinstance(report_result, Exception) or isinstance(
-            report_result, PermissionError
-        )
+        if isinstance(report_result, PermissionError):
+            assert str(report_result) == (
+                "Only active devices may report capabilities"
+            )
+        else:
+            assert str(report_result.device_id) == device_id
         with psycopg.connect(database_url) as connection:
             row = connection.execute(
                 "SELECT status, revoked_at FROM devices WHERE id=%s AND user_id=%s",
