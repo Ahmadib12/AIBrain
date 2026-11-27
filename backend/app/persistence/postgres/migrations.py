@@ -21,6 +21,111 @@ class PostgresMigration:
     sql: str
 
 
+def _split_sql_statements(sql: str) -> tuple[str, ...]:
+    """Split SQL at top-level semicolons, preserving quoted and procedural bodies.
+
+    PostgreSQL's extended query protocol accepts one statement per execute().
+    Migration files are intentionally readable multi-statement SQL, so split
+    them without breaking semicolons inside strings, comments, or dollar quotes.
+    """
+    statements: list[str] = []
+    start = 0
+    index = 0
+    length = len(sql)
+    state = "normal"
+    dollar_tag: str | None = None
+    block_depth = 0
+
+    while index < length:
+        char = sql[index]
+        next_char = sql[index + 1] if index + 1 < length else ""
+
+        if state == "single":
+            if char == "'" and next_char == "'":
+                index += 2
+                continue
+            if char == "'":
+                state = "normal"
+            index += 1
+            continue
+
+        if state == "double":
+            if char == '"' and next_char == '"':
+                index += 2
+                continue
+            if char == '"':
+                state = "normal"
+            index += 1
+            continue
+
+        if state == "line_comment":
+            if char == "\n":
+                state = "normal"
+            index += 1
+            continue
+
+        if state == "block_comment":
+            if char == "/" and next_char == "*":
+                block_depth += 1
+                index += 2
+                continue
+            if char == "*" and next_char == "/":
+                block_depth -= 1
+                index += 2
+                if block_depth == 0:
+                    state = "normal"
+                continue
+            index += 1
+            continue
+
+        if state == "dollar":
+            if sql.startswith(dollar_tag or "", index):
+                index += len(dollar_tag or "")
+                state = "normal"
+                dollar_tag = None
+            else:
+                index += 1
+            continue
+
+        if char == "'":
+            state = "single"
+            index += 1
+            continue
+        if char == '"':
+            state = "double"
+            index += 1
+            continue
+        if char == "-" and next_char == "-":
+            state = "line_comment"
+            index += 2
+            continue
+        if char == "/" and next_char == "*":
+            state = "block_comment"
+            block_depth = 1
+            index += 2
+            continue
+        if char == "$":
+            match = re.match(r"\$[A-Za-z_][A-Za-z_0-9]*\$|\$\$", sql[index:])
+            if match:
+                dollar_tag = match.group(0)
+                state = "dollar"
+                index += len(dollar_tag)
+                continue
+        if char == ";":
+            statement = sql[start:index].strip()
+            if statement:
+                statements.append(statement)
+            start = index + 1
+        index += 1
+
+    if state in {"single", "double", "block_comment", "dollar"}:
+        raise ValueError(f"unterminated SQL {state.replace('_', ' ')}")
+    trailing = sql[start:].strip()
+    if trailing:
+        statements.append(trailing)
+    return tuple(statements)
+
+
 MIGRATIONS: tuple[PostgresMigration, ...] = (
     PostgresMigration(
         version=1,
@@ -3117,7 +3222,8 @@ class PostgresMigrationRunner:
                 if migration.version in applied:
                     continue
                 with connection.transaction():
-                    connection.execute(migration.sql)
+                    for statement in _split_sql_statements(migration.sql):
+                        connection.execute(statement)
                     connection.execute(
                         "INSERT INTO schema_migrations(version, name) VALUES (%s, %s)",
                         (migration.version, migration.name),
