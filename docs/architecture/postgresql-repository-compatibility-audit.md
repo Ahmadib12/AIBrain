@@ -37,6 +37,34 @@ Counts are static first-pass source occurrences, not a proof that every question
 - `backend/app/persistence/integration_connections.py` — 97 question-mark characters.
 - `backend/app/persistence/agent_control.py` — 76 question-mark characters.
 
+## Security-critical transaction audit (WebAuthn, identity, device proof)
+
+A focused source review of `identity.py`, `devices/proof.py`, and `webauthn.py` confirms that transaction portability is the primary blocker for these repositories; qmark conversion alone is insufficient.
+
+### Identity and sessions
+
+- Account registration performs a read-before-insert email check. Concurrent registrations can both pass the read, so PostgreSQL behavior must rely on the unique email constraint as the final arbiter and translate only the expected unique-violation into the existing domain error.
+- Session creation validates that the account (and optional owned active device) is still active before inserting. PostgreSQL implementation must define how account/device deactivation and session creation serialize; merely dropping `immediate=True` creates a time-of-check/time-of-use window.
+- Session revocation reads ownership/audit metadata before updating. The update must remain scoped to the same owner and active session, with affected-row checks retained.
+- Account deletion is a multi-table tombstone/erasure transaction. It must remain atomic and must not race with session creation, device authentication, or other writes for the same account.
+
+### Device proof
+
+- Device proof contains multiple immediate transactions for challenge issuance, challenge consumption, device activation, key rotation, session revocation, and security-event insertion.
+- These operations depend on single-use challenge semantics and atomic coupling of key/session changes with audit events. PostgreSQL porting must use row locks and conditional updates, preserve row-count checks, and keep audit writes in the same transaction.
+- Key rotation must serialize against other rotations and device proof operations for the same device; a generic transaction without an explicit locking order is not sufficient.
+
+### WebAuthn
+
+- Public-key material is now passed as plain `bytes`, removing the repository's direct `sqlite3.Binary` dependency. SQLite BLOB and PostgreSQL `bytea` binding are compatible at this boundary.
+- The repository still has immediate transactions around credential creation/revocation, recovery-code replacement, challenge issuance/consumption, authentication, tool authorization, and registration completion.
+- Challenge consumption and tool-request approval already use conditional updates plus affected-row checks. Preserve those as final single-use/fencing guards in PostgreSQL.
+- Authentication and tool authorization read a credential sign counter and later write a computed value. PostgreSQL must lock the credential row (and challenge/request rows in a consistent order) or use a dialect-safe atomic monotonic update; otherwise concurrent authentications can race on stale counter state.
+- Recovery-code replacement must invalidate the old unused set and insert the replacement set atomically. Recovery-code consumption must likewise be a one-winner conditional update.
+- The existing SQLite tests are in `tests/test_webauthn_repository.py`, `tests/test_webauthn_service.py`, and `tests/test_webauthn_api.py`; there is no `tests/test_webauthn.py`.
+
+These are source-audit findings, not PostgreSQL implementation or acceptance evidence. The current PostgreSQL adapter must continue rejecting `transaction(immediate=True)`.
+
 ## Required compatibility work
 
 ### 1. Connection and row contract
