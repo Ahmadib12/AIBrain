@@ -82,13 +82,31 @@ class WebAuthnRepository:
         ):
             raise ValueError("sign_count must be a non-negative integer")
 
+    def _transaction(self):
+        """Choose an explicit serialization strategy for the active backend."""
+        dialect = getattr(self.database, "dialect", "sqlite")
+        if dialect == "sqlite":
+            return self.database.transaction(immediate=True)
+        if dialect == "postgresql":
+            return self.database.transaction()
+        raise RuntimeError(f"Unsupported persistence dialect: {dialect}")
+
     def _require_active_user(self, connection, user_id):
+        # All WebAuthn state transitions lock the owning account first. This
+        # gives credential counters, challenge consumption, and recovery-code
+        # replacement one consistent cross-instance serialization point and
+        # matches the account-erasure lock order used by IdentityRepository.
+        lock = (
+            " FOR UPDATE"
+            if getattr(self.database, "dialect", "sqlite") == "postgresql"
+            else ""
+        )
         row = connection.execute(
             """
             SELECT id
             FROM users
             WHERE id = ? AND deleted_at IS NULL
-            """,
+            """ + lock,
             (user_id,),
         ).fetchone()
 
@@ -147,7 +165,7 @@ class WebAuthnRepository:
         credential_record_id = str(uuid.uuid4())
         created_at = _utc_now()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             self._require_active_user(connection, user_id)
 
@@ -270,7 +288,7 @@ class WebAuthnRepository:
 
         revoked_at = _utc_now()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
 
             row = connection.execute(
@@ -327,7 +345,7 @@ class WebAuthnRepository:
                 raise ValueError("Recovery-code digest must be lowercase SHA-256 hex")
 
         now = _utc_now()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             self._require_active_user(connection, user_id)
             connection.execute(
@@ -456,7 +474,7 @@ class WebAuthnRepository:
         challenge_record_id = str(uuid.uuid4())
         created_at = _utc_now()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             self._require_active_user(connection, user_id)
 
@@ -524,7 +542,7 @@ class WebAuthnRepository:
 
         consumed_at = _utc_now()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
 
             row = connection.execute(
@@ -597,7 +615,7 @@ class WebAuthnRepository:
         now = datetime.now(timezone.utc)
         now_text = now.isoformat()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             self._require_active_user(connection, user_id)
 
@@ -717,7 +735,7 @@ class WebAuthnRepository:
         now = datetime.now(timezone.utc)
         now_text = now.isoformat()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             self._require_active_user(connection, user_id)
 
@@ -973,7 +991,7 @@ class WebAuthnRepository:
         now_text = now.isoformat()
         credential_record_id = str(uuid.uuid4())
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             self._require_active_user(connection, user_id)
 
