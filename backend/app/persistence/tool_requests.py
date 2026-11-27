@@ -112,6 +112,27 @@ class ToolRequestRepository:
             raise LookupError("Verified evidence package not found")
 
     @contextmanager
+    def _owner_write_transaction(self, user_id: str):
+        """Serialize creation of owner-scoped records against account erasure."""
+        dialect = getattr(self.database, "dialect", None)
+        if dialect == "sqlite":
+            with self.database.transaction():
+                yield self.database.connect()
+            return
+        if dialect != "postgresql":
+            raise RuntimeError("Unsupported persistence dialect for owner write")
+
+        with self.database.transaction():
+            connection = self.database.connect()
+            owner = connection.execute(
+                "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+                (user_id,),
+            ).fetchone()
+            if owner is None:
+                raise LookupError("User not found")
+            yield connection
+
+    @contextmanager
     def _request_transaction(self, user_id: str, request_id: str):
         """Serialize a tool-request transition using backend-specific locking.
 
@@ -194,8 +215,8 @@ class ToolRequestRepository:
                 "contract_fingerprint": contract_fingerprint,
             }
         }
-        with self.database.transaction():
-            self.database.connect().execute(
+        with self._owner_write_transaction(user_id) as connection:
+            connection.execute(
                 "INSERT INTO tool_requests "
                 "(id, user_id, tool_id, arguments_json, status, "
                 "result_json, created_at, updated_at, expires_at, "
