@@ -3,7 +3,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 _ALLOWED_EVENTS = frozenset({
@@ -20,7 +20,7 @@ _ALLOWED_EVENTS = frozenset({
 class DeviceSecurityEventRepository:
     """Persists minimal security events; never stores credentials or proofs."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def record(
