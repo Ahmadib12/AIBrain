@@ -364,3 +364,57 @@ def test_postgres_operator_execution_history_locks_owner_then_request_and_audits
     assert statements[-1][0].startswith(
         "INSERT INTO security_operator_audit_events"
     )
+
+
+class OwnerWriteConnection:
+    def __init__(self, owner):
+        self.owner = owner
+        self.statements = []
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, params))
+        if normalized == (
+            "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE"
+        ):
+            return RecoveryCursor(self.owner)
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+def test_postgres_owner_write_locks_active_account_before_insert_boundary():
+    database = RecordingDatabase()
+    database.connection = OwnerWriteConnection({"id": "owner"})
+    repository = ToolRequestRepository(database)
+
+    with repository._owner_write_transaction("owner"):
+        pass
+
+    assert database.transaction_calls == [False]
+    assert database.connection.statements == [(
+        "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+        ("owner",),
+    )]
+
+
+def test_postgres_owner_write_rejects_tombstoned_or_missing_account():
+    database = RecordingDatabase()
+    database.connection = OwnerWriteConnection(None)
+    repository = ToolRequestRepository(database)
+
+    with pytest.raises(LookupError, match="User not found"):
+        with repository._owner_write_transaction("owner"):
+            pass
+
+    assert database.transaction_calls == [False]
+    assert len(database.connection.statements) == 1
+
+
+def test_owner_write_fails_closed_for_unknown_dialect():
+    class UnknownDatabase(RecordingDatabase):
+        dialect = "unknown"
+
+    repository = ToolRequestRepository(UnknownDatabase())
+
+    with pytest.raises(RuntimeError, match="Unsupported persistence dialect"):
+        with repository._owner_write_transaction("owner"):
+            pass
