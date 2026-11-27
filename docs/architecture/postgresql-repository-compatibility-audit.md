@@ -90,6 +90,8 @@ conditional updates and affected-row checks remain in place as the final
 single-winner guards. The new fake-connection tests assert lock order and
 fail-closed behavior for unsupported dialects.
 
+New tool-request creation now uses an owner-scoped write transaction. PostgreSQL locks the active user row before inserting the request, so creation serializes with account tombstoning/erasure and rejects a missing or already-deleted owner. SQLite retains the prior ordinary transaction behavior. Fake-connection tests assert the PostgreSQL account lock, ordinary transaction mode, missing-owner rejection, and fail-closed unknown-dialect behavior. This is a focused lock-boundary test, not a real PostgreSQL account-erasure race acceptance test.
+
 The same request-scoped lock boundary has now been extended to completion
 and failure, external dispatch start, provider outcome recording, provider
 outcome-lookup authorization and evidence recording, owner reconciliation, and
