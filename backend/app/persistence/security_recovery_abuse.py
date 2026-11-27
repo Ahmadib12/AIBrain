@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
 
+from backend.app.persistence.contracts import DatabaseProtocol
+
 
 class RecoveryAbuseUnavailable(RuntimeError):
     """The configured shared abuse-control service could not be reached."""
@@ -14,7 +16,7 @@ class RecoveryAbuseUnavailable(RuntimeError):
 class SecurityRecoveryAbuseMonitor:
     """SQLite fixed-window monitor for local development and single-host use."""
 
-    def __init__(self, database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def check_and_record(
