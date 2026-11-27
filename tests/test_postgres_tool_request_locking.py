@@ -294,3 +294,69 @@ def test_postgres_certification_revocation_locks_certificate_before_insert():
     assert statements[2][0].startswith(
         "INSERT INTO external_adapter_certification_revocations"
     )
+
+
+class OperatorHistoryConnection:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.split())
+        self.statements.append((normalized, params))
+        if normalized == "SELECT user_id FROM tool_requests WHERE id = ?":
+            return RecoveryCursor({"user_id": "owner"})
+        if normalized == (
+            "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE"
+        ):
+            return RecoveryCursor({"id": "owner"})
+        if "LEFT JOIN tool_execution_attempts AS a" in sql and "FOR UPDATE OF r" in sql:
+            return RecoveryCursor({
+                "user_id": "owner",
+                "tool_id": "example.read",
+                "status": "completed",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "consumed_at": "2026-01-01T00:01:00+00:00",
+                "attempt_status": "completed",
+                "claimed_at": "2026-01-01T00:01:00+00:00",
+                "finished_at": "2026-01-01T00:01:01+00:00",
+                "attempt_error_code": None,
+            })
+        if "UNION ALL" in sql:
+            return RecoveryCursor(rows=[])
+        if normalized.startswith("INSERT INTO security_operator_audit_events"):
+            return RecoveryCursor()
+        raise AssertionError(f"Unexpected SQL: {sql}")
+
+
+def test_postgres_operator_execution_history_locks_owner_then_request_and_audits():
+    database = RecordingDatabase()
+    database.connection = OperatorHistoryConnection()
+    repository = ToolRequestRepository(database)
+
+    result = repository.get_execution_history_for_operator(
+        {
+            "id": "operator",
+            "email": "operator@example.test",
+        },
+        "request",
+        reason="Investigate reported execution",
+        limit=20,
+    )
+
+    assert result["request"]["owner_user_id"] == "owner"
+    assert result["events"] == []
+    assert database.transaction_calls == [False]
+    statements = database.connection.statements
+    assert statements[0] == (
+        "SELECT user_id FROM tool_requests WHERE id = ?",
+        ("request",),
+    )
+    assert statements[1] == (
+        "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
+        ("owner",),
+    )
+    assert "FOR UPDATE OF r" in statements[2][0]
+    assert statements[2][1] == ("request",)
+    assert statements[-1][0].startswith(
+        "INSERT INTO security_operator_audit_events"
+    )
