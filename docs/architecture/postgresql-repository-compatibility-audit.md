@@ -102,8 +102,9 @@ Stale-attempt recovery now discovers candidate attempts without taking a global 
 
 Trusted-runner key registration and revocation now use an explicit operator-write transaction seam: SQLite retains its immediate transaction, while PostgreSQL uses an ordinary transaction. Revocation locks the trusted key row with `FOR UPDATE` before checking for an existing revocation and inserting the immutable revocation record; optional operator audit insertion remains in the same transaction. Fake-connection tests assert the lock statement and fail-closed unknown-dialect behavior. Real PostgreSQL concurrent revocation acceptance is still outstanding.
 
-This remains a partial `tool_requests.py` port. Operator-scoped execution history/audit, evidence attestation and certification lifecycle operations, and other global operator writes still use SQLite immediate transactions or require additional PostgreSQL-specific query/locking review. The PostgreSQL adapter
-must remain out of application composition.
+Evidence-package verification/persistence now uses the same operator-write transaction seam. Runner attestation locks the trusted runner key first and the evidence package second on PostgreSQL, then rechecks revocation, package-attestation uniqueness, and nonce uniqueness before inserting the immutable attestation. Certification approval uses the same key-before-package lock order and rechecks the persisted attestation against current key revocation state before inserting the certificate and optional audit event. Certification revocation locks the certification row before checking/inserting its immutable revocation record. SQLite retains its immediate transaction behavior. Fake-connection tests cover key/package lock order, missing-key fail-closed behavior, and certification-revocation locking.
+
+These changes establish transaction and row-lock boundaries but do not yet prove real PostgreSQL races across independent connections. Operator-scoped execution history/audit and other global operator writes still require PostgreSQL-specific query/locking review. The PostgreSQL adapter must remain out of application composition.
 
 ## Required compatibility work
 
