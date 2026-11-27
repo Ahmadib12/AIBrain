@@ -50,7 +50,7 @@ class RecordingDatabase:
         return self.connection
 
 
-class TestableDeviceRepository(DeviceRepository):
+class StubDeviceRepository(DeviceRepository):
     @staticmethod
     def _record(row):
         return row
@@ -65,7 +65,7 @@ def _index(statements, fragment):
 
 def test_postgres_device_enrollment_locks_active_owner_before_insert():
     database = RecordingDatabase()
-    repository = TestableDeviceRepository(database)
+    repository = StubDeviceRepository(database)
     request = SimpleNamespace(
         platform=SimpleNamespace(value="android"),
         app_version="1.0.0",
@@ -86,7 +86,7 @@ def test_postgres_device_enrollment_locks_active_owner_before_insert():
 
 def test_postgres_capability_report_locks_account_then_device_before_update():
     database = RecordingDatabase()
-    repository = TestableDeviceRepository(database)
+    repository = StubDeviceRepository(database)
     report = SimpleNamespace(
         capabilities=[SimpleNamespace(value="microphone")],
         reported_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00+00:00"),
