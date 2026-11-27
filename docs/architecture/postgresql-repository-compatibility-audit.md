@@ -106,6 +106,18 @@ Evidence-package verification/persistence now uses the same operator-write trans
 
 These changes establish transaction and row-lock boundaries but do not yet prove real PostgreSQL races across independent connections. Operator-scoped execution history/audit and other global operator writes still require PostgreSQL-specific query/locking review. The PostgreSQL adapter must remain out of application composition.
 
+### Operator execution-history access locking
+
+Operator execution-history inspection now has a backend-specific transaction
+boundary. SQLite retains its immediate transaction. PostgreSQL first resolves
+the request owner, locks the active owner account, then locks the request row
+with `FOR UPDATE OF r` before reading the joined execution-attempt state.
+This follows the account-before-request lock order used by request lifecycle
+transitions and keeps the operator-access audit insert in the same transaction
+as the inspected snapshot. A fake-connection test asserts the lock order and
+ordinary PostgreSQL transaction mode. Real PostgreSQL concurrent history-read
+acceptance remains outstanding.
+
 ## Required compatibility work
 
 ### 1. Connection and row contract
