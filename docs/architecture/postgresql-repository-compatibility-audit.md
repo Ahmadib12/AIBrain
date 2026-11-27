@@ -74,6 +74,29 @@ A focused source review of `identity.py`, `devices/proof.py`, and `webauthn.py` 
 
 This is an initial PostgreSQL WebAuthn locking implementation, not a completed repository port or acceptance result. Other WebAuthn-adjacent repositories and the application composition remain SQLite-only. The PostgreSQL adapter still correctly rejects `transaction(immediate=True)`.
 
+### Tool-request transition locking — initial slice
+
+The first tool-execution portability slice now adds a repository-owned
+transaction boundary for four owner-scoped transitions:
+- generic read-only approval;
+- generic read-only execution claim plus attempt creation;
+- immutable dispatch-binding creation;
+- passkey-authorized execution claim plus attempt creation.
+
+SQLite continues to use `BEGIN IMMEDIATE`. PostgreSQL uses an ordinary
+transaction and locks the active owner row before the owner-scoped tool-request
+row, matching the identity and WebAuthn account-first lock order. Existing
+conditional updates and affected-row checks remain in place as the final
+single-winner guards. The new fake-connection tests assert lock order and
+fail-closed behavior for unsupported dialects.
+
+This is deliberately a first slice, not a completed `tool_requests.py` port.
+Other tool-request lifecycle transitions, stale-attempt recovery, dispatch
+audit/reconciliation, trusted-runner evidence/certification operations, and
+global operator writes still use SQLite immediate transactions or require
+additional PostgreSQL-specific query/locking review. The PostgreSQL adapter
+must remain out of application composition.
+
 ## Required compatibility work
 
 ### 1. Connection and row contract
