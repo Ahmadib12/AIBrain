@@ -5,6 +5,7 @@ from backend.app.persistence.postgres.migrations import (
     PostgresMigration,
     PostgresMigrationRunner,
     _validate_migrations,
+    _split_sql_statements,
 )
 
 
@@ -199,3 +200,34 @@ def test_postgres_migration_runner_uses_advisory_lock_and_transactions():
     assert any("INSERT INTO schema_migrations" in statement for statement in statements)
     assert any("pg_advisory_unlock" in statement for statement in statements)
     assert calls[-1] == ("close",)
+
+
+def test_postgres_sql_splitter_preserves_procedural_bodies_and_quoted_semicolons():
+    sql = """
+    -- A comment; must not split this statement.
+    CREATE TABLE sample (value TEXT DEFAULT 'left;right');
+    CREATE FUNCTION sample_fn() RETURNS trigger LANGUAGE plpgsql AS $body$
+    BEGIN
+        PERFORM 'inside;body';
+        /* nested comment; /* still a comment; */ done */
+        RETURN NEW;
+    END;
+    $body$;
+    SELECT "semi;colon" FROM sample;
+    """
+    statements = _split_sql_statements(sql)
+    assert len(statements) == 3
+    assert statements[0].startswith("CREATE TABLE sample")
+    assert "PERFORM 'inside;body';" in statements[1]
+    assert "nested comment; /* still a comment; */ done" in statements[1]
+    assert statements[1].endswith("$body$")
+    assert statements[2] == 'SELECT "semi;colon" FROM sample'
+
+
+def test_postgres_sql_splitter_splits_migration_32_alter_statements():
+    statements = _split_sql_statements(MIGRATIONS[31].sql)
+    assert statements[0].startswith("ALTER TABLE device_security_events")
+    assert "DROP CONSTRAINT" in statements[0]
+    assert statements[1].startswith("ALTER TABLE device_security_events")
+    assert "ADD CONSTRAINT" in statements[1]
+    assert any("CREATE FUNCTION aibrain_validate_device_rotation" in item for item in statements)
