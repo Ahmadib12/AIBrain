@@ -98,11 +98,9 @@ and request locks before applying their existing conditional state changes.
 This keeps their request/attempt/audit updates in one transaction while
 replacing their dependence on SQLite's global writer reservation.
 
-This is deliberately a first slice, not a completed `tool_requests.py` port.
-Stale-attempt recovery, operator-scoped execution history/audit operations,
-trusted-runner evidence/certification operations, and global operator writes
-still use SQLite immediate transactions or require additional PostgreSQL-
-specific query/locking review. The PostgreSQL adapter
+Stale-attempt recovery now discovers candidate attempts without taking a global writer lock, then revalidates each candidate under the same owner-account-before-request row locks used by dispatch and lifecycle transitions. It updates the attempt and request atomically and preserves the conservative distinction between a provably pre-dispatch failure and an outcome that may already have occurred. A fake-connection test asserts the PostgreSQL lock order and transaction mode; real PostgreSQL multi-connection recovery acceptance remains outstanding.
+
+This remains a partial `tool_requests.py` port. Operator-scoped execution history/audit operations, trusted-runner evidence/certification operations, and global operator writes still use SQLite immediate transactions or require additional PostgreSQL-specific query/locking review. The PostgreSQL adapter
 must remain out of application composition.
 
 ## Required compatibility work
