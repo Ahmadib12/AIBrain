@@ -82,7 +82,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 
 1. [x] Add SQL-aware parameter and hybrid-row compatibility primitives with isolated unit tests (`postgres/compat.py`). These primitives are not yet wired into a connection.
 2. [x] Add an opt-in PostgreSQL connection adapter implementing `DatabaseProtocol` (`postgres/database.py`). It supports thread-owned connections, psycopg transactions, qmark conversion, and hybrid rows. `transaction(immediate=True)` deliberately fails closed; it is not yet safe for repositories that rely on SQLite writer serialization. The adapter is unused by `AppState`.
-3. Convert repository constructor annotations to the protocol and prove the adapter's low-level conformance.
+3. [~] Convert repository/service constructor annotations to `DatabaseProtocol` in the first security-critical slice (`tool_requests.py`, `devices/proof.py`, and `tools/integration_vault.py`). Remaining constructor annotations and adapter conformance are still outstanding.
 4. Port dialect-specific queries repository-by-repository, starting with identity/session and device proof, then WebAuthn/tool execution, agents/integrations, memory/learning, and notifications.
 5. Add cross-backend repository conformance and concurrency acceptance before enabling application composition.
 
@@ -94,6 +94,7 @@ Prefer explicit dialect branches for security-critical SQL over a large opaque S
 - [x] SQL-aware qmark conversion and hybrid-row primitives (isolated; tested in `tests/test_postgres_compat.py`).
 - [x] Initial opt-in PostgreSQL connection/row/ordinary-transaction adapter.
 - [ ] PostgreSQL-safe replacements for SQLite `immediate=True` transaction assumptions.
+- [~] Initial protocol decoupling in tool-request, device-proof, and integration-vault services; remaining repositories are still coupled to the concrete SQLite type.
 - [ ] Repository SQL portability.
 - [ ] PostgreSQL repository conformance suite.
 - [ ] Cross-instance security/concurrency acceptance.
