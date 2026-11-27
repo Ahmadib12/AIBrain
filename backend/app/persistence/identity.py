@@ -13,6 +13,22 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_email_unique_violation(error: BaseException) -> bool:
+    """Recognize only the users.email uniqueness constraint across supported drivers."""
+    sqlstate = getattr(error, "sqlstate", None)
+    diagnostic = getattr(error, "diag", None)
+    constraint_name = getattr(diagnostic, "constraint_name", None)
+    if sqlstate == "23505":
+        return constraint_name == "users_email_key"
+
+    # sqlite3.IntegrityError exposes no structured constraint metadata.
+    message = str(error).lower()
+    return message in {
+        "unique constraint failed: users.email",
+        "unique constraint failed: users.email",
+    }
+
+
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac(
         "sha256",
@@ -57,19 +73,26 @@ class IdentityRepository:
             salt = secrets.token_hex(16)
             password_hash = _hash_password(password, salt)
             now = _utc_now()
-            self.database.connect().execute(
-                "INSERT INTO users "
-                "(id, email, password_salt, password_hash, display_name, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    user_id,
-                    normalized,
-                    salt,
-                    password_hash,
-                    display_name,
-                    now,
-                ),
-            )
+            try:
+                self.database.connect().execute(
+                    "INSERT INTO users "
+                    "(id, email, password_salt, password_hash, display_name, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        user_id,
+                        normalized,
+                        salt,
+                        password_hash,
+                        display_name,
+                        now,
+                    ),
+                )
+            except Exception as exc:
+                # The preflight SELECT improves the common path, but the
+                # database uniqueness constraint is the concurrency arbiter.
+                if _is_email_unique_violation(exc):
+                    raise ValueError("Email is already registered") from exc
+                raise
         return self.get_user(user_id)
 
     def verify_password(
