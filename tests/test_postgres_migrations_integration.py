@@ -1377,6 +1377,10 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
                      b"z" * 12, b"v" * 32, 1, timestamp, timestamp),
                 )
                 connection.execute("UPDATE users SET deleted_at=%s WHERE id=%s", (future, owner))
+                connection.execute(
+                    "UPDATE users SET deleted_at=%s WHERE id=%s",
+                    ("2027-01-01T00:00:00+00:00", owner),
+                )
                 connection.execute("DELETE FROM users WHERE id=%s", (owner,))
                 assert connection.execute(
                     "SELECT count(*) FROM integration_secrets WHERE secret_ref=%s",
