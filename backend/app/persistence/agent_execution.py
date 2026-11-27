@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 from backend.app.persistence.validation import validate_personal_payload
 from backend.app.tools.contracts import ToolRegistry, ToolRisk, contract_fingerprint
 from backend.app.tools.runtime import ToolExecutionGateway
@@ -37,7 +37,7 @@ def _digest(actions: list[dict]) -> str:
 class AgentExecutionRepository:
     """Persist, authorize, and execute bounded read-only agent runs."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def _event(self, user_id: str, run_id: str, event_type: str,
