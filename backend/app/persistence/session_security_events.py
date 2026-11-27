@@ -3,13 +3,13 @@
 from datetime import datetime
 from uuid import UUID
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 
 class SessionSecurityEventRepository:
     """Reads minimal session lifecycle events emitted by database triggers."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def list_owned(
