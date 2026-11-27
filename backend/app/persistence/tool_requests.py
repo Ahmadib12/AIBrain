@@ -3,7 +3,7 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 from backend.app.persistence.validation import validate_personal_payload
 
 
@@ -71,7 +71,7 @@ def _request_digest(
 
 class ToolRequestRepository:
     def __init__(
-        self, database: Database, *,
+        self, database: DatabaseProtocol, *,
         conformance_suite_trust: dict | None = None,
     ) -> None:
         self.database = database
