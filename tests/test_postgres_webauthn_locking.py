@@ -10,6 +10,7 @@ from backend.app.persistence.webauthn import WebAuthnRepository
 class RecordingConnection:
     def __init__(self):
         self.statements = []
+        self.closed = False
 
     def execute(self, sql, params=None):
         self.statements.append((sql, params))
@@ -18,6 +19,9 @@ class RecordingConnection:
     @contextmanager
     def transaction(self):
         yield self
+
+    def close(self):
+        self.closed = True
 
 
 def test_postgres_webauthn_account_guard_locks_owner_row_first():
@@ -36,6 +40,7 @@ def test_postgres_webauthn_account_guard_locks_owner_row_first():
         assert params == ("user-1",)
     finally:
         database.shutdown()
+    assert connection.closed
 
 
 def test_postgres_webauthn_transaction_uses_row_lock_strategy_not_immediate():
@@ -59,6 +64,7 @@ def test_postgres_webauthn_transaction_uses_row_lock_strategy_not_immediate():
         assert requested == [False]
     finally:
         database.shutdown()
+    assert connection.closed
 
 
 def test_sqlite_webauthn_transaction_retains_immediate_writer_lock():
