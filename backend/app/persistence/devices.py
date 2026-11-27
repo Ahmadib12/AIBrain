@@ -103,8 +103,24 @@ class DeviceRepository:
 
     def revoke(self, owner_id: str, device_id: str) -> DeviceRecord:
         now = _now()
-        with self.database.transaction(immediate=True):
-            cursor = self.database.connect().execute(
+        dialect = getattr(self.database, "dialect", None)
+        if dialect not in {"sqlite", "postgresql"}:
+            raise RuntimeError("Unsupported database dialect for device revocation")
+        with self.database.transaction(immediate=(dialect == "sqlite")):
+            connection = self.database.connect()
+            if dialect == "postgresql":
+                owner = connection.execute(
+                    "SELECT id FROM users WHERE id=? FOR UPDATE", (owner_id,)
+                ).fetchone()
+                if owner is None:
+                    raise LookupError("Device not found")
+                device = connection.execute(
+                    "SELECT id FROM devices WHERE id=? AND user_id=? FOR UPDATE",
+                    (device_id, owner_id),
+                ).fetchone()
+                if device is None:
+                    raise LookupError("Device not found")
+            cursor = connection.execute(
                 """
                 UPDATE devices
                 SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?)
@@ -113,7 +129,7 @@ class DeviceRepository:
                 (now, device_id, owner_id),
             )
             if cursor.rowcount != 1:
-                row = self.database.connect().execute(
+                row = connection.execute(
                     "SELECT status FROM devices WHERE id = ? AND user_id = ?",
                     (device_id, owner_id),
                 ).fetchone()
@@ -122,7 +138,7 @@ class DeviceRepository:
             # Device revocation and session invalidation share one write
             # transaction, so no new request can observe a revoked device
             # with still-valid device-bound sessions.
-            self.database.connect().execute(
+            connection.execute(
                 """
                 UPDATE sessions
                 SET revoked_at = COALESCE(revoked_at, ?)
