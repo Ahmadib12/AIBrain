@@ -90,6 +90,14 @@ conditional updates and affected-row checks remain in place as the final
 single-winner guards. The new fake-connection tests assert lock order and
 fail-closed behavior for unsupported dialects.
 
+The same request-scoped lock boundary has now been extended to completion
+and failure, external dispatch start, provider outcome recording, provider
+outcome-lookup authorization and evidence recording, owner reconciliation, and
+pending-request cancellation. These transitions now acquire the owner account
+and request locks before applying their existing conditional state changes.
+This keeps their request/attempt/audit updates in one transaction while
+replacing their dependence on SQLite's global writer reservation.
+
 This is deliberately a first slice, not a completed `tool_requests.py` port.
 Other tool-request lifecycle transitions, stale-attempt recovery, dispatch
 audit/reconciliation, trusted-runner evidence/certification operations, and
