@@ -65,13 +65,14 @@ A focused source review of `identity.py`, `devices/proof.py`, and `webauthn.py` 
 ### WebAuthn
 
 - Public-key material is now passed as plain `bytes`, removing the repository's direct `sqlite3.Binary` dependency. SQLite BLOB and PostgreSQL `bytea` binding are compatible at this boundary.
-- The repository still has immediate transactions around credential creation/revocation, recovery-code replacement, challenge issuance/consumption, authentication, tool authorization, and registration completion.
-- Challenge consumption and tool-request approval already use conditional updates plus affected-row checks. Preserve those as final single-use/fencing guards in PostgreSQL.
-- Authentication and tool authorization read a credential sign counter and later write a computed value. PostgreSQL must lock the credential row (and challenge/request rows in a consistent order) or use a dialect-safe atomic monotonic update; otherwise concurrent authentications can race on stale counter state.
-- Recovery-code replacement must invalidate the old unused set and insert the replacement set atomically. Recovery-code consumption must likewise be a one-winner conditional update.
-- The existing SQLite tests are in `tests/test_webauthn_repository.py`, `tests/test_webauthn_service.py`, and `tests/test_webauthn_api.py`; there is no `tests/test_webauthn.py`.
+- WebAuthn now has an explicit dialect transaction seam: SQLite retains `transaction(immediate=True)`; PostgreSQL uses an ordinary transaction and locks the active owner row with `FOR UPDATE` before every state-changing credential, challenge, recovery-code, authentication, registration, and tool-authorization operation. This serializes WebAuthn writes per account and shares the account-before-dependent-row lock order used by identity/account erasure.
+- Challenge consumption and tool-request approval retain conditional updates plus affected-row checks as final single-use guards. The account lock is a serialization boundary, not a replacement for those guards.
+- Authentication and tool authorization read and update credential sign counters while holding the account lock, preventing concurrent WebAuthn operations for one owner from calculating updates from stale counters. This deliberately serializes passkey state changes within an account; a later optimization may narrow this to credential-row locks after proving a global lock order.
+- Recovery-code replacement invalidates the old unused set and inserts the replacement set in the same transaction while holding the owner lock. The conditional one-winner semantics for challenge consumption remain in place.
+- Added fake-connection lock/transaction tests in `tests/test_postgres_webauthn_locking.py` and opt-in independent-connection acceptance tests in `tests/test_postgres_webauthn_concurrency_integration.py` for sign-counter monotonicity, one-winner challenge consumption, and atomic recovery-code generations. These real PostgreSQL tests require `AIBRAIN_POSTGRES_TEST_URL` and have not yet been executed in the user's Codespace.
+- Existing SQLite tests remain in `tests/test_webauthn_repository.py`, `tests/test_webauthn_service.py`, and `tests/test_webauthn_api.py`.
 
-These are source-audit findings, not PostgreSQL implementation or acceptance evidence. The current PostgreSQL adapter must continue rejecting `transaction(immediate=True)`.
+This is an initial PostgreSQL WebAuthn locking implementation, not a completed repository port or acceptance result. Other WebAuthn-adjacent repositories and the application composition remain SQLite-only. The PostgreSQL adapter still correctly rejects `transaction(immediate=True)`.
 
 ## Required compatibility work
 
