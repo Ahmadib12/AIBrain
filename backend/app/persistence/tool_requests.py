@@ -798,38 +798,59 @@ class ToolRequestRepository:
 
         cutoff_text = cutoff.astimezone(timezone.utc).isoformat()
         now = _utc_now()
-        with self.database.transaction(immediate=True):
-            connection = self.database.connect()
-            stale_rows = connection.execute(
-                """
-                SELECT a.request_id, a.user_id,
-                       b.action_digest, b.adapter_id, b.adapter_version,
-                       b.provider_id, b.provider_scope,
-                       EXISTS (
-                           SELECT 1
-                           FROM tool_dispatch_audit_events AS s
-                           WHERE s.request_id = a.request_id
-                             AND s.user_id = a.user_id
-                             AND s.event_type = 'dispatch_started'
-                       ) AS dispatch_started
-                FROM tool_execution_attempts AS a
-                LEFT JOIN tool_execution_bindings AS b
-                  ON b.request_id = a.request_id AND b.user_id = a.user_id
-                WHERE a.status = 'claimed' AND a.claimed_at < ?
-                """,
-                (cutoff_text,),
-            ).fetchall()
+        # Discover candidates without locking a global queue. Each candidate is
+        # then revalidated while holding the same owner -> request locks used by
+        # dispatch and all request lifecycle transitions. This prevents a
+        # recovery/dispatch race without taking locks in attempt -> owner order.
+        candidates = self.database.connect().execute(
+            """
+            SELECT a.request_id, a.user_id
+            FROM tool_execution_attempts AS a
+            WHERE a.status = 'claimed' AND a.claimed_at < ?
+            ORDER BY a.user_id, a.request_id
+            """,
+            (cutoff_text,),
+        ).fetchall()
 
-            recovered = 0
-            for row in stale_rows:
+        recovered = 0
+        for candidate in candidates:
+            user_id = candidate["user_id"]
+            request_id = candidate["request_id"]
+            with self._request_transaction(user_id, request_id) as connection:
+                row = connection.execute(
+                    """
+                    SELECT a.request_id, a.user_id, a.claimed_at,
+                           b.action_digest, b.adapter_id, b.adapter_version,
+                           b.provider_id, b.provider_scope,
+                           EXISTS (
+                               SELECT 1
+                               FROM tool_dispatch_audit_events AS s
+                               WHERE s.request_id = a.request_id
+                                 AND s.user_id = a.user_id
+                                 AND s.event_type = 'dispatch_started'
+                           ) AS dispatch_started
+                    FROM tool_execution_attempts AS a
+                    JOIN tool_requests AS r
+                      ON r.id = a.request_id AND r.user_id = a.user_id
+                    LEFT JOIN tool_execution_bindings AS b
+                      ON b.request_id = a.request_id AND b.user_id = a.user_id
+                    WHERE a.request_id = ? AND a.user_id = ?
+                      AND a.status = 'claimed' AND a.claimed_at < ?
+                      AND r.status = 'executing' AND r.consumed_at IS NOT NULL
+                    """,
+                    (request_id, user_id, cutoff_text),
+                ).fetchone()
+                # Another worker may have completed, dispatched, or recovered
+                # this candidate after the initial unlocked discovery query.
+                if row is None:
+                    continue
+
                 has_external_binding = row["action_digest"] is not None
                 dispatch_started = bool(row["dispatch_started"])
 
                 if has_external_binding and not dispatch_started:
-                    # The final dispatch gate writes dispatch_started in an
-                    # IMMEDIATE transaction before adapter.execute is called.
-                    # Since recovery also owns that lock, this state proves
-                    # the provider boundary was not crossed.
+                    # The dispatch-start marker is written under this same
+                    # request lock before adapter.execute can be called.
                     details = {
                         "reason": "stale_claim_before_provider_dispatch",
                         "adapter_id": row["adapter_id"],
@@ -845,7 +866,7 @@ class ToolRequestRepository:
                         VALUES (?, ?, ?, 'dispatch_not_started', ?, ?, ?)
                         """,
                         (
-                            str(uuid.uuid4()), row["user_id"], row["request_id"],
+                            str(uuid.uuid4()), user_id, request_id,
                             row["action_digest"],
                             json.dumps(
                                 details, ensure_ascii=False, sort_keys=True,
@@ -857,8 +878,8 @@ class ToolRequestRepository:
                     terminal_status = "failed"
                     error_code = "recovery_dispatch_not_started"
                 else:
-                    # Generic executions and external executions with a
-                    # durable dispatch_started marker may already have acted.
+                    # A generic execution or a durable dispatch marker means
+                    # the external side effect may already have happened.
                     terminal_status = "outcome_unknown"
                     error_code = "recovery_outcome_unknown"
 
@@ -871,7 +892,7 @@ class ToolRequestRepository:
                     """,
                     (
                         terminal_status, now, now, error_code,
-                        row["request_id"], row["user_id"],
+                        request_id, user_id,
                     ),
                 )
                 if attempt.rowcount != 1:
@@ -886,12 +907,9 @@ class ToolRequestRepository:
                     WHERE id = ? AND user_id = ? AND status = 'executing'
                       AND consumed_at IS NOT NULL
                     """,
-                    (
-                        terminal_status, now, row["request_id"], row["user_id"],
-                    ),
+                    (terminal_status, now, request_id, user_id),
                 )
                 if request_update.rowcount != 1:
-                    # Roll back the event and attempt transition as well.
                     raise PermissionError(
                         "Tool request is no longer awaiting recovery"
                     )
