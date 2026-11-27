@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 from types import SimpleNamespace
 
 from backend.app.devices.proof import DeviceProofRepository
@@ -46,7 +45,16 @@ def test_postgres_device_proof_transactions_do_not_request_sqlite_immediate():
     )
     try:
         repository = DeviceProofRepository(database)
+        requested = []
+        original_transaction = database.transaction
+
+        def recording_transaction(*, immediate=False):
+            requested.append(immediate)
+            return original_transaction(immediate=immediate)
+
+        database.transaction = recording_transaction
         with repository._transaction():
             pass
+        assert requested == [False]
     finally:
         database.shutdown()
