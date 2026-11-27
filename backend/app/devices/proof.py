@@ -46,13 +46,50 @@ class DeviceProofRepository:
     def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
+    def _transaction(self):
+        """Keep SQLite writer serialization; use explicit PostgreSQL row locks."""
+        dialect = getattr(self.database, "dialect", None)
+        if dialect not in {"sqlite", "postgresql"}:
+            raise RuntimeError("Unsupported database dialect for device proof")
+        return self.database.transaction(immediate=(dialect == "sqlite"))
+
+    def _lock_owner_device(self, connection, owner_id: str, device_id: str) -> None:
+        """Lock account then device, matching IdentityRepository lock order."""
+        if getattr(self.database, "dialect", None) != "postgresql":
+            return
+        owner = connection.execute(
+            "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+            (owner_id,),
+        ).fetchone()
+        if owner is None:
+            raise LookupError("Active device owner not found")
+        device = connection.execute(
+            "SELECT id FROM devices WHERE id=? AND user_id=? FOR UPDATE",
+            (device_id, owner_id),
+        ).fetchone()
+        if device is None:
+            raise LookupError("Device not found")
+
+    def _lock_device_owner(self, connection, device_id: str) -> str:
+        """Resolve an unauthenticated device owner, then lock owner before device."""
+        row = connection.execute(
+            "SELECT user_id FROM devices WHERE id=?", (device_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("Active keyed device not found")
+        owner_id = row["user_id"]
+        self._lock_owner_device(connection, owner_id, device_id)
+        return owner_id
+
     def register_public_key(
         self, owner_id: str, device_id: str, public_key_b64: str
     ) -> None:
         public_key = _b64decode(public_key_b64, expected_length=32)
         fingerprint = hashlib.sha256(public_key).hexdigest()
-        with self.database.transaction(immediate=True):
-            cursor = self.database.connect().execute(
+        with self._transaction():
+            connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
+            cursor = connection.execute(
                 """
                 UPDATE devices
                 SET public_key_b64 = ?
@@ -84,8 +121,9 @@ class DeviceProofRepository:
         now = _now()
         expires = now + timedelta(minutes=5)
         expires_text = expires.isoformat()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
             row = connection.execute(
                 """
                 SELECT id FROM devices
@@ -149,8 +187,9 @@ class DeviceProofRepository:
         nonce = secrets.token_urlsafe(32)
         now = _now()
         expires_text = (now + timedelta(minutes=5)).isoformat()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            owner_id = self._lock_device_owner(connection, device_id)
             device = connection.execute(
                 """
                 SELECT d.user_id
@@ -224,8 +263,16 @@ class DeviceProofRepository:
         if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
             raise ValueError("Invalid challenge nonce")
         now = _now()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            owner_row = connection.execute(
+                "SELECT user_id FROM device_auth_challenges WHERE id=? AND device_id=? AND purpose='session'",
+                (challenge_id, device_id),
+            ).fetchone()
+            if owner_row is None:
+                raise LookupError("Device login challenge not found")
+            owner_id = owner_row["user_id"]
+            self._lock_owner_device(connection, owner_id, device_id)
             row = connection.execute(
                 """
                 SELECT c.user_id, c.nonce_hash, c.expires_at, c.used_at,
@@ -288,8 +335,9 @@ class DeviceProofRepository:
         if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
             raise ValueError("Invalid challenge nonce")
         now = _now()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
             row = connection.execute(
                 """
                 SELECT c.nonce_hash, c.expires_at, c.used_at, d.public_key_b64
@@ -352,7 +400,7 @@ class DeviceProofRepository:
         if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
             raise ValueError("Invalid challenge nonce")
         now = _now()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
             row = connection.execute(
                 """
@@ -413,8 +461,9 @@ class DeviceProofRepository:
         nonce = secrets.token_urlsafe(32)
         now = _now()
         expires_text = (now + timedelta(minutes=5)).isoformat()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
             device = connection.execute(
                 """
                 SELECT public_key_b64, public_key_fingerprint FROM devices
@@ -477,8 +526,9 @@ class DeviceProofRepository:
         if not isinstance(nonce, str) or not nonce.isascii() or not 20 <= len(nonce) <= 128:
             raise ValueError("Invalid challenge nonce")
         now = _now()
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
             row = connection.execute(
                 """
                 SELECT c.nonce_hash,c.expires_at,c.used_at,c.applied_at,
@@ -587,8 +637,9 @@ class DeviceProofRepository:
         now = _now()
         expires_text = (now + timedelta(minutes=5)).isoformat()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            self._lock_owner_device(connection, owner_id, device_id)
             device = connection.execute(
                 """
                 SELECT d.public_key_fingerprint
@@ -682,8 +733,16 @@ class DeviceProofRepository:
             raise ValueError("Invalid challenge nonce")
         now = _now()
 
-        with self.database.transaction(immediate=True):
+        with self._transaction():
             connection = self.database.connect()
+            owner_row = connection.execute(
+                "SELECT user_id FROM device_key_rotation_challenges WHERE id=? AND device_id=? AND recovery_code_id IS NOT NULL",
+                (challenge_id, device_id),
+            ).fetchone()
+            if owner_row is None:
+                raise LookupError("Device recovery challenge not found")
+            owner_id = owner_row["user_id"]
+            self._lock_owner_device(connection, owner_id, device_id)
             row = connection.execute(
                 """
                 SELECT c.user_id,c.nonce_hash,c.expires_at,c.used_at,c.applied_at,
