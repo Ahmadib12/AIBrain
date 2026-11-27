@@ -43,6 +43,10 @@ A focused source review of `identity.py`, `devices/proof.py`, and `webauthn.py` 
 
 ### Identity and sessions
 
+- Registration now translates only the SQLite `users.email` unique-constraint error or PostgreSQL SQLSTATE `23505` with constraint name `users_email_key` into the existing duplicate-email domain error. Other integrity errors propagate unchanged.
+- The SQLite and PostgreSQL database adapters now expose a `dialect` marker. Identity session creation uses SQLite `BEGIN IMMEDIATE` as before; on PostgreSQL it locks the active user row with `FOR UPDATE`, then locks an optional active owned device row before inserting the session.
+- Account erasure uses the same PostgreSQL user-row lock before tombstoning and deleting dependent state. This establishes a consistent user-before-device lock order for these identity operations.
+- Focused fake-connection tests verify emitted PostgreSQL lock statements and order. They are unit tests, not real PostgreSQL concurrency acceptance. Device proof and other account-scoped writers are not yet proven to follow this lock order.
 - Account registration performs a read-before-insert email check. Concurrent registrations can both pass the read, so PostgreSQL behavior must rely on the unique email constraint as the final arbiter and translate only the expected unique-violation into the existing domain error.
 - Session creation validates that the account (and optional owned active device) is still active before inserting. PostgreSQL implementation must define how account/device deactivation and session creation serialize; merely dropping `immediate=True` creates a time-of-check/time-of-use window.
 - Session revocation reads ownership/audit metadata before updating. The update must remain scoped to the same owner and active session, with affected-row checks retained.
