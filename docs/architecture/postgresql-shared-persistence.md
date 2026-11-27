@@ -40,10 +40,12 @@ are a coverage checklist, not a claim that PostgreSQL currently has parity.
    notification operation, and account-erasure behavior.
    Do not translate SQLite trigger SQL mechanically.
 
-3. **Repository compatibility** — still required. Audit every repository for
-   SQLite-only SQL/API assumptions. Use explicit dialect-aware implementations
-   where portability would obscure correctness. Preserve row shapes and
-   domain error behavior.
+3. **Repository compatibility** — still required. The first-pass audit is
+   recorded in [postgresql-repository-compatibility-audit.md](postgresql-repository-compatibility-audit.md).
+   It identifies the connection/row, placeholder, transaction, and dialect
+   work still required. Audit every repository for SQLite-only SQL/API
+   assumptions. Use explicit dialect-aware implementations where portability
+   would obscure correctness. Preserve row shapes and domain error behavior.
 4. **Concurrency and recovery** — still required. Use PostgreSQL transactions
    and row-level locking (including FOR UPDATE SKIP LOCKED for queue claims
    where appropriate), claim-token fencing, and atomic conditional updates.
