@@ -23,10 +23,7 @@ def _is_email_unique_violation(error: BaseException) -> bool:
 
     # sqlite3.IntegrityError exposes no structured constraint metadata.
     message = str(error).lower()
-    return message in {
-        "unique constraint failed: users.email",
-        "unique constraint failed: users.email",
-    }
+    return message == "unique constraint failed: users.email"
 
 
 def _hash_password(password: str, salt: str) -> str:
