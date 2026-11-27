@@ -754,8 +754,13 @@ class DeviceProofRepository:
                 raise LookupError("Device recovery challenge not found")
             owner_id = owner_row["user_id"]
             self._lock_owner_device(connection, owner_id, device_id)
+            recovery_row_lock = (
+                "FOR UPDATE OF r"
+                if getattr(self.database, "dialect", None) == "postgresql"
+                else ""
+            )
             row = connection.execute(
-                """
+                f"""
                 SELECT c.user_id,c.nonce_hash,c.expires_at,c.used_at,c.applied_at,
                        c.previous_fingerprint,c.proposed_public_key_b64,
                        c.proposed_fingerprint,c.recovery_code_id,
@@ -767,7 +772,7 @@ class DeviceProofRepository:
                   ON r.id=c.recovery_code_id AND r.user_id=c.user_id
                 WHERE c.id=? AND c.device_id=? AND c.recovery_code_id IS NOT NULL
                   AND d.status='active' AND u.deleted_at IS NULL
-                FOR UPDATE OF r
+                {recovery_row_lock}
                 """,
                 (challenge_id, device_id),
             ).fetchone()
