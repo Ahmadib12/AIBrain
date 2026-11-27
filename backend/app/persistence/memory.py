@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 from backend.app.persistence.validation import validate_personal_payload
 
 
@@ -27,7 +27,7 @@ class MemoryRepository:
     DEFAULT_RETENTION_DAYS = 365
     MAX_RETENTION_DAYS = 3650
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def consent_status(self, user_id: str) -> dict[str, Any]:
