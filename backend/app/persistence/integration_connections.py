@@ -9,7 +9,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from backend.app.persistence.database import Database
+from backend.app.persistence.contracts import DatabaseProtocol
 
 _SCOPE_PATTERN = re.compile(r"^[a-z][a-z0-9_.:-]{1,95}$")
 
@@ -19,7 +19,7 @@ def _now() -> str:
 
 
 class IntegrationConnectionRepository:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: DatabaseProtocol) -> None:
         self.database = database
 
     def create_pending(
