@@ -117,3 +117,24 @@ def test_postgres_device_revocation_locks_account_then_device_and_revokes_sessio
     session_update = next(i for i, statement in enumerate(sql) if "UPDATE sessions" in statement)
     assert account_lock < device_lock < device_update < session_update
     assert database.immediate_values == [False]
+
+
+class DialectTransactionDatabase:
+    def __init__(self, dialect):
+        self.dialect = dialect
+        self.immediate_values = []
+
+    @contextmanager
+    def transaction(self, *, immediate=False):
+        self.immediate_values.append(immediate)
+        yield
+
+
+def test_sqlite_device_proof_keeps_immediate_transactions():
+    database = DialectTransactionDatabase("sqlite")
+    repository = DeviceProofRepository(database)
+
+    with repository._transaction():
+        pass
+
+    assert database.immediate_values == [True]
