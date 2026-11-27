@@ -264,7 +264,7 @@ def test_postgres_evidence_lifecycle_fails_closed_if_runner_key_missing():
     database.connection.execute = lambda sql, params=(): RecoveryCursor(None)
     repository = ToolRequestRepository(database)
 
-    with database.transaction() as connection:
+    with repository._operator_write_transaction() as connection:
         with pytest.raises(PermissionError, match="signer key"):
             repository._lock_runner_key_and_evidence_package(
                 connection, "missing-key", "evidence-package"
