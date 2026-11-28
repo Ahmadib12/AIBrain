@@ -43,6 +43,14 @@ This document distinguishes implemented foundations from external integrations t
   generation. Heartbeats and worker task transitions require the current token;
   expired workers cannot complete or overwrite a newer worker claim. Stale
   takeover is serialized by PostgreSQL row locking and audited.
+- Agent runs include execution fencing fields for executor identity, a unique
+  execution token, and a monotonic execution generation. Authorized runs use
+  conditional state transitions so only one process can start execution.
+  Cancellation is restricted to proposed or authorized runs; recovery and
+  cancellation cannot overwrite a running execution.
+- PostgreSQL expiry decisions use database current time. Independent OS
+  process acceptance covers claim/takeover, heartbeat stale rejection,
+  cancellation/execute races, duplicate execution, and stale-run recovery.
 - Planning rejects common instruction-override and authorization-self-grant
   attempts as control paths, preventing those requests from selecting or
   authorizing capabilities.

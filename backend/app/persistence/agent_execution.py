@@ -25,6 +25,23 @@ def _stamp(value: datetime | None = None) -> str:
     return (value or _now()).isoformat()
 
 
+def _authoritative_now(database, connection) -> datetime:
+    if getattr(database, "dialect", "sqlite") == "postgresql":
+        row = connection.execute(
+            "SELECT CURRENT_TIMESTAMP AS current_time"
+        ).fetchone()
+        value = row["current_time"]
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc)
+        parsed = datetime.fromisoformat(str(value))
+        return (
+            parsed.astimezone(timezone.utc)
+            if parsed.tzinfo is not None
+            else parsed.replace(tzinfo=timezone.utc)
+        )
+    return _now()
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"), allow_nan=False)
@@ -88,7 +105,11 @@ class AgentExecutionRepository:
             raise PermissionError("Agent is not active")
         if task["status"] not in {"assigned", "in_progress"}:
             raise PermissionError("Task is not executable")
-        if datetime.fromisoformat(task["expires_at"]) <= _now():
+        authority_now = _authoritative_now(
+            self.database,
+            self.database.connect(),
+        )
+        if datetime.fromisoformat(task["expires_at"]) <= authority_now:
             raise PermissionError("Task has expired")
         return task
 
@@ -320,6 +341,7 @@ class AgentExecutionRepository:
         if row is None:
             raise LookupError("Agent run not found")
         item = dict(row)
+        item.pop("execution_token", None)
         item["actions"] = json.loads(item.pop("actions_json"))
         item["steps"] = self.list_steps(user_id, run_id)
         return item
@@ -455,7 +477,11 @@ class AgentExecutionRepository:
                 raise ValueError("Only proposed runs can be authorized")
             self._authorize_or_execute_check(user_id, run)
             self._validate_integration_bindings(user_id, run, integrations, connections)
-            if datetime.fromisoformat(run["expires_at"]) <= _now():
+            authority_now = _authoritative_now(
+                self.database,
+                self.database.connect(),
+            )
+            if datetime.fromisoformat(run["expires_at"]) <= authority_now:
                 raise PermissionError("Run authorization has expired")
             now = _stamp()
             self._event(user_id, run_id, "authorized", {
@@ -470,13 +496,35 @@ class AgentExecutionRepository:
         return self.get_run(user_id, run_id)
 
     def _raw_run(self, user_id: str, run_id: str):
-        lock = (
-            " FOR UPDATE"
-            if getattr(self.database, "dialect", "sqlite") == "postgresql"
-            else ""
-        )
+        if getattr(self.database, "dialect", "sqlite") == "postgresql":
+            connection = self.database.connect()
+            owner = connection.execute(
+                "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+                (user_id,),
+            ).fetchone()
+            if owner is None:
+                raise LookupError("Agent run not found")
+            run_identity = connection.execute(
+                "SELECT agent_id,task_id FROM agent_runs WHERE id=? AND user_id=?",
+                (run_id, user_id),
+            ).fetchone()
+            if run_identity is None:
+                raise LookupError("Agent run not found")
+            connection.execute(
+                "SELECT id FROM agents WHERE id=? AND user_id=? FOR UPDATE",
+                (run_identity["agent_id"], user_id),
+            ).fetchone()
+            connection.execute(
+                "SELECT id FROM agent_tasks WHERE id=? AND user_id=? AND agent_id=? FOR UPDATE",
+                (run_identity["task_id"], user_id, run_identity["agent_id"]),
+            ).fetchone()
         row = self.database.connect().execute(
-            "SELECT * FROM agent_runs WHERE id=? AND user_id=?" + lock,
+            "SELECT * FROM agent_runs WHERE id=? AND user_id=?"
+            + (
+                " FOR UPDATE"
+                if getattr(self.database, "dialect", "sqlite") == "postgresql"
+                else ""
+            ),
             (run_id, user_id),
         ).fetchone()
         if row is None:
@@ -484,7 +532,15 @@ class AgentExecutionRepository:
         return dict(row)
 
     def execute_run(self, user_id: str, run_id: str,
-                    gateway: ToolExecutionGateway, registry: ToolRegistry) -> dict:
+                    gateway: ToolExecutionGateway, registry: ToolRegistry,
+                    *,
+                    executor_id: str | None = None,
+                    execution_lease_seconds: int = 300) -> dict:
+        if executor_id is not None:
+            if not isinstance(executor_id, str) or not 1 <= len(executor_id.strip()) <= 100:
+                raise ValueError("Executor ID must contain 1 to 100 characters")
+        if not isinstance(execution_lease_seconds, int) or not 30 <= execution_lease_seconds <= 3600:
+            raise ValueError("Execution lease seconds must be between 30 and 3600")
         with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
             if run["status"] != "authorized":
@@ -499,18 +555,39 @@ class AgentExecutionRepository:
                     "Integration runs require the dedicated asynchronous orchestrator"
                 )
             self._authorize_or_execute_check(user_id, run)
-            if datetime.fromisoformat(run["expires_at"]) <= _now():
+            authority_now = _authoritative_now(
+                self.database,
+                self.database.connect(),
+            )
+            if datetime.fromisoformat(run["expires_at"]) <= authority_now:
                 raise PermissionError("Run has expired")
-            now = _stamp()
+            connection = self.database.connect()
+            authority_now = _authoritative_now(self.database, connection)
+            now = _stamp(authority_now)
+            execution_generation = int(run.get("execution_generation") or 0) + 1
+            execution_token = str(uuid.uuid4())
+            executor = executor_id.strip() if executor_id is not None else "agent-executor"
+            lease_expires_at = _stamp(
+                authority_now + timedelta(seconds=execution_lease_seconds)
+            )
             self._event(user_id, run_id, "started", {
                 "from_status": "authorized", "to_status": "running",
                 "plan_digest": run["plan_digest"],
+                "executor_id": executor,
+                "execution_generation": execution_generation,
             })
-            self.database.connect().execute(
-                """UPDATE agent_runs SET status='running',started_at=?,updated_at=?
+            cursor = self.database.connect().execute(
+                """UPDATE agent_runs SET status='running',started_at=?,updated_at=?,
+                   executor_id=?,execution_token=?,execution_generation=?,
+                   execution_lease_expires_at=?
                    WHERE id=? AND user_id=? AND status='authorized'""",
-                (now, now, run_id, user_id),
+                (
+                    now, now, executor, execution_token, execution_generation,
+                    lease_expires_at, run_id, user_id,
+                ),
             )
+            if cursor.rowcount != 1:
+                raise ValueError("Run execution start conflicted with another worker")
 
         failed = False
         for step in self.list_steps(user_id, run_id):
@@ -523,6 +600,8 @@ class AgentExecutionRepository:
                     run = self._raw_run(user_id, run_id)
                     if run["status"] != "running":
                         raise PermissionError("Agent run is no longer running")
+                    if run["execution_token"] != execution_token:
+                        raise PermissionError("Run execution generation is no longer current")
                     self._authorize_or_execute_check(user_id, run)
                     current = registry.get(step["tool_id"])
                     if (
@@ -553,6 +632,9 @@ class AgentExecutionRepository:
                     raise PermissionError("Tool contract changed while creating the tool request")
                 result = gateway.execute(proposal, user_id=user_id)
                 with _write_transaction(self.database):
+                    fenced_run = self._raw_run(user_id, run_id)
+                    if fenced_run["execution_token"] != execution_token:
+                        raise PermissionError("Run execution changed before result commit")
                     self._event(user_id, run_id, "step_completed", {
                         "step_id": step["id"], "ordinal": step["ordinal"],
                         "tool_id": step["tool_id"], "tool_request_id": proposal["id"],
@@ -577,6 +659,9 @@ class AgentExecutionRepository:
                     else "read_only_execution_failed"
                 )
                 with _write_transaction(self.database):
+                    fenced_run = self._raw_run(user_id, run_id)
+                    if fenced_run["execution_token"] != execution_token:
+                        break
                     current_step = self.database.connect().execute(
                         "SELECT status FROM agent_run_steps WHERE id=? AND user_id=?",
                         (step["id"], user_id),
@@ -595,17 +680,23 @@ class AgentExecutionRepository:
 
         with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
+            if run["execution_token"] != execution_token:
+                raise PermissionError("Run execution generation is no longer current")
             target = "failed" if failed else "completed"
             now = _stamp()
             self._event(user_id, run_id, target, {
                 "from_status": "running", "to_status": target,
                 "automatic_retry": False,
+                "execution_generation": run["execution_generation"],
             })
-            self.database.connect().execute(
+            cursor = self.database.connect().execute(
                 """UPDATE agent_runs SET status=?,finished_at=?,updated_at=?
-                   WHERE id=? AND user_id=? AND status='running'""",
-                (target, now, now, run_id, user_id),
+                   WHERE id=? AND user_id=? AND status='running'
+                     AND execution_token=?""",
+                (target, now, now, run_id, user_id, execution_token),
             )
+            if cursor.rowcount != 1:
+                raise PermissionError("Run execution changed before completion")
             if failed:
                 pending_steps = self.database.connect().execute(
                     """SELECT id,ordinal FROM agent_run_steps
@@ -629,8 +720,8 @@ class AgentExecutionRepository:
     def cancel_run(self, user_id: str, run_id: str) -> dict:
         with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
-            if run["status"] not in {"proposed", "authorized", "running"}:
-                raise ValueError("Only active uncompleted runs can be cancelled")
+            if run["status"] not in {"proposed", "authorized"}:
+                raise ValueError("Only proposed or authorized runs can be cancelled")
             now = _stamp()
             self._event(user_id, run_id, "cancelled", {
                 "from_status": run["status"], "to_status": "cancelled",

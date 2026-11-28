@@ -31,6 +31,23 @@ def _stamp(value: datetime | None = None) -> str:
     return (value or _now()).isoformat()
 
 
+def _authoritative_now(database, connection) -> datetime:
+    if getattr(database, "dialect", "sqlite") == "postgresql":
+        row = connection.execute(
+            "SELECT CURRENT_TIMESTAMP AS current_time"
+        ).fetchone()
+        value = row["current_time"]
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc)
+        parsed = datetime.fromisoformat(str(value))
+        return (
+            parsed.astimezone(timezone.utc)
+            if parsed.tzinfo is not None
+            else parsed.replace(tzinfo=timezone.utc)
+        )
+    return _now()
+
+
 def _write_transaction(database):
     dialect = getattr(database, "dialect", "sqlite")
     if dialect not in {"sqlite", "postgresql"}:
@@ -254,6 +271,7 @@ class AgentControlRepository:
         }
         with _write_transaction(self.database):
             task = self.get_task(user_id, task_id)
+            authority_now = _authoritative_now(self.database, self.database.connect())
             if worker_id is not None or lease_token is not None:
                 if not isinstance(worker_id, str) or not worker_id.strip():
                     raise PermissionError("Worker identity is required")
@@ -281,8 +299,8 @@ class AgentControlRepository:
                     raise PermissionError("Worker lease is no longer current")
                 if (
                     fenced["lease_expires_at"] is None
-                    or datetime.fromisoformat(fenced["lease_expires_at"]) <= _now()
-                    or datetime.fromisoformat(fenced["expires_at"]) <= _now()
+                    or datetime.fromisoformat(fenced["lease_expires_at"]) <= authority_now
+                    or datetime.fromisoformat(fenced["expires_at"]) <= authority_now
                 ):
                     raise PermissionError("Worker lease or task deadline has expired")
             current = task["status"]
@@ -335,6 +353,7 @@ class AgentControlRepository:
             raise RuntimeError("Unsupported persistence dialect")
         with self.database.transaction(immediate=dialect == "sqlite"):
             connection = self.database.connect()
+            authority_now = _authoritative_now(self.database, connection)
             if dialect == "postgresql":
                 owner = connection.execute(
                     "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
@@ -369,12 +388,12 @@ class AgentControlRepository:
             if task_row is None:
                 raise LookupError("Task not found")
             expiry = datetime.fromisoformat(task_row["expires_at"])
-            if expiry <= _now():
+            if expiry <= authority_now:
                 raise ValueError("Task has expired")
             if task_row["status"] == "in_progress":
                 if (
                     task_row["lease_expires_at"] is None
-                    or datetime.fromisoformat(task_row["lease_expires_at"]) > _now()
+                    or datetime.fromisoformat(task_row["lease_expires_at"]) > authority_now
                 ):
                     raise ValueError("Task lease is still held")
                 takeover_details = {
@@ -412,7 +431,7 @@ class AgentControlRepository:
             lease_token = str(uuid.uuid4())
             lease_generation = int(task_row["lease_generation"] or 0) + 1
             lease_expires_at = _stamp(
-                _now() + timedelta(seconds=lease_seconds)
+                authority_now + timedelta(seconds=lease_seconds)
             )
             details = {
                 "from_status": "assigned",
@@ -464,6 +483,7 @@ class AgentControlRepository:
 
         with _write_transaction(self.database):
             connection = self.database.connect()
+            authority_now = _authoritative_now(self.database, connection)
             lock = (
                 " FOR UPDATE"
                 if getattr(self.database, "dialect", "sqlite") == "postgresql"
@@ -493,17 +513,17 @@ class AgentControlRepository:
                 raise PermissionError("Worker does not own this task claim")
             if task_row["lease_token"] != lease_token.strip():
                 raise PermissionError("Lease generation is no longer current")
-            if datetime.fromisoformat(task_row["expires_at"]) <= _now():
+            if datetime.fromisoformat(task_row["expires_at"]) <= authority_now:
                 raise ValueError("Task has expired")
             if (
                 task_row["lease_expires_at"] is not None
-                and datetime.fromisoformat(task_row["lease_expires_at"]) <= _now()
+                and datetime.fromisoformat(task_row["lease_expires_at"]) <= authority_now
             ):
                 raise PermissionError("Task lease has expired")
 
-            now = _stamp()
+            now = _stamp(authority_now)
             lease_expires_at = _stamp(
-                _now() + timedelta(seconds=lease_seconds)
+                authority_now + timedelta(seconds=lease_seconds)
             )
             cursor = connection.execute(
                 """UPDATE agent_tasks SET heartbeat_at=?,lease_expires_at=?,updated_at=?
@@ -521,7 +541,9 @@ class AgentControlRepository:
 
     def reconcile_stale_task_claims(self, user_id: str | None = None) -> int:
         """Requeue claims whose worker lease expired; never execute again automatically."""
-        now = _stamp()
+        connection = self.database.connect()
+        authority_now = _authoritative_now(self.database, connection)
+        now = _stamp(authority_now)
         sql = """SELECT id,user_id,agent_id FROM agent_tasks
                  WHERE status='in_progress' AND lease_expires_at IS NOT NULL
                    AND lease_expires_at <= ?"""
@@ -535,6 +557,16 @@ class AgentControlRepository:
             try:
                 with _write_transaction(self.database):
                     connection = self.database.connect()
+                    authority_now = _authoritative_now(self.database, connection)
+                    if getattr(self.database, "dialect", "sqlite") == "postgresql":
+                        connection.execute(
+                            "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+                            (row["user_id"],),
+                        ).fetchone()
+                        connection.execute(
+                            "SELECT id,status FROM agents WHERE id=? AND user_id=? FOR UPDATE",
+                            (row["agent_id"], row["user_id"]),
+                        ).fetchone()
                     lock = (
                         " FOR UPDATE"
                         if getattr(self.database, "dialect", "sqlite") == "postgresql"
@@ -551,7 +583,7 @@ class AgentControlRepository:
                         task_row is None
                         or task_row["status"] != "in_progress"
                         or task_row["lease_expires_at"] is None
-                        or datetime.fromisoformat(task_row["lease_expires_at"]) > _now()
+                        or datetime.fromisoformat(task_row["lease_expires_at"]) > authority_now
                     ):
                         continue
                     details = {

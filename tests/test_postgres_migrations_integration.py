@@ -13,8 +13,8 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
+    assert runner.migrate() == 39
 
     user_id = str(uuid.uuid4())
     deleted_user_id = str(uuid.uuid4())
@@ -295,6 +295,7 @@ def test_real_postgres_identity_and_authorization_migrations_are_idempotent():
             (36, "security_notification_operations_and_recovery_abuse_windows"),
             (37, "agent_task_worker_leases"),
             (38, "agent_task_lease_fencing"),
+            (39, "agent_run_execution_fencing"),
         ]
 
 
@@ -306,7 +307,7 @@ def test_real_postgres_external_evidence_and_operator_audit_are_immutable():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
 
     suffix = str(uuid.uuid4())
     runner_public_key = uuid.uuid4().bytes + uuid.uuid4().bytes
@@ -450,7 +451,7 @@ def test_real_postgres_dispatch_recovery_lookup_and_reconciliation_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
 
     suffix = str(uuid.uuid4())
     user_id = "dispatch-owner-" + suffix
@@ -650,7 +651,7 @@ def test_real_postgres_memory_consent_and_learning_history_guards():
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
 
     suffix = str(uuid.uuid4())
     user_id = "memory-learning-owner-" + suffix
@@ -860,7 +861,7 @@ def test_real_postgres_agent_lifecycle_capability_and_run_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 38
+    assert PostgresMigrationRunner(database_url).migrate() == 39
     suffix = str(uuid.uuid4())
     owner = "agent-owner-" + suffix
     other = "agent-other-" + suffix
@@ -1071,7 +1072,7 @@ def test_real_postgres_integration_connection_vault_and_agent_dispatch_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
 
     psycopg = pytest.importorskip("psycopg")
-    assert PostgresMigrationRunner(database_url).migrate() == 38
+    assert PostgresMigrationRunner(database_url).migrate() == 39
     suffix = str(uuid.uuid4())
     owner = "integration-owner-" + suffix
     other = "integration-other-" + suffix
@@ -1402,8 +1403,8 @@ def test_real_postgres_device_foundation_migrations_preserve_owner_and_challenge
 
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
+    assert runner.migrate() == 39
 
     owner = str(uuid.uuid4())
     email = f"postgres-device-{owner}@example.invalid"
@@ -1542,8 +1543,8 @@ def test_real_postgres_device_security_audit_lifecycle_and_session_guards():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
+    assert runner.migrate() == 39
     owner = str(uuid.uuid4())
     timestamp = "2026-01-01T00:00:00+00:00"
     future = "2027-01-01T00:00:00+00:00"
@@ -1644,8 +1645,8 @@ def test_real_postgres_session_audit_device_rotation_and_recovery_outbox():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
+    assert runner.migrate() == 39
     owner = str(uuid.uuid4())
     timestamp = "2026-01-01T00:00:00+00:00"
     future = "2027-01-01T00:00:00+00:00"
@@ -1785,8 +1786,8 @@ def test_real_postgres_notification_operations_and_recovery_abuse_windows():
         pytest.skip("set AIBRAIN_POSTGRES_TEST_URL for a dedicated PostgreSQL test database")
     psycopg = pytest.importorskip("psycopg")
     runner = PostgresMigrationRunner(database_url)
-    assert runner.migrate() == 38
-    assert runner.migrate() == 38
+    assert runner.migrate() == 39
+    assert runner.migrate() == 39
 
     owner = str(uuid.uuid4())
     timestamp = "2026-01-01T00:00:00+00:00"

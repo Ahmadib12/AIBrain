@@ -3197,6 +3197,19 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON agent_tasks(lease_token) WHERE lease_token IS NOT NULL;
         """,
     ),
+    PostgresMigration(
+        version=39,
+        name="agent_run_execution_fencing",
+        sql="""
+        ALTER TABLE agent_runs ADD COLUMN executor_id TEXT;
+        ALTER TABLE agent_runs ADD COLUMN execution_token TEXT;
+        ALTER TABLE agent_runs ADD COLUMN execution_generation INTEGER NOT NULL DEFAULT 0
+            CHECK (execution_generation >= 0);
+        ALTER TABLE agent_runs ADD COLUMN execution_lease_expires_at TEXT;
+        CREATE UNIQUE INDEX idx_agent_runs_live_execution_token
+            ON agent_runs(execution_token) WHERE execution_token IS NOT NULL;
+        """,
+    ),
 
 )
 

@@ -5,6 +5,8 @@ missing provider response is recorded as outcome_unknown and is never retried.
 """
 import asyncio
 import json
+import uuid
+from datetime import timedelta
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,8 +16,8 @@ from backend.app.tools.integration_runtime import ReadOnlyIntegrationRuntime
 from backend.app.tools.validation import validate_tool_arguments
 
 
-def _stamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _stamp(value: datetime | None = None) -> str:
+    return (value or datetime.now(timezone.utc)).isoformat()
 
 
 def _write_transaction(database):
@@ -80,7 +82,14 @@ class IntegrationAgentRunOrchestrator:
             raise PermissionError("Integration connection or scopes are no longer active")
         return binding
 
-    async def execute_run(self, user_id: str, run_id: str) -> dict:
+    async def execute_run(
+        self,
+        user_id: str,
+        run_id: str,
+        *,
+        executor_id: str | None = None,
+        execution_lease_seconds: int = 300,
+    ) -> dict:
         """Execute a single integration run; duplicate/concurrent starts fail closed."""
         with _write_transaction(self.execution.database):
             run = self.execution._raw_run(user_id, run_id)
@@ -102,18 +111,44 @@ class IntegrationAgentRunOrchestrator:
             self.execution._validate_integration_bindings(
                 user_id, run, self.runtime.manifests, self.runtime.connections
             )
-            if datetime.fromisoformat(run["expires_at"]) <= datetime.now(timezone.utc):
+            authority_row = self.execution.database.connect().execute(
+                "SELECT CURRENT_TIMESTAMP AS current_time"
+            ).fetchone()
+            authority_value = authority_row["current_time"]
+            authority_now = (
+                authority_value.astimezone(timezone.utc)
+                if isinstance(authority_value, datetime)
+                else datetime.fromisoformat(str(authority_value)).replace(tzinfo=timezone.utc)
+            )
+            if datetime.fromisoformat(run["expires_at"]) <= authority_now:
                 raise PermissionError("Integration run has expired")
-            now = _stamp()
+            now = _stamp(authority_now)
+            execution_generation = int(run.get("execution_generation") or 0) + 1
+            execution_token = str(uuid.uuid4())
+            executor = (
+                executor_id.strip()
+                if isinstance(executor_id, str) and executor_id.strip()
+                else "integration-orchestrator"
+            )
             self.execution._event(user_id, run_id, "started", {
                 "from_status": "authorized", "to_status": "running",
                 "plan_digest": run["plan_digest"], "integration_bound": True,
+                "executor_id": executor,
+                "execution_generation": execution_generation,
             })
-            self.execution.database.connect().execute(
-                """UPDATE agent_runs SET status='running',started_at=?,updated_at=?
+            cursor = self.execution.database.connect().execute(
+                """UPDATE agent_runs SET status='running',started_at=?,updated_at=?,
+                   executor_id=?,execution_token=?,execution_generation=?,
+                   execution_lease_expires_at=?
                    WHERE id=? AND user_id=? AND status='authorized'""",
-                (now, now, run_id, user_id),
+                (
+                    now, now, executor, execution_token, execution_generation,
+                    (authority_now + timedelta(seconds=execution_lease_seconds)).isoformat(),
+                    run_id, user_id,
+                ),
             )
+            if cursor.rowcount != 1:
+                raise ValueError("Run execution start conflicted with another worker")
 
         failed = False
         for step in self.execution.list_steps(user_id, run_id):
@@ -126,6 +161,8 @@ class IntegrationAgentRunOrchestrator:
                     run = self.execution._raw_run(user_id, run_id)
                     if run["status"] != "running":
                         raise PermissionError("Integration run is no longer running")
+                    if run["execution_token"] != execution_token:
+                        raise PermissionError("Run execution generation is no longer current")
                     if step["status"] != "pending":
                         raise ValueError("Integration step is not pending")
                     binding = self._validate_step(user_id, run, step)
@@ -191,23 +228,33 @@ class IntegrationAgentRunOrchestrator:
                     )
             except asyncio.CancelledError:
                 if dispatch_started:
-                    self._record_unknown(user_id, run_id, step, "INTEGRATION_CANCELLED")
+                    self._record_unknown(user_id, run_id, step, "INTEGRATION_CANCELLED", execution_token)
                 else:
-                    self._record_pre_dispatch_failure(user_id, run_id, step)
+                    self._record_pre_dispatch_failure(user_id, run_id, step, execution_token)
                 self._finish_run(user_id, run_id, failed=True)
                 raise
             except Exception:
                 failed = True
                 if dispatch_started:
-                    self._record_unknown(user_id, run_id, step, "INTEGRATION_OUTCOME_UNKNOWN")
+                    self._record_unknown(user_id, run_id, step, "INTEGRATION_OUTCOME_UNKNOWN", execution_token)
                 else:
-                    self._record_pre_dispatch_failure(user_id, run_id, step)
+                    self._record_pre_dispatch_failure(user_id, run_id, step, execution_token)
                 break
 
-        return self._finish_run(user_id, run_id, failed=failed)
+        return self._finish_run(user_id, run_id, failed=failed, execution_token=execution_token)
 
-    def _record_unknown(self, user_id: str, run_id: str, step: dict, code: str) -> None:
+    def _record_unknown(
+        self,
+        user_id: str,
+        run_id: str,
+        step: dict,
+        code: str,
+        execution_token: str,
+    ) -> None:
         with _write_transaction(self.execution.database):
+            run = self.execution._raw_run(user_id, run_id)
+            if run["execution_token"] != execution_token:
+                return
             now = _stamp()
             self.execution._event(user_id, run_id, "integration_dispatch_outcome_unknown", {
                 "step_id": step["id"], "error_code": code, "automatic_retry": False,
@@ -228,8 +275,17 @@ class IntegrationAgentRunOrchestrator:
                 (code, now, step["id"], user_id),
             )
 
-    def _record_pre_dispatch_failure(self, user_id: str, run_id: str, step: dict) -> None:
+    def _record_pre_dispatch_failure(
+        self,
+        user_id: str,
+        run_id: str,
+        step: dict,
+        execution_token: str,
+    ) -> None:
         with _write_transaction(self.execution.database):
+            run = self.execution._raw_run(user_id, run_id)
+            if run["execution_token"] != execution_token:
+                return
             current = self.execution.database.connect().execute(
                 "SELECT status FROM agent_run_steps WHERE id=? AND user_id=?",
                 (step["id"], user_id),
@@ -347,10 +403,20 @@ class IntegrationAgentRunOrchestrator:
                 recovered += 1
         return recovered
 
-    def _finish_run(self, user_id: str, run_id: str, *, failed: bool) -> dict:
+    def _finish_run(
+        self,
+        user_id: str,
+        run_id: str,
+        *,
+        failed: bool,
+        execution_token: str,
+    ) -> dict:
         with _write_transaction(self.execution.database):
             run = self.execution._raw_run(user_id, run_id)
-            if run["status"] != "running":
+            if (
+                run["status"] != "running"
+                or run["execution_token"] != execution_token
+            ):
                 return self.execution.get_run(user_id, run_id)
             target = "failed" if failed else "completed"
             now = _stamp()
@@ -358,11 +424,14 @@ class IntegrationAgentRunOrchestrator:
                 "from_status": "running", "to_status": target,
                 "automatic_retry": False, "integration_bound": True,
             })
-            self.execution.database.connect().execute(
+            cursor = self.execution.database.connect().execute(
                 """UPDATE agent_runs SET status=?,finished_at=?,updated_at=?
-                   WHERE id=? AND user_id=? AND status='running'""",
-                (target, now, now, run_id, user_id),
+                   WHERE id=? AND user_id=? AND status='running'
+                     AND execution_token=?""",
+                (target, now, now, run_id, user_id, execution_token),
             )
+            if cursor.rowcount != 1:
+                raise PermissionError("Run execution changed before completion")
             if failed:
                 pending = self.execution.database.connect().execute(
                     """SELECT id,ordinal FROM agent_run_steps

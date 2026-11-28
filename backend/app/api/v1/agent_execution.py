@@ -37,6 +37,12 @@ class AgentRunCreateRequest(BaseModel):
     actions: list[AgentRunActionRequest] = Field(min_length=1, max_length=10)
 
 
+class AgentRunExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    executor_id: str | None = Field(default=None, min_length=1, max_length=100)
+    execution_lease_seconds: int = Field(default=300, ge=30, le=3600)
+
+
 class PlanActionMappingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_task_id: str = Field(min_length=1, max_length=64)
@@ -199,15 +205,26 @@ async def authorize_agent_run(run_id: str, user: dict = Depends(get_current_user
 
 
 @router.post("/agent-runs/{run_id}/execute")
-async def execute_agent_run(run_id: str, user: dict = Depends(get_current_user)):
+async def execute_agent_run(
+    run_id: str,
+    request: AgentRunExecuteRequest | None = None,
+    user: dict = Depends(get_current_user),
+):
     try:
         state = get_app_state()
         run = state.agent_execution.get_run(user["id"], run_id)
         if any("integration_binding" in action for action in run["actions"]):
-            return await state.integration_orchestrator.execute_run(user["id"], run_id)
+            return await state.integration_orchestrator.execute_run(
+                user["id"],
+                run_id,
+                executor_id=request.executor_id if request is not None else None,
+                execution_lease_seconds=request.execution_lease_seconds if request is not None else 300,
+            )
         registry, gateway = _runtime()
         return state.agent_execution.execute_run(
-            user["id"], run_id, gateway, registry
+            user["id"], run_id, gateway, registry,
+            executor_id=request.executor_id if request is not None else None,
+            execution_lease_seconds=request.execution_lease_seconds if request is not None else 300,
         )
     except LookupError:
         _error(404, "AGENT_RUN_OR_TOOL_NOT_FOUND", "Agent run or tool not found")
@@ -226,7 +243,7 @@ async def cancel_agent_run(run_id: str, user: dict = Depends(get_current_user)):
     except LookupError:
         _error(404, "AGENT_RUN_NOT_FOUND", "Agent run not found")
     except ValueError:
-        _error(409, "AGENT_RUN_NOT_CANCELLABLE", "Only active uncompleted runs can be cancelled")
+        _error(409, "AGENT_RUN_NOT_CANCELLABLE", "Only proposed or authorized runs can be cancelled")
     except sqlite3.IntegrityError:
         _error(409, "AGENT_RUN_CONFLICT", "Run cancellation conflicted with persisted state")
 
