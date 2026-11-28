@@ -18,6 +18,13 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_transaction(database):
+    dialect = getattr(database, "dialect", "sqlite")
+    if dialect not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Unsupported persistence dialect")
+    return database.transaction(immediate=dialect == "sqlite")
+
+
 class IntegrationAgentRunOrchestrator:
     """Execute only fully bound, explicitly authorized integration runs."""
 
@@ -75,7 +82,7 @@ class IntegrationAgentRunOrchestrator:
 
     async def execute_run(self, user_id: str, run_id: str) -> dict:
         """Execute a single integration run; duplicate/concurrent starts fail closed."""
-        with self.execution.database.transaction(immediate=True):
+        with _write_transaction(self.execution.database):
             run = self.execution._raw_run(user_id, run_id)
             if run["status"] != "authorized":
                 raise ValueError("Integration run requires explicit owner authorization")
@@ -115,7 +122,7 @@ class IntegrationAgentRunOrchestrator:
                 # Revalidate the owner, agent, task, manifest, contract, adapter,
                 # and exact scopes inside the same write-locked transaction that
                 # commits the durable dispatch-start boundary.
-                with self.execution.database.transaction(immediate=True):
+                with _write_transaction(self.execution.database):
                     run = self.execution._raw_run(user_id, run_id)
                     if run["status"] != "running":
                         raise PermissionError("Integration run is no longer running")
@@ -161,7 +168,7 @@ class IntegrationAgentRunOrchestrator:
                     result, ensure_ascii=False, sort_keys=True,
                     separators=(",", ":"), allow_nan=False,
                 )
-                with self.execution.database.transaction(immediate=True):
+                with _write_transaction(self.execution.database):
                     now = _stamp()
                     self.execution._event(user_id, run_id, "integration_dispatch_succeeded", {
                         "step_id": step["id"], "integration_id": binding["integration_id"],
@@ -200,7 +207,7 @@ class IntegrationAgentRunOrchestrator:
         return self._finish_run(user_id, run_id, failed=failed)
 
     def _record_unknown(self, user_id: str, run_id: str, step: dict, code: str) -> None:
-        with self.execution.database.transaction(immediate=True):
+        with _write_transaction(self.execution.database):
             now = _stamp()
             self.execution._event(user_id, run_id, "integration_dispatch_outcome_unknown", {
                 "step_id": step["id"], "error_code": code, "automatic_retry": False,
@@ -222,7 +229,7 @@ class IntegrationAgentRunOrchestrator:
             )
 
     def _record_pre_dispatch_failure(self, user_id: str, run_id: str, step: dict) -> None:
-        with self.execution.database.transaction(immediate=True):
+        with _write_transaction(self.execution.database):
             current = self.execution.database.connect().execute(
                 "SELECT status FROM agent_run_steps WHERE id=? AND user_id=?",
                 (step["id"], user_id),
@@ -258,7 +265,7 @@ class IntegrationAgentRunOrchestrator:
             user_id = candidate["user_id"]
             run_id = candidate["run_id"]
             step_id = candidate["step_id"]
-            with self.execution.database.transaction(immediate=True):
+            with _write_transaction(self.execution.database):
                 dispatch = self.execution.database.connect().execute(
                     """SELECT status,dispatch_started_at FROM agent_run_integration_dispatches
                        WHERE step_id=? AND user_id=? AND run_id=?""",
@@ -341,7 +348,7 @@ class IntegrationAgentRunOrchestrator:
         return recovered
 
     def _finish_run(self, user_id: str, run_id: str, *, failed: bool) -> dict:
-        with self.execution.database.transaction(immediate=True):
+        with _write_transaction(self.execution.database):
             run = self.execution._raw_run(user_id, run_id)
             if run["status"] != "running":
                 return self.execution.get_run(user_id, run_id)

@@ -30,6 +30,13 @@ def _stamp(value: datetime | None = None) -> str:
     return (value or _now()).isoformat()
 
 
+def _write_transaction(database):
+    dialect = getattr(database, "dialect", "sqlite")
+    if dialect not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Unsupported persistence dialect")
+    return database.transaction(immediate=dialect == "sqlite")
+
+
 def _json(value: Any) -> str:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True,
@@ -84,7 +91,7 @@ class AgentControlRepository:
             except (TypeError, ValueError):
                 raise ValueError("Expiry must be a future timezone-aware ISO timestamp") from None
         grant_id = str(uuid.uuid4())
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             self._agent(user_id, agent_id, active=True)
             connection = self.database.connect()
             connection.execute(
@@ -127,7 +134,7 @@ class AgentControlRepository:
         if not isinstance(reason, str) or len(reason) > 500:
             raise ValueError("Revocation reason is too long")
         validate_personal_payload(reason)
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             grant = self.get_grant(user_id, agent_id, grant_id)
             if grant["revoked"]:
                 raise ValueError("Grant already revoked")
@@ -174,7 +181,7 @@ class AgentControlRepository:
         except (TypeError, ValueError):
             raise ValueError("Task expiry must be a future timezone-aware ISO timestamp") from None
         task_id = str(uuid.uuid4())
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             self._agent(user_id, agent_id, active=True)
             allowed = self._effective_capabilities(user_id, agent_id, _stamp(now))
             if not set(capability_ceiling).issubset(allowed):
@@ -242,7 +249,7 @@ class AgentControlRepository:
             "assigned": {"in_progress", "completed", "failed", "cancelled"},
             "in_progress": {"completed", "failed", "cancelled"},
         }
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             task = self.get_task(user_id, task_id)
             current = task["status"]
             if target not in transitions.get(current, set()):
@@ -257,6 +264,80 @@ class AgentControlRepository:
                 (target, now, task_id, user_id),
             )
             self._event(user_id, task["agent_id"], "task."+target, task_id, details)
+        return self.get_task(user_id, task_id)
+
+    def claim_task(
+        self,
+        user_id: str,
+        agent_id: str,
+        task_id: str,
+        *,
+        worker_id: str,
+    ) -> dict:
+        """Atomically claim an assigned task for one active worker."""
+        if not isinstance(worker_id, str) or not 1 <= len(worker_id.strip()) <= 100:
+            raise ValueError("Worker ID must contain 1 to 100 characters")
+        validate_personal_payload(worker_id.strip())
+
+        dialect = getattr(self.database, "dialect", "sqlite")
+        if dialect not in {"sqlite", "postgresql"}:
+            raise RuntimeError("Unsupported persistence dialect")
+        with self.database.transaction(immediate=dialect == "sqlite"):
+            connection = self.database.connect()
+            if dialect == "postgresql":
+                owner = connection.execute(
+                    "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+                    (user_id,),
+                ).fetchone()
+                if owner is None:
+                    raise LookupError("Owner account not found")
+                agent = connection.execute(
+                    "SELECT id FROM agents WHERE id=? AND user_id=? FOR UPDATE",
+                    (agent_id, user_id),
+                ).fetchone()
+                if agent is None:
+                    raise LookupError("Agent not found")
+                task_row = connection.execute(
+                    """SELECT id,status,expires_at FROM agent_tasks
+                       WHERE id=? AND user_id=? AND agent_id=? FOR UPDATE""",
+                    (task_id, user_id, agent_id),
+                ).fetchone()
+            else:
+                self._agent(user_id, agent_id, active=True)
+                task_row = connection.execute(
+                    """SELECT id,status,expires_at FROM agent_tasks
+                       WHERE id=? AND user_id=? AND agent_id=?""",
+                    (task_id, user_id, agent_id),
+                ).fetchone()
+            if task_row is None:
+                raise LookupError("Task not found")
+            if task_row["status"] != "assigned":
+                raise ValueError("Task is no longer available to claim")
+            expiry = datetime.fromisoformat(task_row["expires_at"])
+            if expiry <= _now():
+                raise ValueError("Task has expired")
+
+            now = _stamp()
+            details = {
+                "from_status": "assigned",
+                "to_status": "in_progress",
+                "worker_id": worker_id.strip(),
+            }
+            self._task_event(user_id, task_id, "in_progress", details)
+            cursor = connection.execute(
+                """UPDATE agent_tasks SET status='in_progress',updated_at=?
+                   WHERE id=? AND user_id=? AND agent_id=? AND status='assigned'""",
+                (now, task_id, user_id, agent_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Task claim conflicted with another worker")
+            self._event(
+                user_id,
+                agent_id,
+                "task.claimed",
+                task_id,
+                details,
+            )
         return self.get_task(user_id, task_id)
 
     def reconcile_expired_tasks(self, user_id: str | None = None) -> int:
@@ -278,7 +359,7 @@ class AgentControlRepository:
         return changed
 
     def _expire_task(self, user_id: str, task_id: str) -> None:
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             task = self.get_task(user_id, task_id)
             if task["status"] not in {"assigned", "in_progress"}:
                 raise ValueError("Task is no longer expirable")
@@ -298,7 +379,7 @@ class AgentControlRepository:
             raise ValueError("Message payload must be an object")
         validate_personal_payload(payload)
         message_id = str(uuid.uuid4())
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             self._agent(user_id, sender_agent_id, active=True)
             self._agent(user_id, recipient_agent_id, active=True)
             if task_id is not None:

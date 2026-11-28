@@ -32,6 +32,12 @@ This document distinguishes implemented foundations from external integrations t
 ## Implemented
 
 - SQLite migrations and versioned persistence.
+- Owner-scoped agent task claiming is atomic across competing workers. Claims
+  transition an assigned task to `in_progress`, preserve the worker identity
+  in immutable task/control history, and reject already claimed or expired tasks.
+- Planning rejects common instruction-override and authorization-self-grant
+  attempts as control paths, preventing those requests from selecting or
+  authorizing capabilities.
 - PBKDF2-SHA256 password hashes and bearer sessions.
 - User registration, login, logout, account deletion, and protected personal APIs.
 - User-owned memory with a versioned consent ledger, database-enforced consent gates,
@@ -111,5 +117,10 @@ The following require user-supplied credentials or unavailable infrastructure:
 - Login attempts have a configurable process-local rate limit.
 - Process-local rate limits and in-memory health/session state are not production
   distributed protections.
+- PostgreSQL remains opt-in and not selected by AppState. The adapter now
+  rejects SQLite `BEGIN IMMEDIATE` composition and agent control/execution paths
+  use normal PostgreSQL transactions outside SQLite; row-locking and
+  `SKIP LOCKED` patterns remain repository-specific. Dedicated PostgreSQL
+  acceptance infrastructure is required before composition is enabled.
 - SSE cancellation propagates `CancelledError`; no personal state is added to the
   existing public SSE response contract.

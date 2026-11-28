@@ -159,6 +159,47 @@ def test_revoked_grant_cannot_be_used_for_new_task(client):
     assert denied.status_code == 400
 
 
+def test_assigned_task_can_be_claimed_once_by_one_worker(client):
+    token = owner_token(client, "control-task-claim@example.com")
+    agent = create_active_agent(client, token, "Claim agent")
+    task = client.post(
+        f"/api/v1/agents/{agent['id']}/tasks",
+        headers=headers(token),
+        json={
+            "title": "Claimed task",
+            "goal": "Execute once",
+            "expires_at": expiry(),
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+
+    claimed = client.post(
+        f"/api/v1/agents/{agent['id']}/agent-tasks/{task_id}/claim",
+        headers=headers(token),
+        json={"worker_id": "worker-a"},
+    )
+    assert claimed.status_code == 200
+    assert claimed.json()["status"] == "in_progress"
+
+    conflict = client.post(
+        f"/api/v1/agents/{agent['id']}/agent-tasks/{task_id}/claim",
+        headers=headers(token),
+        json={"worker_id": "worker-b"},
+    )
+    assert conflict.status_code == 409
+    events = client.get(
+        f"/api/v1/agent-tasks/{task_id}/events",
+        headers=headers(token),
+    )
+    assert events.status_code == 200
+    assert [event["event_type"] for event in events.json()] == [
+        "assigned",
+        "in_progress",
+    ]
+    assert events.json()[-1]["details"]["worker_id"] == "worker-a"
+
+
 def test_task_lifecycle_and_owner_isolation(client):
     owner = owner_token(client, "control-task-owner@example.com")
     other = owner_token(client, "control-task-other@example.com")

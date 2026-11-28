@@ -13,6 +13,13 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_transaction(database):
+    dialect = getattr(database, "dialect", "sqlite")
+    if dialect not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Unsupported persistence dialect")
+    return database.transaction(immediate=dialect == "sqlite")
+
+
 class AgentRepository:
     """Owner-scoped persistence for registered agent identities.
 
@@ -59,10 +66,15 @@ class AgentRepository:
             separators=(",", ":"),
             allow_nan=False,
         )
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             connection = self.database.connect()
+            lock = (
+                " FOR UPDATE"
+                if getattr(self.database, "dialect", "sqlite") == "postgresql"
+                else ""
+            )
             owner = connection.execute(
-                "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL",
+                "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL" + lock,
                 (user_id,),
             ).fetchone()
             if owner is None:
@@ -184,13 +196,18 @@ class AgentRepository:
         }
         event_type = None
         now = _utc_now()
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             connection = self.database.connect()
+            lock = (
+                " FOR UPDATE"
+                if getattr(self.database, "dialect", "sqlite") == "postgresql"
+                else ""
+            )
             row = connection.execute(
                 """
                 SELECT status FROM agents
                 WHERE id = ? AND user_id = ?
-                """,
+                """ + lock,
                 (agent_id, user_id),
             ).fetchone()
             if row is None:

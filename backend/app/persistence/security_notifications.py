@@ -29,7 +29,7 @@ class SecurityNotificationOutbox:
         now_text = now.isoformat()
         stale_before = (now - timedelta(seconds=lease_seconds)).isoformat()
         claimed: list[dict] = []
-        dialect = getattr(self.database, "dialect", None)
+        dialect = getattr(self.database, "dialect", "sqlite")
         if dialect == "sqlite":
             transaction = self.database.transaction(immediate=True)
         elif dialect == "postgresql":

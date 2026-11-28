@@ -89,6 +89,23 @@ class PlanningEngine:
         TaskType.LANGUAGE_LOOKUP: "language_lookup",
         TaskType.PROVIDER_STATUS: "provider_status",
     }
+    _INJECTION_MARKERS = (
+        "ignore previous",
+        "disregard previous",
+        "override your instructions",
+        "reveal the system prompt",
+        "ignore all safety",
+        "bypass authorization",
+        "grant yourself",
+        "act as root",
+    )
+
+    @classmethod
+    def contains_untrusted_override(cls, text: str) -> bool:
+        if not isinstance(text, str):
+            return False
+        normalized = " ".join(text.lower().split())
+        return any(marker in normalized for marker in cls._INJECTION_MARKERS)
 
     def plan(
         self,
@@ -99,6 +116,7 @@ class PlanningEngine:
         conversation_history: Iterable[ContextTurn] = (),
     ) -> PlanningResult:
         normalized = text.strip().lower()
+        override_attempt = self.contains_untrusted_override(normalized)
         history = tuple(
             ContextTurn.model_validate(turn.model_dump())
             for turn in conversation_history
@@ -107,10 +125,14 @@ class PlanningEngine:
         is_follow_up = normalized.startswith(self._FOLLOW_UP_PREFIXES)
         context_available = bool(history)
         requires_clarification = is_follow_up and not history
-        kind = self._infer_kind(
-            normalized,
-            classification,
-            has_context=bool(history),
+        kind = (
+            IntentKind.CONTROL
+            if override_attempt
+            else self._infer_kind(
+                normalized,
+                classification,
+                has_context=bool(history),
+            )
         )
         intent = IntentContract(
             kind=kind,
@@ -143,10 +165,29 @@ class PlanningEngine:
                 "Do not treat a capability reference as authorization",
             ),
         )
-        tasks = self._decompose(
-            kind,
-            capability_id,
-            requires_clarification=requires_clarification,
+        tasks = (
+            (
+                PlannedTask(
+                    task_id="reject-instruction-override",
+                    kind=PlanTaskKind.REQUEST_INPUT,
+                    description=(
+                        "Reject the instruction override attempt and retain "
+                        "the user's explicit authorization boundary"
+                    ),
+                ),
+                PlannedTask(
+                    task_id="validate-authority",
+                    kind=PlanTaskKind.VALIDATE,
+                    description="Verify that no capability or permission was changed",
+                    depends_on=("reject-instruction-override",),
+                ),
+            )
+            if override_attempt
+            else self._decompose(
+                kind,
+                capability_id,
+                requires_clarification=requires_clarification,
+            )
         )
         plan = TaskPlanContract(
             goal=goal,

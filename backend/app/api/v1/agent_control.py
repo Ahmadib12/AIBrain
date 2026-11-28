@@ -43,6 +43,11 @@ class TaskTransitionRequest(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class TaskClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    worker_id: str = Field(min_length=1, max_length=100)
+
+
 class MessageCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     recipient_agent_id: str = Field(min_length=1, max_length=100)
@@ -148,6 +153,26 @@ async def transition_agent_task(
         _error(409, "INVALID_TASK_TRANSITION", "Task transition is not permitted")
     except sqlite3.IntegrityError:
         _error(409, "INVALID_TASK_TRANSITION", "Task transition is not permitted")
+
+
+@router.post("/agents/{agent_id}/agent-tasks/{task_id}/claim", status_code=200)
+async def claim_agent_task(
+    agent_id: str,
+    task_id: str,
+    request: TaskClaimRequest,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        return get_app_state().agent_control.claim_task(
+            user["id"],
+            agent_id,
+            task_id,
+            worker_id=request.worker_id,
+        )
+    except LookupError:
+        _error(404, "AGENT_OR_TASK_NOT_FOUND", "Agent or task not found")
+    except ValueError:
+        _error(409, "TASK_NOT_CLAIMABLE", "The task is unavailable or already claimed")
 
 
 @router.post("/agents/{agent_id}/messages", status_code=201)

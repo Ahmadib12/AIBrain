@@ -34,6 +34,13 @@ def _digest(actions: list[dict]) -> str:
     return hashlib.sha256(_canonical(actions).encode("utf-8")).hexdigest()
 
 
+def _write_transaction(database):
+    dialect = getattr(database, "dialect", "sqlite")
+    if dialect not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Unsupported persistence dialect")
+    return database.transaction(immediate=dialect == "sqlite")
+
+
 class AgentExecutionRepository:
     """Persist, authorize, and execute bounded read-only agent runs."""
 
@@ -128,7 +135,7 @@ class AgentExecutionRepository:
 
     def create_run(self, user_id: str, task_id: str, actions: list[dict],
                    registry: ToolRegistry) -> dict:
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             task = self._validate_live_task(user_id, task_id)
             normalized = self._validate_actions(actions, task, registry)
             required = {
@@ -182,7 +189,7 @@ class AgentExecutionRepository:
         """
         if not isinstance(actions, list) or not 1 <= len(actions) <= 10:
             raise ValueError("A run must contain between 1 and 10 actions")
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             task = self._validate_live_task(user_id, task_id)
             ceiling = set(task["capability_ceiling"])
             normalized = []
@@ -442,7 +449,7 @@ class AgentExecutionRepository:
     def authorize_run(
         self, user_id: str, run_id: str, integrations=None, connections=None,
     ) -> dict:
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
             if run["status"] != "proposed":
                 raise ValueError("Only proposed runs can be authorized")
@@ -463,8 +470,13 @@ class AgentExecutionRepository:
         return self.get_run(user_id, run_id)
 
     def _raw_run(self, user_id: str, run_id: str):
+        lock = (
+            " FOR UPDATE"
+            if getattr(self.database, "dialect", "sqlite") == "postgresql"
+            else ""
+        )
         row = self.database.connect().execute(
-            "SELECT * FROM agent_runs WHERE id=? AND user_id=?",
+            "SELECT * FROM agent_runs WHERE id=? AND user_id=?" + lock,
             (run_id, user_id),
         ).fetchone()
         if row is None:
@@ -473,7 +485,7 @@ class AgentExecutionRepository:
 
     def execute_run(self, user_id: str, run_id: str,
                     gateway: ToolExecutionGateway, registry: ToolRegistry) -> dict:
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
             if run["status"] != "authorized":
                 raise ValueError("Run requires explicit owner authorization")
@@ -507,7 +519,7 @@ class AgentExecutionRepository:
                 # This transaction is the step authorization linearization point.
                 # A later grant revocation cannot retroactively cancel a step
                 # that was already authorized and durably marked as started.
-                with self.database.transaction(immediate=True):
+                with _write_transaction(self.database):
                     run = self._raw_run(user_id, run_id)
                     if run["status"] != "running":
                         raise PermissionError("Agent run is no longer running")
@@ -540,7 +552,7 @@ class AgentExecutionRepository:
                         pass
                     raise PermissionError("Tool contract changed while creating the tool request")
                 result = gateway.execute(proposal, user_id=user_id)
-                with self.database.transaction(immediate=True):
+                with _write_transaction(self.database):
                     self._event(user_id, run_id, "step_completed", {
                         "step_id": step["id"], "ordinal": step["ordinal"],
                         "tool_id": step["tool_id"], "tool_request_id": proposal["id"],
@@ -564,7 +576,7 @@ class AgentExecutionRepository:
                     if isinstance(exc, (PermissionError, LookupError, ValueError))
                     else "read_only_execution_failed"
                 )
-                with self.database.transaction(immediate=True):
+                with _write_transaction(self.database):
                     current_step = self.database.connect().execute(
                         "SELECT status FROM agent_run_steps WHERE id=? AND user_id=?",
                         (step["id"], user_id),
@@ -581,7 +593,7 @@ class AgentExecutionRepository:
                         )
                 break
 
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
             target = "failed" if failed else "completed"
             now = _stamp()
@@ -615,7 +627,7 @@ class AgentExecutionRepository:
         return self.get_run(user_id, run_id)
 
     def cancel_run(self, user_id: str, run_id: str) -> dict:
-        with self.database.transaction(immediate=True):
+        with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
             if run["status"] not in {"proposed", "authorized"}:
                 raise ValueError("Only unstarted runs can be cancelled")
@@ -639,7 +651,7 @@ class AgentExecutionRepository:
         ).fetchall()
         changed = 0
         for row in rows:
-            with self.database.transaction(immediate=True):
+            with _write_transaction(self.database):
                 run = self._raw_run(user_id, row["id"])
                 if run["status"] not in {"proposed", "authorized"}:
                     continue
