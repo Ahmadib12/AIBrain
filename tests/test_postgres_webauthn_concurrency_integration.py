@@ -14,6 +14,7 @@ import pytest
 from backend.app.persistence.postgres.database import PostgresDatabase
 from backend.app.persistence.postgres.migrations import PostgresMigrationRunner
 from backend.app.persistence.webauthn import WebAuthnRepository
+from backend.app.persistence.identity import IdentityRepository
 
 
 def _database_url():
@@ -44,20 +45,11 @@ def _create_user(database_url):
 
 
 def _delete_user(database_url, user_id):
-    import psycopg
-
-    with psycopg.connect(database_url) as connection:
-        # Test-only cleanup of the rows created by these isolated fixtures.
-        connection.execute(
-            "DELETE FROM webauthn_challenges WHERE user_id=%s", (user_id,)
-        )
-        connection.execute(
-            "DELETE FROM webauthn_recovery_codes WHERE user_id=%s", (user_id,)
-        )
-        connection.execute(
-            "DELETE FROM webauthn_credentials WHERE user_id=%s", (user_id,)
-        )
-        connection.execute("DELETE FROM users WHERE id=%s", (user_id,))
+    database = PostgresDatabase(database_url)
+    try:
+        IdentityRepository(database, session_ttl_seconds=3600).delete_user(user_id)
+    finally:
+        database.shutdown()
 
 
 def _challenge(repository, user_id, purpose="authentication"):
@@ -71,7 +63,7 @@ def _challenge(repository, user_id, purpose="authentication"):
 
 def test_real_postgres_concurrent_authentication_preserves_monotonic_sign_counter():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 36
+    assert PostgresMigrationRunner(database_url).migrate() == 37
     user_id = _create_user(database_url)
     database = PostgresDatabase(database_url)
     repository = WebAuthnRepository(database)
@@ -115,7 +107,7 @@ def test_real_postgres_concurrent_authentication_preserves_monotonic_sign_counte
 
 def test_real_postgres_challenge_is_consumed_by_only_one_concurrent_authentication():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 36
+    assert PostgresMigrationRunner(database_url).migrate() == 37
     user_id = _create_user(database_url)
     database = PostgresDatabase(database_url)
     repository = WebAuthnRepository(database)
@@ -158,7 +150,7 @@ def test_real_postgres_challenge_is_consumed_by_only_one_concurrent_authenticati
 
 def test_real_postgres_concurrent_recovery_rotation_keeps_one_complete_generation():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 36
+    assert PostgresMigrationRunner(database_url).migrate() == 37
     user_id = _create_user(database_url)
     database = PostgresDatabase(database_url)
     repository = WebAuthnRepository(database)

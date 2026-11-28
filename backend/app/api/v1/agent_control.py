@@ -46,6 +46,13 @@ class TaskTransitionRequest(BaseModel):
 class TaskClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     worker_id: str = Field(min_length=1, max_length=100)
+    lease_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class TaskHeartbeatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    worker_id: str = Field(min_length=1, max_length=100)
+    lease_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 class MessageCreateRequest(BaseModel):
@@ -168,11 +175,35 @@ async def claim_agent_task(
             agent_id,
             task_id,
             worker_id=request.worker_id,
+            lease_seconds=request.lease_seconds,
         )
     except LookupError:
         _error(404, "AGENT_OR_TASK_NOT_FOUND", "Agent or task not found")
     except ValueError:
         _error(409, "TASK_NOT_CLAIMABLE", "The task is unavailable or already claimed")
+
+
+@router.post("/agents/{agent_id}/agent-tasks/{task_id}/heartbeat", status_code=200)
+async def heartbeat_agent_task(
+    agent_id: str,
+    task_id: str,
+    request: TaskHeartbeatRequest,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        return get_app_state().agent_control.heartbeat_task(
+            user["id"],
+            agent_id,
+            task_id,
+            worker_id=request.worker_id,
+            lease_seconds=request.lease_seconds,
+        )
+    except LookupError:
+        _error(404, "AGENT_OR_TASK_NOT_FOUND", "Agent or task not found")
+    except PermissionError:
+        _error(403, "TASK_LEASE_NOT_OWNED", "Worker does not own this task lease")
+    except ValueError:
+        _error(409, "TASK_HEARTBEAT_REJECTED", "The task lease cannot be renewed")
 
 
 @router.post("/agents/{agent_id}/messages", status_code=201)
@@ -241,4 +272,7 @@ async def list_agent_task_events(
 @router.post("/agent-tasks/reconcile-expired")
 async def reconcile_expired_agent_tasks(user: dict = Depends(get_current_user)):
     # Owner-scoped reconciliation only; no executor is invoked.
-    return {"expired": get_app_state().agent_control.reconcile_expired_tasks(user["id"])}
+    state = get_app_state()
+    expired = state.agent_control.reconcile_expired_tasks(user["id"])
+    requeued = state.agent_control.reconcile_stale_task_claims(user["id"])
+    return {"expired": expired, "requeued": requeued}

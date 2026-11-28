@@ -225,7 +225,7 @@ async def cancel_agent_run(run_id: str, user: dict = Depends(get_current_user)):
     except LookupError:
         _error(404, "AGENT_RUN_NOT_FOUND", "Agent run not found")
     except ValueError:
-        _error(409, "AGENT_RUN_NOT_CANCELLABLE", "Only unstarted runs can be cancelled")
+        _error(409, "AGENT_RUN_NOT_CANCELLABLE", "Only active uncompleted runs can be cancelled")
     except sqlite3.IntegrityError:
         _error(409, "AGENT_RUN_CONFLICT", "Run cancellation conflicted with persisted state")
 

@@ -1,6 +1,7 @@
 import json
+import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.app.persistence.contracts import DatabaseProtocol
@@ -273,11 +274,14 @@ class AgentControlRepository:
         task_id: str,
         *,
         worker_id: str,
+        lease_seconds: int = 300,
     ) -> dict:
         """Atomically claim an assigned task for one active worker."""
         if not isinstance(worker_id, str) or not 1 <= len(worker_id.strip()) <= 100:
             raise ValueError("Worker ID must contain 1 to 100 characters")
         validate_personal_payload(worker_id.strip())
+        if not isinstance(lease_seconds, int) or not 30 <= lease_seconds <= 3600:
+            raise ValueError("Lease seconds must be between 30 and 3600")
 
         dialect = getattr(self.database, "dialect", "sqlite")
         if dialect not in {"sqlite", "postgresql"}:
@@ -292,11 +296,13 @@ class AgentControlRepository:
                 if owner is None:
                     raise LookupError("Owner account not found")
                 agent = connection.execute(
-                    "SELECT id FROM agents WHERE id=? AND user_id=? FOR UPDATE",
+                    "SELECT id,status FROM agents WHERE id=? AND user_id=? FOR UPDATE",
                     (agent_id, user_id),
                 ).fetchone()
                 if agent is None:
                     raise LookupError("Agent not found")
+                if agent["status"] != "active":
+                    raise ValueError("Agent must be active")
                 task_row = connection.execute(
                     """SELECT id,status,expires_at FROM agent_tasks
                        WHERE id=? AND user_id=? AND agent_id=? FOR UPDATE""",
@@ -318,16 +324,24 @@ class AgentControlRepository:
                 raise ValueError("Task has expired")
 
             now = _stamp()
+            lease_expires_at = _stamp(
+                _now() + timedelta(seconds=lease_seconds)
+            )
             details = {
                 "from_status": "assigned",
                 "to_status": "in_progress",
                 "worker_id": worker_id.strip(),
+                "lease_expires_at": lease_expires_at,
             }
             self._task_event(user_id, task_id, "in_progress", details)
             cursor = connection.execute(
-                """UPDATE agent_tasks SET status='in_progress',updated_at=?
+                """UPDATE agent_tasks SET status='in_progress',updated_at=?,
+                   claimed_by=?,claimed_at=?,lease_expires_at=?,heartbeat_at=?
                    WHERE id=? AND user_id=? AND agent_id=? AND status='assigned'""",
-                (now, task_id, user_id, agent_id),
+                (
+                    now, worker_id.strip(), now, lease_expires_at, now,
+                    task_id, user_id, agent_id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ValueError("Task claim conflicted with another worker")
@@ -339,6 +353,130 @@ class AgentControlRepository:
                 details,
             )
         return self.get_task(user_id, task_id)
+
+    def heartbeat_task(
+        self,
+        user_id: str,
+        agent_id: str,
+        task_id: str,
+        *,
+        worker_id: str,
+        lease_seconds: int = 300,
+    ) -> dict:
+        """Renew only a worker's active, live task lease."""
+        if not isinstance(worker_id, str) or not 1 <= len(worker_id.strip()) <= 100:
+            raise ValueError("Worker ID must contain 1 to 100 characters")
+        if not isinstance(lease_seconds, int) or not 30 <= lease_seconds <= 3600:
+            raise ValueError("Lease seconds must be between 30 and 3600")
+
+        with _write_transaction(self.database):
+            connection = self.database.connect()
+            lock = (
+                " FOR UPDATE"
+                if getattr(self.database, "dialect", "sqlite") == "postgresql"
+                else ""
+            )
+            task_row = connection.execute(
+                """SELECT id,status,claimed_by,lease_expires_at,expires_at
+                   FROM agent_tasks
+                   WHERE id=? AND user_id=? AND agent_id=?""" + lock,
+                (task_id, user_id, agent_id),
+            ).fetchone()
+            if task_row is None:
+                raise LookupError("Task not found")
+            if task_row["status"] != "in_progress":
+                raise ValueError("Task is not in progress")
+            if task_row["claimed_by"] != worker_id.strip():
+                raise PermissionError("Worker does not own this task claim")
+            if datetime.fromisoformat(task_row["expires_at"]) <= _now():
+                raise ValueError("Task has expired")
+            if (
+                task_row["lease_expires_at"] is not None
+                and datetime.fromisoformat(task_row["lease_expires_at"]) <= _now()
+            ):
+                raise ValueError("Task lease has expired")
+
+            now = _stamp()
+            lease_expires_at = _stamp(
+                _now() + timedelta(seconds=lease_seconds)
+            )
+            cursor = connection.execute(
+                """UPDATE agent_tasks SET heartbeat_at=?,lease_expires_at=?,updated_at=?
+                   WHERE id=? AND user_id=? AND agent_id=? AND status='in_progress'
+                     AND claimed_by=?""",
+                (
+                    now, lease_expires_at, now,
+                    task_id, user_id, agent_id, worker_id.strip(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Task heartbeat conflicted with its lease")
+        return self.get_task(user_id, task_id)
+
+    def reconcile_stale_task_claims(self, user_id: str | None = None) -> int:
+        """Requeue claims whose worker lease expired; never execute again automatically."""
+        now = _stamp()
+        sql = """SELECT id,user_id,agent_id FROM agent_tasks
+                 WHERE status='in_progress' AND lease_expires_at IS NOT NULL
+                   AND lease_expires_at <= ?"""
+        args: tuple = (now,)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            args = (now, user_id)
+        rows = self.database.connect().execute(sql, args).fetchall()
+        changed = 0
+        for row in rows:
+            try:
+                with _write_transaction(self.database):
+                    connection = self.database.connect()
+                    lock = (
+                        " FOR UPDATE"
+                        if getattr(self.database, "dialect", "sqlite") == "postgresql"
+                        else ""
+                    )
+                    task_row = connection.execute(
+                        """SELECT id,status,lease_expires_at,claimed_by
+                           FROM agent_tasks
+                           WHERE id=? AND user_id=? AND agent_id=?""" + lock,
+                        (row["id"], row["user_id"], row["agent_id"]),
+                    ).fetchone()
+                    if (
+                        task_row is None
+                        or task_row["status"] != "in_progress"
+                        or task_row["lease_expires_at"] is None
+                        or datetime.fromisoformat(task_row["lease_expires_at"]) > _now()
+                    ):
+                        continue
+                    details = {
+                        "from_status": "in_progress",
+                        "to_status": "assigned",
+                        "reason": "worker_lease_expired",
+                        "previous_worker_id": task_row["claimed_by"],
+                    }
+                    self._task_event(
+                        row["user_id"], row["id"], "requeued", details
+                    )
+                    cursor = connection.execute(
+                        """UPDATE agent_tasks SET status='assigned',updated_at=?,
+                           claimed_by=NULL,claimed_at=NULL,
+                           lease_expires_at=NULL,heartbeat_at=NULL
+                           WHERE id=? AND user_id=? AND agent_id=? AND status='in_progress'
+                             AND lease_expires_at=?""",
+                        (
+                            now, row["id"], row["user_id"], row["agent_id"],
+                            task_row["lease_expires_at"],
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        continue
+                    self._event(
+                        row["user_id"], row["agent_id"],
+                        "task.requeued", row["id"], details,
+                    )
+                    changed += 1
+            except (ValueError, sqlite3.IntegrityError):
+                continue
+        return changed
 
     def reconcile_expired_tasks(self, user_id: str | None = None) -> int:
         now = _stamp()

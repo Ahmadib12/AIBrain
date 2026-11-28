@@ -18,6 +18,7 @@ from backend.app.devices.contracts import (
 from backend.app.persistence.devices import DeviceRepository
 from backend.app.persistence.postgres.database import PostgresDatabase
 from backend.app.persistence.postgres.migrations import PostgresMigrationRunner
+from backend.app.persistence.identity import IdentityRepository
 
 
 def _database_url():
@@ -54,16 +55,17 @@ def _create_owner(database_url: str, suffix: str) -> str:
 
 
 def _delete_owner(database_url: str, owner_id: str) -> None:
-    import psycopg
-
-    with psycopg.connect(database_url) as connection:
-        connection.execute("DELETE FROM users WHERE id=%s", (owner_id,))
+    database = PostgresDatabase(database_url)
+    try:
+        IdentityRepository(database, session_ttl_seconds=3600).delete_user(owner_id)
+    finally:
+        database.shutdown()
 
 
 def test_real_postgres_concurrent_duplicate_enrollment_is_serialized():
     database_url = _database_url()
     import psycopg
-    assert PostgresMigrationRunner(database_url).migrate() == 36
+    assert PostgresMigrationRunner(database_url).migrate() == 37
     owner_id = _create_owner(database_url, uuid4().hex)
     database = PostgresDatabase(database_url)
     barrier = Barrier(2)
@@ -114,7 +116,7 @@ def test_real_postgres_concurrent_duplicate_enrollment_is_serialized():
 def test_real_postgres_concurrent_capability_report_and_revoke_never_resurrect_device():
     database_url = _database_url()
     import psycopg
-    assert PostgresMigrationRunner(database_url).migrate() == 36
+    assert PostgresMigrationRunner(database_url).migrate() == 37
     owner_id = _create_owner(database_url, uuid4().hex)
     device_id = str(uuid4())
     timestamp = datetime.now(timezone.utc).isoformat()

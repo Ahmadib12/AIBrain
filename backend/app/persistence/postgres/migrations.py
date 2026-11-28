@@ -3145,6 +3145,47 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
             ON security_recovery_abuse_windows(window_start);
         """,
     ),
+    PostgresMigration(
+        version=37,
+        name="agent_task_worker_leases",
+        sql="""
+        ALTER TABLE agent_tasks ADD COLUMN claimed_by TEXT;
+        ALTER TABLE agent_tasks ADD COLUMN claimed_at TEXT;
+        ALTER TABLE agent_tasks ADD COLUMN lease_expires_at TEXT;
+        ALTER TABLE agent_tasks ADD COLUMN heartbeat_at TEXT;
+        CREATE INDEX idx_agent_tasks_worker_lease
+            ON agent_tasks(status, lease_expires_at);
+
+        CREATE OR REPLACE FUNCTION aibrain_validate_agent_task_event()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE current_status TEXT;
+            from_status TEXT;
+            to_status TEXT;
+        BEGIN
+            SELECT status INTO current_status FROM agent_tasks
+            WHERE id=NEW.task_id AND user_id=NEW.user_id;
+            from_status := NEW.details_json::jsonb ->> 'from_status';
+            to_status := NEW.details_json::jsonb ->> 'to_status';
+            IF NEW.actor_user_id <> NEW.user_id OR current_status IS NULL
+               OR NOT EXISTS (SELECT 1 FROM users WHERE id=NEW.user_id AND deleted_at IS NULL)
+               OR NOT (
+                    (NEW.event_type='assigned' AND current_status='assigned'
+                     AND from_status IS NULL AND to_status='assigned')
+                    OR (from_status=current_status AND to_status=NEW.event_type
+                        AND ((current_status='assigned' AND NEW.event_type IN
+                              ('in_progress','completed','failed','cancelled','expired'))
+                          OR (current_status='in_progress' AND NEW.event_type IN
+                              ('completed','failed','cancelled','expired','requeued'))))
+                    OR (current_status='in_progress' AND NEW.event_type='requeued'
+                        AND from_status='in_progress' AND to_status='assigned')
+               ) THEN
+                RAISE EXCEPTION 'task event transition mismatch' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+        """,
+    ),
 
 )
 

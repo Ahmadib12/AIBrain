@@ -35,6 +35,10 @@ This document distinguishes implemented foundations from external integrations t
 - Owner-scoped agent task claiming is atomic across competing workers. Claims
   transition an assigned task to `in_progress`, preserve the worker identity
   in immutable task/control history, and reject already claimed or expired tasks.
+- Agent tasks support bounded worker leases, heartbeat renewal, stale-lease
+  reconciliation, and owner-scoped requeueing. Reconciliation changes no run
+  or tool outcome automatically; uncertain external outcomes remain
+  `outcome_unknown` and are never retried.
 - Planning rejects common instruction-override and authorization-self-grant
   attempts as control paths, preventing those requests from selecting or
   authorizing capabilities.

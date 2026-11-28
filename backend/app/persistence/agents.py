@@ -203,6 +203,13 @@ class AgentRepository:
                 if getattr(self.database, "dialect", "sqlite") == "postgresql"
                 else ""
             )
+            if getattr(self.database, "dialect", "sqlite") == "postgresql":
+                owner = connection.execute(
+                    "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL" + lock,
+                    (user_id,),
+                ).fetchone()
+                if owner is None:
+                    raise LookupError("Owner account not found")
             row = connection.execute(
                 """
                 SELECT status FROM agents

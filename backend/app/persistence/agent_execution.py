@@ -629,8 +629,8 @@ class AgentExecutionRepository:
     def cancel_run(self, user_id: str, run_id: str) -> dict:
         with _write_transaction(self.database):
             run = self._raw_run(user_id, run_id)
-            if run["status"] not in {"proposed", "authorized"}:
-                raise ValueError("Only unstarted runs can be cancelled")
+            if run["status"] not in {"proposed", "authorized", "running"}:
+                raise ValueError("Only active uncompleted runs can be cancelled")
             now = _stamp()
             self._event(user_id, run_id, "cancelled", {
                 "from_status": run["status"], "to_status": "cancelled",

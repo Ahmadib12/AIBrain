@@ -3558,6 +3558,50 @@ created_at TEXT NOT NULL,
                     ON security_recovery_abuse_windows(window_start);
                 """
             ),
+            (
+                46,
+                """
+                ALTER TABLE agent_tasks ADD COLUMN claimed_by TEXT;
+                ALTER TABLE agent_tasks ADD COLUMN claimed_at TEXT;
+                ALTER TABLE agent_tasks ADD COLUMN lease_expires_at TEXT;
+                ALTER TABLE agent_tasks ADD COLUMN heartbeat_at TEXT;
+
+                DROP TRIGGER IF EXISTS validate_agent_task_event_insert;
+                CREATE TRIGGER validate_agent_task_event_insert
+                BEFORE INSERT ON agent_task_events
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM agent_tasks t JOIN users u ON u.id=t.user_id
+                    WHERE t.id=NEW.task_id AND t.user_id=NEW.user_id
+                      AND NEW.actor_user_id=NEW.user_id AND u.deleted_at IS NULL
+                      AND (
+                        (
+                          NEW.event_type='assigned' AND t.status='assigned'
+                          AND json_extract(NEW.details_json,'$.from_status') IS NULL
+                          AND json_extract(NEW.details_json,'$.to_status')='assigned'
+                        )
+                        OR
+                        (
+                          json_extract(NEW.details_json,'$.from_status')=t.status
+                          AND json_extract(NEW.details_json,'$.to_status')=NEW.event_type
+                          AND (
+                            (t.status='assigned' AND NEW.event_type IN
+                              ('in_progress','completed','failed','cancelled','expired'))
+                            OR
+                            (t.status='in_progress' AND NEW.event_type IN
+                              ('completed','failed','cancelled','expired','requeued'))
+                          )
+                        )
+                        OR
+                        (
+                          t.status='in_progress' AND NEW.event_type='requeued'
+                          AND json_extract(NEW.details_json,'$.from_status')='in_progress'
+                          AND json_extract(NEW.details_json,'$.to_status')='assigned'
+                        )
+                      )
+                )
+                BEGIN SELECT RAISE(ABORT, 'task event transition mismatch'); END;
+                """
+            ),
         )
 
         with self._lock:
