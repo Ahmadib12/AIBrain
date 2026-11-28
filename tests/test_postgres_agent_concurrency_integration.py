@@ -6,6 +6,7 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
+import multiprocessing
 
 from backend.app.persistence.agent_control import AgentControlRepository
 from backend.app.persistence.agent_execution import AgentExecutionRepository
@@ -77,9 +78,34 @@ def _create_active_agent_and_task(database_url):
     return database, owner_id, agent, task, control
 
 
+def _claim_in_worker(database_url, owner_id, agent_id, task_id, worker_id, queue):
+    database = PostgresDatabase(database_url)
+    try:
+        control = AgentControlRepository(database)
+        claimed = control.claim_task(
+            owner_id,
+            agent_id,
+            task_id,
+            worker_id=worker_id,
+            lease_seconds=300,
+        )
+        queue.put({
+            "worker_id": worker_id,
+            "lease_generation": claimed["lease_generation"],
+            "lease_token": claimed["lease_token"],
+        })
+    except BaseException as error:
+        queue.put({
+            "worker_id": worker_id,
+            "error": type(error).__name__,
+        })
+    finally:
+        database.shutdown()
+
+
 def test_real_postgres_only_one_worker_claims_task():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     database, owner_id, agent, task, control = _create_active_agent_and_task(
         database_url
     )
@@ -120,6 +146,7 @@ def test_real_postgres_only_one_worker_claims_task():
                 agent["id"],
                 task["id"],
                 worker_id="unauthorized-worker",
+                lease_token=claimed["lease_token"],
                 lease_seconds=300,
             )
     finally:
@@ -129,7 +156,7 @@ def test_real_postgres_only_one_worker_claims_task():
 
 def test_real_postgres_lease_heartbeat_and_crash_reconciliation():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     database, owner_id, agent, task, control = _create_active_agent_and_task(
         database_url
     )
@@ -146,6 +173,7 @@ def test_real_postgres_lease_heartbeat_and_crash_reconciliation():
             agent["id"],
             task["id"],
             worker_id="worker-heartbeat",
+            lease_token=claimed["lease_token"],
             lease_seconds=600,
         )
         assert datetime.fromisoformat(renewed["lease_expires_at"]) > (
@@ -175,9 +203,121 @@ def test_real_postgres_lease_heartbeat_and_crash_reconciliation():
         _delete_owner(database_url, owner_id)
 
 
+def test_real_postgres_expired_worker_cannot_complete_or_renew():
+    database_url = _database_url()
+    assert PostgresMigrationRunner(database_url).migrate() == 38
+    database, owner_id, agent, task, control = _create_active_agent_and_task(
+        database_url
+    )
+    try:
+        claimed = control.claim_task(
+            owner_id,
+            agent["id"],
+            task["id"],
+            worker_id="worker-old",
+            lease_seconds=300,
+        )
+        import psycopg
+        with psycopg.connect(database_url) as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks SET lease_expires_at=%s
+                WHERE id=%s
+                """,
+                (
+                    (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                    task["id"],
+                ),
+            )
+
+        with pytest.raises(PermissionError):
+            control.heartbeat_task(
+                owner_id,
+                agent["id"],
+                task["id"],
+                worker_id="worker-old",
+                lease_token=claimed["lease_token"],
+                lease_seconds=300,
+            )
+        with pytest.raises(PermissionError):
+            control.transition_task(
+                owner_id,
+                task["id"],
+                "completed",
+                worker_id="worker-old",
+                lease_token=claimed["lease_token"],
+            )
+        assert control.get_task(owner_id, task["id"])["status"] == "in_progress"
+    finally:
+        database.shutdown()
+        _delete_owner(database_url, owner_id)
+
+
+def test_real_postgres_takeover_increments_fencing_generation():
+    database_url = _database_url()
+    assert PostgresMigrationRunner(database_url).migrate() == 38
+    database, owner_id, agent, task, control = _create_active_agent_and_task(
+        database_url
+    )
+    try:
+        first = control.claim_task(
+            owner_id,
+            agent["id"],
+            task["id"],
+            worker_id="worker-one",
+            lease_seconds=300,
+        )
+        assert first["lease_generation"] == 1
+
+        import psycopg
+        with psycopg.connect(database_url) as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks SET lease_expires_at=%s
+                WHERE id=%s
+                """,
+                (
+                    (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                    task["id"],
+                ),
+            )
+
+        second = control.claim_task(
+            owner_id,
+            agent["id"],
+            task["id"],
+            worker_id="worker-two",
+            lease_seconds=300,
+        )
+        assert second["lease_generation"] == 2
+        assert second["lease_token"] != first["lease_token"]
+        assert second["claimed_by"] == "worker-two"
+
+        with pytest.raises(PermissionError):
+            control.heartbeat_task(
+                owner_id,
+                agent["id"],
+                task["id"],
+                worker_id="worker-one",
+                lease_token=first["lease_token"],
+                lease_seconds=300,
+            )
+        with pytest.raises(PermissionError):
+            control.transition_task(
+                owner_id,
+                task["id"],
+                "completed",
+                worker_id="worker-one",
+                lease_token=first["lease_token"],
+            )
+    finally:
+        database.shutdown()
+        _delete_owner(database_url, owner_id)
+
+
 def test_real_postgres_suspension_racing_claim_is_fail_closed():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     database, owner_id, agent, task, control = _create_active_agent_and_task(
         database_url
     )
@@ -236,7 +376,7 @@ def test_real_postgres_suspension_racing_claim_is_fail_closed():
 
 def test_real_postgres_only_one_worker_executes_run():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     database, owner_id, agent, task, control = _create_active_agent_and_task(
         database_url
     )
@@ -296,7 +436,7 @@ def test_real_postgres_only_one_worker_executes_run():
 
 def test_real_postgres_concurrent_run_cancellation_and_execution_are_atomic():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     database, owner_id, agent, task, control = _create_active_agent_and_task(
         database_url
     )
@@ -343,6 +483,127 @@ def test_real_postgres_concurrent_run_cancellation_and_execution_are_atomic():
             isinstance(cancel_result, Exception)
             and isinstance(execute_result, Exception)
         )
+    finally:
+        database.shutdown()
+        _delete_owner(database_url, owner_id)
+
+
+def test_real_postgres_independent_processes_claim_only_one_task():
+    database_url = _database_url()
+    assert PostgresMigrationRunner(database_url).migrate() == 38
+    database, owner_id, agent, task, control = _create_active_agent_and_task(
+        database_url
+    )
+    try:
+        context = multiprocessing.get_context("spawn")
+        queue = context.Queue()
+        processes = [
+            context.Process(
+                target=_claim_in_worker,
+                args=(
+                    database_url,
+                    owner_id,
+                    agent["id"],
+                    task["id"],
+                    worker_id,
+                    queue,
+                ),
+            )
+            for worker_id in ("process-worker-a", "process-worker-b")
+        ]
+        for process in processes:
+            process.start()
+        results = [queue.get(timeout=30) for _ in processes]
+        for process in processes:
+            process.join(timeout=30)
+            assert process.exitcode == 0
+
+        successes = [item for item in results if "lease_token" in item]
+        failures = [item for item in results if "error" in item]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert failures[0]["error"] == "ValueError"
+
+        claimed = control.get_task(owner_id, task["id"])
+        assert claimed["status"] == "in_progress"
+        assert claimed["claimed_by"] in {
+            "process-worker-a",
+            "process-worker-b",
+        }
+        assert claimed["lease_token"] == successes[0]["lease_token"]
+        assert claimed["lease_generation"] == 1
+    finally:
+        queue.close()
+        queue.join_thread()
+        database.shutdown()
+        _delete_owner(database_url, owner_id)
+
+
+def test_real_postgres_reconciliation_requeues_never_dispatched_task():
+    database_url = _database_url()
+    assert PostgresMigrationRunner(database_url).migrate() == 38
+    database, owner_id, agent, task, control = _create_active_agent_and_task(
+        database_url
+    )
+    execution = AgentExecutionRepository(database)
+    try:
+        run = execution.create_run(
+            owner_id,
+            task["id"],
+            [{"tool_id": "echo", "arguments": {"text": "never dispatched"}}],
+            tool_registry,
+        )
+        execution.authorize_run(owner_id, run["id"])
+        import psycopg
+        stale_before = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        with psycopg.connect(database_url) as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_run_events (
+                    id,user_id,run_id,actor_user_id,event_type,details_json,created_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    str(uuid4()),
+                    owner_id,
+                    run["id"],
+                    owner_id,
+                    "started",
+                    '{"from_status":"authorized","to_status":"running"}',
+                    stale_before,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE agent_runs SET status='running',started_at=%s,
+                    updated_at=%s WHERE id=%s
+                """,
+                (
+                    stale_before,
+                    stale_before,
+                    run["id"],
+                ),
+            )
+
+        recovered = execution.reconcile_stale_running_runs(
+            stale_before=datetime.now(timezone.utc).isoformat(),
+            user_id=owner_id,
+        )
+        assert recovered == 1
+        reconciled = execution.get_run(owner_id, run["id"])
+        assert reconciled["status"] == "failed"
+        assert reconciled["steps"][0]["status"] == "skipped"
+        requeued_task = control.get_task(owner_id, task["id"])
+        assert requeued_task["status"] == "assigned"
+        events = execution.list_events(owner_id, run["id"])
+        reconciliation_events = [
+            event for event in events
+            if event["event_type"] == "reconciliation"
+        ]
+        assert len(reconciliation_events) == 1
+        assert reconciliation_events[0]["details"]["automatic_retry"] is False
     finally:
         database.shutdown()
         _delete_owner(database_url, owner_id)

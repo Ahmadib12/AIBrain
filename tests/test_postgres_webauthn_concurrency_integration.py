@@ -63,7 +63,7 @@ def _challenge(repository, user_id, purpose="authentication"):
 
 def test_real_postgres_concurrent_authentication_preserves_monotonic_sign_counter():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     user_id = _create_user(database_url)
     database = PostgresDatabase(database_url)
     repository = WebAuthnRepository(database)
@@ -107,7 +107,7 @@ def test_real_postgres_concurrent_authentication_preserves_monotonic_sign_counte
 
 def test_real_postgres_challenge_is_consumed_by_only_one_concurrent_authentication():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     user_id = _create_user(database_url)
     database = PostgresDatabase(database_url)
     repository = WebAuthnRepository(database)
@@ -150,7 +150,7 @@ def test_real_postgres_challenge_is_consumed_by_only_one_concurrent_authenticati
 
 def test_real_postgres_concurrent_recovery_rotation_keeps_one_complete_generation():
     database_url = _database_url()
-    assert PostgresMigrationRunner(database_url).migrate() == 37
+    assert PostgresMigrationRunner(database_url).migrate() == 38
     user_id = _create_user(database_url)
     database = PostgresDatabase(database_url)
     repository = WebAuthnRepository(database)

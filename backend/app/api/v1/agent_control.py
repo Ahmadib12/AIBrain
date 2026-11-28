@@ -41,6 +41,8 @@ class TaskTransitionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: str = Field(min_length=1, max_length=30)
     reason: str = Field(default="", max_length=500)
+    worker_id: str | None = Field(default=None, min_length=1, max_length=100)
+    lease_token: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class TaskClaimRequest(BaseModel):
@@ -52,6 +54,7 @@ class TaskClaimRequest(BaseModel):
 class TaskHeartbeatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     worker_id: str = Field(min_length=1, max_length=100)
+    lease_token: str = Field(min_length=1, max_length=200)
     lease_seconds: int = Field(default=300, ge=30, le=3600)
 
 
@@ -152,10 +155,14 @@ async def transition_agent_task(
 ):
     try:
         return get_app_state().agent_control.transition_task(
-            user["id"], task_id, request.status, request.reason
+            user["id"], task_id, request.status, request.reason,
+            worker_id=request.worker_id,
+            lease_token=request.lease_token,
         )
     except LookupError:
         _error(404, "TASK_NOT_FOUND", "Task not found")
+    except PermissionError:
+        _error(409, "STALE_TASK_LEASE", "The worker lease is no longer current")
     except ValueError:
         _error(409, "INVALID_TASK_TRANSITION", "Task transition is not permitted")
     except sqlite3.IntegrityError:
@@ -196,6 +203,7 @@ async def heartbeat_agent_task(
             agent_id,
             task_id,
             worker_id=request.worker_id,
+            lease_token=request.lease_token,
             lease_seconds=request.lease_seconds,
         )
     except LookupError:

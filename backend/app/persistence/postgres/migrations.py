@@ -3186,6 +3186,17 @@ MIGRATIONS: tuple[PostgresMigration, ...] = (
         $$;
         """,
     ),
+    PostgresMigration(
+        version=38,
+        name="agent_task_lease_fencing",
+        sql="""
+        ALTER TABLE agent_tasks ADD COLUMN lease_token TEXT;
+        ALTER TABLE agent_tasks ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0
+            CHECK (lease_generation >= 0);
+        CREATE UNIQUE INDEX idx_agent_tasks_live_lease_token
+            ON agent_tasks(lease_token) WHERE lease_token IS NOT NULL;
+        """,
+    ),
 
 )
 

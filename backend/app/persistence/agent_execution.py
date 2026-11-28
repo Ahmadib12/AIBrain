@@ -668,3 +668,124 @@ class AgentExecutionRepository:
                 )
                 changed += 1
         return changed
+
+    def reconcile_stale_running_runs(
+        self,
+        *,
+        stale_before: str,
+        user_id: str | None = None,
+    ) -> int:
+        """Classify abandoned runs without replaying external actions."""
+        sql = """SELECT id,user_id FROM agent_runs
+                 WHERE status='running' AND updated_at <= ?"""
+        args: tuple = (stale_before,)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            args = (stale_before, user_id)
+        rows = self.database.connect().execute(sql, args).fetchall()
+        recovered = 0
+        for row in rows:
+            with _write_transaction(self.database):
+                run = self._raw_run(row["user_id"], row["id"])
+                if run["status"] != "running":
+                    continue
+                if run["updated_at"] > stale_before:
+                    continue
+                steps = self.database.connect().execute(
+                    """SELECT id,ordinal,status,tool_request_id
+                       FROM agent_run_steps
+                       WHERE user_id=? AND run_id=? ORDER BY ordinal""",
+                    (row["user_id"], row["id"]),
+                ).fetchall()
+                running_or_dispatched = any(
+                    step["status"] == "running"
+                    or step["tool_request_id"] is not None
+                    for step in steps
+                )
+                now = _stamp()
+                code = (
+                    "AGENT_PROCESS_INTERRUPTED_WITH_UNKNOWN_OUTCOME"
+                    if running_or_dispatched
+                    else "AGENT_PROCESS_INTERRUPTED_BEFORE_DISPATCH"
+                )
+                self._event(row["user_id"], row["id"], "reconciliation", {
+                    "from_status": "running",
+                    "to_status": "failed",
+                    "error_code": code,
+                    "automatic_retry": False,
+                })
+                cursor = self.database.connect().execute(
+                    """UPDATE agent_runs SET status='failed',finished_at=?,updated_at=?
+                       WHERE id=? AND user_id=? AND status='running'""",
+                    (now, now, row["id"], row["user_id"]),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                for step in steps:
+                    if step["status"] not in {"pending", "running"}:
+                        continue
+                    event_type = (
+                        "step_failed"
+                        if step["status"] == "running"
+                        else "step_skipped"
+                    )
+                    self._event(row["user_id"], row["id"], event_type, {
+                        "step_id": step["id"],
+                        "ordinal": step["ordinal"],
+                        "error_code": code,
+                        "automatic_retry": False,
+                    })
+                    target_status = (
+                        "failed"
+                        if step["status"] == "running"
+                        else "skipped"
+                    )
+                    self.database.connect().execute(
+                        """UPDATE agent_run_steps SET status=?,error_code=?,updated_at=?
+                           WHERE id=? AND user_id=? AND status=?""",
+                        (
+                            target_status,
+                            code,
+                            now,
+                            step["id"],
+                            row["user_id"],
+                            step["status"],
+                        ),
+                    )
+                if not running_or_dispatched:
+                    task_row = self.database.connect().execute(
+                        """SELECT t.id,t.status,t.claimed_by,t.lease_token,
+                                  t.lease_generation
+                           FROM agent_tasks t
+                           JOIN agent_runs r ON r.task_id=t.id
+                           WHERE r.id=? AND r.user_id=? AND t.user_id=?""",
+                        (row["id"], row["user_id"], row["user_id"]),
+                    ).fetchone()
+                    if task_row is not None and task_row["status"] == "in_progress":
+                        requeue_details = {
+                            "from_status": "in_progress",
+                            "to_status": "assigned",
+                            "reason": "run_reconciled_before_dispatch",
+                            "previous_worker_id": task_row["claimed_by"],
+                            "previous_lease_generation": task_row["lease_generation"],
+                            "automatic_retry": False,
+                        }
+                        self.database.connect().execute(
+                            """INSERT INTO agent_task_events
+                               (id,user_id,task_id,actor_user_id,event_type,details_json,created_at)
+                               VALUES (?,?,?,?,?,?,?)""",
+                            (
+                                str(uuid.uuid4()), row["user_id"], task_row["id"],
+                                row["user_id"], "requeued",
+                                _canonical(requeue_details), now,
+                            ),
+                        )
+                        self.database.connect().execute(
+                            """UPDATE agent_tasks SET status='assigned',updated_at=?,
+                               claimed_by=NULL,claimed_at=NULL,lease_token=NULL,
+                               lease_expires_at=NULL,heartbeat_at=NULL
+                               WHERE id=? AND user_id=? AND status='in_progress'""",
+                            (now, task_row["id"], row["user_id"]),
+                        )
+                recovered += 1
+        return recovered

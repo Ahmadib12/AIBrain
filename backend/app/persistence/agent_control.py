@@ -240,7 +240,9 @@ class AgentControlRepository:
         return [self._task(row) for row in rows]
 
     def transition_task(self, user_id: str, task_id: str, target: str,
-                        reason: str = "") -> dict:
+                        reason: str = "", *,
+                        worker_id: str | None = None,
+                        lease_token: str | None = None) -> dict:
         if target not in {"in_progress", "completed", "failed", "cancelled"}:
             raise ValueError("Unsupported task transition")
         if not isinstance(reason, str) or len(reason) > 500:
@@ -252,6 +254,37 @@ class AgentControlRepository:
         }
         with _write_transaction(self.database):
             task = self.get_task(user_id, task_id)
+            if worker_id is not None or lease_token is not None:
+                if not isinstance(worker_id, str) or not worker_id.strip():
+                    raise PermissionError("Worker identity is required")
+                if not isinstance(lease_token, str) or not lease_token.strip():
+                    raise PermissionError("Current lease token is required")
+                lock = (
+                    " FOR UPDATE"
+                    if getattr(self.database, "dialect", "sqlite") == "postgresql"
+                    else ""
+                )
+                fenced = self.database.connect().execute(
+                    """SELECT status,claimed_by,lease_token,lease_generation,
+                              lease_expires_at,expires_at
+                       FROM agent_tasks
+                       WHERE id=? AND user_id=? AND agent_id=?""" + lock,
+                    (task_id, user_id, task["agent_id"]),
+                ).fetchone()
+                if fenced is None:
+                    raise LookupError("Task not found")
+                if (
+                    fenced["status"] != "in_progress"
+                    or fenced["claimed_by"] != worker_id.strip()
+                    or fenced["lease_token"] != lease_token.strip()
+                ):
+                    raise PermissionError("Worker lease is no longer current")
+                if (
+                    fenced["lease_expires_at"] is None
+                    or datetime.fromisoformat(fenced["lease_expires_at"]) <= _now()
+                    or datetime.fromisoformat(fenced["expires_at"]) <= _now()
+                ):
+                    raise PermissionError("Worker lease or task deadline has expired")
             current = task["status"]
             if target not in transitions.get(current, set()):
                 raise ValueError("Invalid task transition")
@@ -260,10 +293,24 @@ class AgentControlRepository:
             if reason.strip():
                 details["reason"] = reason.strip()
             self._task_event(user_id, task_id, target, details)
-            self.database.connect().execute(
-                "UPDATE agent_tasks SET status=?,updated_at=? WHERE id=? AND user_id=?",
-                (target, now, task_id, user_id),
-            )
+            if worker_id is not None or lease_token is not None:
+                cursor = self.database.connect().execute(
+                    """UPDATE agent_tasks SET status=?,updated_at=?,
+                       lease_token=NULL,lease_expires_at=NULL,heartbeat_at=NULL
+                       WHERE id=? AND user_id=? AND agent_id=? AND status='in_progress'
+                         AND claimed_by=? AND lease_token=?""",
+                    (
+                        target, now, task_id, user_id, task["agent_id"],
+                        worker_id.strip(), lease_token.strip(),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise PermissionError("Worker lease changed before transition")
+            else:
+                self.database.connect().execute(
+                    "UPDATE agent_tasks SET status=?,updated_at=? WHERE id=? AND user_id=?",
+                    (target, now, task_id, user_id),
+                )
             self._event(user_id, task["agent_id"], "task."+target, task_id, details)
         return self.get_task(user_id, task_id)
 
@@ -304,26 +351,66 @@ class AgentControlRepository:
                 if agent["status"] != "active":
                     raise ValueError("Agent must be active")
                 task_row = connection.execute(
-                    """SELECT id,status,expires_at FROM agent_tasks
+                    """SELECT id,status,expires_at,claimed_by,lease_token,
+                              lease_generation,lease_expires_at
+                       FROM agent_tasks
                        WHERE id=? AND user_id=? AND agent_id=? FOR UPDATE""",
                     (task_id, user_id, agent_id),
                 ).fetchone()
             else:
                 self._agent(user_id, agent_id, active=True)
                 task_row = connection.execute(
-                    """SELECT id,status,expires_at FROM agent_tasks
+                    """SELECT id,status,expires_at,claimed_by,lease_token,
+                              lease_generation,lease_expires_at
+                       FROM agent_tasks
                        WHERE id=? AND user_id=? AND agent_id=?""",
                     (task_id, user_id, agent_id),
                 ).fetchone()
             if task_row is None:
                 raise LookupError("Task not found")
-            if task_row["status"] != "assigned":
-                raise ValueError("Task is no longer available to claim")
             expiry = datetime.fromisoformat(task_row["expires_at"])
             if expiry <= _now():
                 raise ValueError("Task has expired")
+            if task_row["status"] == "in_progress":
+                if (
+                    task_row["lease_expires_at"] is None
+                    or datetime.fromisoformat(task_row["lease_expires_at"]) > _now()
+                ):
+                    raise ValueError("Task lease is still held")
+                takeover_details = {
+                    "from_status": "in_progress",
+                    "to_status": "assigned",
+                    "reason": "worker_lease_expired",
+                    "previous_worker_id": task_row["claimed_by"],
+                    "previous_lease_generation": task_row["lease_generation"],
+                    "previous_lease_generation": task_row["lease_generation"],
+                }
+                self._task_event(
+                    user_id, task_id, "requeued", takeover_details
+                )
+                cursor = connection.execute(
+                    """UPDATE agent_tasks SET status='assigned',updated_at=?,
+                       claimed_by=NULL,claimed_at=NULL,lease_token=NULL,
+                       lease_expires_at=NULL,heartbeat_at=NULL
+                       WHERE id=? AND user_id=? AND agent_id=? AND status='in_progress'
+                         AND lease_token=?""",
+                    (
+                        _stamp(), task_id, user_id, agent_id,
+                        task_row["lease_token"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("Task lease changed during takeover")
+                task_row = {
+                    **dict(task_row),
+                    "status": "assigned",
+                }
+            elif task_row["status"] != "assigned":
+                raise ValueError("Task is no longer available to claim")
 
             now = _stamp()
+            lease_token = str(uuid.uuid4())
+            lease_generation = int(task_row["lease_generation"] or 0) + 1
             lease_expires_at = _stamp(
                 _now() + timedelta(seconds=lease_seconds)
             )
@@ -332,14 +419,17 @@ class AgentControlRepository:
                 "to_status": "in_progress",
                 "worker_id": worker_id.strip(),
                 "lease_expires_at": lease_expires_at,
+                "lease_generation": lease_generation,
             }
             self._task_event(user_id, task_id, "in_progress", details)
             cursor = connection.execute(
                 """UPDATE agent_tasks SET status='in_progress',updated_at=?,
-                   claimed_by=?,claimed_at=?,lease_expires_at=?,heartbeat_at=?
+                   claimed_by=?,claimed_at=?,lease_token=?,lease_generation=?,
+                   lease_expires_at=?,heartbeat_at=?
                    WHERE id=? AND user_id=? AND agent_id=? AND status='assigned'""",
                 (
-                    now, worker_id.strip(), now, lease_expires_at, now,
+                    now, worker_id.strip(), now, lease_token, lease_generation,
+                    lease_expires_at, now,
                     task_id, user_id, agent_id,
                 ),
             )
@@ -361,11 +451,14 @@ class AgentControlRepository:
         task_id: str,
         *,
         worker_id: str,
+        lease_token: str,
         lease_seconds: int = 300,
     ) -> dict:
         """Renew only a worker's active, live task lease."""
         if not isinstance(worker_id, str) or not 1 <= len(worker_id.strip()) <= 100:
             raise ValueError("Worker ID must contain 1 to 100 characters")
+        if not isinstance(lease_token, str) or not lease_token.strip():
+            raise ValueError("Lease token must be provided")
         if not isinstance(lease_seconds, int) or not 30 <= lease_seconds <= 3600:
             raise ValueError("Lease seconds must be between 30 and 3600")
 
@@ -376,8 +469,18 @@ class AgentControlRepository:
                 if getattr(self.database, "dialect", "sqlite") == "postgresql"
                 else ""
             )
+            if getattr(self.database, "dialect", "sqlite") == "postgresql":
+                connection.execute(
+                    "SELECT id FROM users WHERE id=? AND deleted_at IS NULL FOR UPDATE",
+                    (user_id,),
+                ).fetchone()
+                connection.execute(
+                    "SELECT id,status FROM agents WHERE id=? AND user_id=? FOR UPDATE",
+                    (agent_id, user_id),
+                ).fetchone()
             task_row = connection.execute(
-                """SELECT id,status,claimed_by,lease_expires_at,expires_at
+                """SELECT id,status,claimed_by,lease_token,lease_generation,
+                          lease_expires_at,expires_at
                    FROM agent_tasks
                    WHERE id=? AND user_id=? AND agent_id=?""" + lock,
                 (task_id, user_id, agent_id),
@@ -388,13 +491,15 @@ class AgentControlRepository:
                 raise ValueError("Task is not in progress")
             if task_row["claimed_by"] != worker_id.strip():
                 raise PermissionError("Worker does not own this task claim")
+            if task_row["lease_token"] != lease_token.strip():
+                raise PermissionError("Lease generation is no longer current")
             if datetime.fromisoformat(task_row["expires_at"]) <= _now():
                 raise ValueError("Task has expired")
             if (
                 task_row["lease_expires_at"] is not None
                 and datetime.fromisoformat(task_row["lease_expires_at"]) <= _now()
             ):
-                raise ValueError("Task lease has expired")
+                raise PermissionError("Task lease has expired")
 
             now = _stamp()
             lease_expires_at = _stamp(
@@ -403,10 +508,11 @@ class AgentControlRepository:
             cursor = connection.execute(
                 """UPDATE agent_tasks SET heartbeat_at=?,lease_expires_at=?,updated_at=?
                    WHERE id=? AND user_id=? AND agent_id=? AND status='in_progress'
-                     AND claimed_by=?""",
+                     AND claimed_by=? AND lease_token=?""",
                 (
                     now, lease_expires_at, now,
                     task_id, user_id, agent_id, worker_id.strip(),
+                    lease_token.strip(),
                 ),
             )
             if cursor.rowcount != 1:
@@ -435,7 +541,8 @@ class AgentControlRepository:
                         else ""
                     )
                     task_row = connection.execute(
-                        """SELECT id,status,lease_expires_at,claimed_by
+                        """SELECT id,status,lease_expires_at,claimed_by,
+                                  lease_token,lease_generation
                            FROM agent_tasks
                            WHERE id=? AND user_id=? AND agent_id=?""" + lock,
                         (row["id"], row["user_id"], row["agent_id"]),
@@ -459,7 +566,7 @@ class AgentControlRepository:
                     cursor = connection.execute(
                         """UPDATE agent_tasks SET status='assigned',updated_at=?,
                            claimed_by=NULL,claimed_at=NULL,
-                           lease_expires_at=NULL,heartbeat_at=NULL
+                           lease_token=NULL,lease_expires_at=NULL,heartbeat_at=NULL
                            WHERE id=? AND user_id=? AND agent_id=? AND status='in_progress'
                              AND lease_expires_at=?""",
                         (

@@ -4,6 +4,7 @@ This API deliberately exposes only read-only tool execution. State-changing and
 consequential operations remain behind the existing protected tool workflows.
 """
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -234,4 +235,21 @@ async def cancel_agent_run(run_id: str, user: dict = Depends(get_current_user)):
 async def reconcile_expired_agent_runs(user: dict = Depends(get_current_user)):
     return {
         "expired": get_app_state().agent_execution.reconcile_expired_runs(user["id"])
+    }
+
+
+@router.post("/agent-runs/reconcile-stale")
+async def reconcile_stale_agent_runs(
+    stale_before: str,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        datetime.fromisoformat(stale_before)
+    except (TypeError, ValueError):
+        _error(400, "INVALID_STALE_CUTOFF", "A valid ISO stale cutoff is required")
+    return {
+        "recovered": get_app_state().agent_execution.reconcile_stale_running_runs(
+            stale_before=stale_before,
+            user_id=user["id"],
+        )
     }

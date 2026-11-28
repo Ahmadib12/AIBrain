@@ -813,7 +813,7 @@ def test_database_migrations_are_versioned_and_persisted(client: TestClient) -> 
     rows = database.connect().execute(
         "SELECT version FROM schema_migrations ORDER BY version"
     ).fetchall()
-    assert [row["version"] for row in rows] == list(range(1, 47))
+    assert [row["version"] for row in rows] == list(range(1, 48))
 
 
 def test_device_key_rotation_migration_installs_challenge_and_audit_guards(
@@ -1676,7 +1676,7 @@ def test_concurrent_file_database_writes_and_reads(tmp_path) -> None:
 def test_migrations_are_idempotent_on_file_database(tmp_path) -> None:
     from backend.app.persistence.database import Database
 
-    expected_versions = list(range(1, 47))
+    expected_versions = list(range(1, 48))
     path = tmp_path / "migrations.db"
     first = Database(f"sqlite:///{path}")
     first.migrate()

@@ -39,6 +39,10 @@ This document distinguishes implemented foundations from external integrations t
   reconciliation, and owner-scoped requeueing. Reconciliation changes no run
   or tool outcome automatically; uncertain external outcomes remain
   `outcome_unknown` and are never retried.
+- Task leases include a unique UUID token and monotonically increasing
+  generation. Heartbeats and worker task transitions require the current token;
+  expired workers cannot complete or overwrite a newer worker claim. Stale
+  takeover is serialized by PostgreSQL row locking and audited.
 - Planning rejects common instruction-override and authorization-self-grant
   attempts as control paths, preventing those requests from selecting or
   authorizing capabilities.

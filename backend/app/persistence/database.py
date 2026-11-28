@@ -3602,6 +3602,15 @@ created_at TEXT NOT NULL,
                 BEGIN SELECT RAISE(ABORT, 'task event transition mismatch'); END;
                 """
             ),
+            (
+                47,
+                """
+                ALTER TABLE agent_tasks ADD COLUMN lease_token TEXT;
+                ALTER TABLE agent_tasks ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0;
+                CREATE UNIQUE INDEX idx_agent_tasks_live_lease_token
+                    ON agent_tasks(lease_token) WHERE lease_token IS NOT NULL;
+                """
+            ),
         )
 
         with self._lock:

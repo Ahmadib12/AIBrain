@@ -116,6 +116,7 @@ def test_postgres_migration_stream_starts_with_identity_schema():
     assert "failed_at" in MIGRATIONS[34].sql
     assert MIGRATIONS[35].version == 36
     assert MIGRATIONS[36].version == 37
+    assert MIGRATIONS[37].version == 38
     assert "redrive_count" in MIGRATIONS[35].sql
     assert "claim_token" in MIGRATIONS[35].sql
     assert "security_notification_operator_events" in MIGRATIONS[35].sql
